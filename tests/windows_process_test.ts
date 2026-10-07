@@ -1,8 +1,4 @@
-import {
-  quoteCmdStaticArgument,
-  startAgent,
-  stopAgent,
-} from "../src/runtime/process.ts";
+import { quoteCmdStaticArgument, startAgent } from "../src/runtime/process.ts";
 
 Deno.test({
   name: "configured batch wrapper preserves quoted static arguments",

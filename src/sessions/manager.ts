@@ -137,10 +137,8 @@ export class SessionManager {
       }
       if (
         loadSessionId &&
-        !Boolean(
-          (init.agentCapabilities as Record<string, unknown> | undefined)
-            ?.loadSession,
-        )
+        !(init.agentCapabilities as Record<string, unknown> | undefined)
+          ?.loadSession
       ) throw new Error("Agent does not advertise session/load support");
       const sessionResponse = loadSessionId
         ? await connection.agent.request("session/load", {

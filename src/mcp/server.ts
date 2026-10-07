@@ -9,18 +9,19 @@ export function createMcpServer(agents: AgentMap, manager: SessionManager) {
   server.registerTool("list_agents", {
     description: "List configured ACP agents",
     inputSchema: z.object({}),
-  }, async (): Promise<CallToolResult> => ({
-    content: [{
-      type: "text",
-      text: JSON.stringify(
-        Object.entries(agents).map(([id, agent]) => ({
-          id,
-          displayName: agent.displayName ?? id,
-          installHint: agent.installHint,
-        })),
-      ),
-    }],
-  }));
+  }, (): Promise<CallToolResult> =>
+    Promise.resolve({
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          Object.entries(agents).map(([id, agent]) => ({
+            id,
+            displayName: agent.displayName ?? id,
+            installHint: agent.installHint,
+          })),
+        ),
+      }],
+    }));
   server.registerTool("start_session", {
     description: "Start an ACP session and optionally send an initial prompt",
     inputSchema: {
@@ -201,20 +202,21 @@ export function createMcpServer(agents: AgentMap, manager: SessionManager) {
   server.registerTool("list_sessions", {
     description: "List managed ACP sessions",
     inputSchema: z.object({}),
-  }, async (): Promise<CallToolResult> => ({
-    content: [{
-      type: "text",
-      text: JSON.stringify(
-        [...manager.sessions.values()].map((
-          { id, agentId, cwd, acpSessionId, promptActive },
-        ) => ({ id, agentId, cwd, acpSessionId, promptActive })),
-      ),
-    }],
-  }));
+  }, (): Promise<CallToolResult> =>
+    Promise.resolve({
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          [...manager.sessions.values()].map((
+            { id, agentId, cwd, acpSessionId, promptActive },
+          ) => ({ id, agentId, cwd, acpSessionId, promptActive })),
+        ),
+      }],
+    }));
   server.registerTool("get_session", {
     description: "Get capabilities and live configuration metadata",
     inputSchema: { sessionId: z.string() },
-  }, async ({ sessionId }) => {
+  }, ({ sessionId }) => {
     try {
       const s = manager.get(sessionId);
       return {
@@ -299,7 +301,7 @@ export function createMcpServer(agents: AgentMap, manager: SessionManager) {
       permissionId: z.string(),
       optionId: z.string(),
     },
-  }, async ({ sessionId, permissionId, optionId }) => {
+  }, ({ sessionId, permissionId, optionId }) => {
     try {
       return {
         content: [{
