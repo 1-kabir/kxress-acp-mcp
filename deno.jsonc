@@ -1,0 +1,13 @@
+{
+  "imports": {
+    "@agentclientprotocol/sdk": "npm:@agentclientprotocol/sdk@1.7.0",
+    "@modelcontextprotocol/server": "npm:@modelcontextprotocol/server@2.3.1",
+    "@modelcontextprotocol/server/stdio": "npm:@modelcontextprotocol/server@2.3.1/stdio",
+    "zod": "npm:zod@4.6.5"
+  },
+  "tasks": {
+    "start": "deno run --allow-env --allow-read --allow-run src/main.ts",
+    "check": "deno check src/main.ts tests/fixtures/fake_acp_agent.ts tests/fixtures/raw_wire_acp_agent.ts",
+    "test": "deno test --allow-env --allow-read --allow-run --allow-write"
+  }
+}

@@ -1,2 +1,5 @@
 [tools]
 deno = "2.9.6"
+
+[settings]
+enable_tools = ["deno"]
