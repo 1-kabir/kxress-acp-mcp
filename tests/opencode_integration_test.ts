@@ -11,7 +11,7 @@ Deno.test({
     });
     let delegatedPolicy: string | undefined;
     let internalActivityBytes = 0;
-    let failureDetails: string | undefined;
+    let failureDiagnostic: { error?: string; data?: unknown } | undefined;
     const start = manager.start.bind(manager);
     manager.start = (agentId, cwd, config, modeId, permissionPolicy) => {
       delegatedPolicy = permissionPolicy;
@@ -26,17 +26,23 @@ Deno.test({
           JSON.stringify(session.events).length,
         );
         if (session.prompt?.state === "failed") {
-          failureDetails = JSON.stringify({
+          failureDiagnostic = {
             error: session.prompt.error,
-            stderr: session.process.stderrTail(),
-          });
+            data: session.prompt.errorData,
+          };
         }
       }
       await close(id);
     };
-    const server = createMcpServer({
-      opencode: { command: "opencode", args: ["acp"] },
-    }, manager);
+    const agents = {
+      opencode: {
+        command: "opencode",
+        args: ["acp"],
+        modelConfigId: "model",
+        failureClassifier: "opencode",
+      },
+    };
+    const server = createMcpServer(agents, manager);
     let mcp: Awaited<ReturnType<typeof connectMcp>> | undefined;
     try {
       const probe = await start("opencode", Deno.cwd());
@@ -58,29 +64,67 @@ Deno.test({
         return;
       }
       mcp = await connectMcp(server);
-      const wire = await mcp.callTool("run_task", {
-        agentId: "opencode",
-        config: { model: "opencode/longcat-2.5-preview-free" },
-        task:
-          "Inspect this repository enough to understand its purpose. Return exactly two short paragraphs and do not add headings, bullets, or numbering: paragraph one explains what the project does; paragraph two explains how MCP and ACP are separated architecturally.",
-      }).response;
-      const result = parseToolResult(wire);
-      const response = String(result.response ?? "");
-      if (result.status !== "completed" || !response.trim()) {
-        throw new Error(
-          `OpenCode run_task did not complete: ${JSON.stringify(result)}${
-            failureDetails ? `; internal failure: ${failureDetails}` : ""
-          }`,
-        );
+      const outcomes: Array<
+        { model: string; result: Record<string, unknown> }
+      > = [];
+      let fledgeWire: unknown;
+      for (
+        const modelId of [
+          "opencode/fledge-alpha-free",
+          "opencode/longcat-2.5-preview-free",
+        ]
+      ) {
+        const wire = await mcp.callTool("run_task", {
+          agentId: "opencode",
+          config: { model: modelId },
+          task: "Reply exactly OK. Do not inspect files or use tools.",
+        }).response;
+        if (modelId === "opencode/fledge-alpha-free") fledgeWire = wire;
+        outcomes.push({ model: modelId, result: parseToolResult(wire) });
+        if (
+          JSON.stringify(wire).includes("PRIVATE_PROVIDER_DIAGNOSTIC_SENTINEL")
+        ) {
+          throw new Error(
+            "Private diagnostic sentinel leaked in integration result",
+          );
+        }
       }
-      const substantiveParagraphs = response.split(/\n\s*\n/).filter(
-        (paragraph) =>
-          paragraph.trim() &&
-          !/^\*\*[^*]+\*\*$/.test(paragraph.trim()),
-      );
-      if (substantiveParagraphs.length !== 2 || response.length > 1800) {
+      const fledge = outcomes[0].result;
+      if (fledge.status !== "completed" || fledge.response !== "OK") {
+        throw new Error(`Fledge run_task failed: ${JSON.stringify(fledge)}`);
+      }
+      const longcat = outcomes[1].result;
+      if (longcat.status === "failed") {
+        const error = longcat.error as Record<string, unknown>;
+        const diagnostic = failureDiagnostic
+          ? `${failureDiagnostic.error ?? ""} ${
+            JSON.stringify(failureDiagnostic.data ?? "")
+          }`
+          : "";
+        if (/\b(?:rate limit exceeded|too many requests)\b/i.test(diagnostic)) {
+          const classification = error?.classification as
+            | Record<string, unknown>
+            | undefined;
+          if (
+            classification?.reason !== "rate_limited" ||
+            classification?.source !== "opencode" ||
+            classification?.evidence !== "message_heuristic"
+          ) {
+            throw new Error(
+              `Explicit LongCat rate limit was not classified: ${
+                JSON.stringify(longcat)
+              }`,
+            );
+          }
+        } else if (error && "classification" in error) {
+          throw new Error(
+            "Unrelated LongCat error was classified as rate limited",
+          );
+        }
+        console.log(`LongCat live run_task result: ${JSON.stringify(longcat)}`);
+      } else if (longcat.status !== "completed") {
         throw new Error(
-          `OpenCode response was not two concise paragraphs: ${response}`,
+          `Unexpected LongCat result: ${JSON.stringify(longcat)}`,
         );
       }
       if (delegatedPolicy !== "read_only") {
@@ -88,7 +132,8 @@ Deno.test({
           `Expected delegate default policy read_only, got ${delegatedPolicy}`,
         );
       }
-      const mcpResult = (wire as { result?: Record<string, unknown> }).result;
+      const mcpResult = (fledgeWire as { result?: Record<string, unknown> })
+        .result;
       if (
         (mcpResult?.content as unknown[])?.length !== 1 ||
         mcpResult?.structuredContent
@@ -102,7 +147,7 @@ Deno.test({
         );
       }
       console.log(
-        `OpenCode run_task: ${callerResultBytes} caller-result bytes; ${internalActivityBytes} internal event bytes`,
+        `OpenCode Fledge run_task: ${callerResultBytes} caller-result bytes; ${internalActivityBytes} internal event bytes`,
       );
       if (manager.sessions.size) {
         throw new Error("OpenCode run_task left a managed session active");

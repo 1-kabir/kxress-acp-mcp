@@ -7,6 +7,7 @@ export interface AgentDefinition {
   env?: Record<string, string>;
   modelConfigId?: string;
   modelEnrichment?: "opencode_zen";
+  failureClassifier?: string;
 }
 
 export type AgentMap = Record<string, AgentDefinition>;
@@ -32,6 +33,7 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
         "Install OpenCode and authenticate with opencode auth login.",
       modelConfigId: "model",
       modelEnrichment: "opencode_zen",
+      failureClassifier: "opencode",
     },
   };
   const path = configPath ?? defaultConfigPath();

@@ -64,12 +64,18 @@ retrieved only when needed.
 
 ## Handle task failures
 
-`run_task` returns compact failure metadata. `error.kind: "prompt_failed"` says
-the ACP prompt failed; an optional `error.acpCode` is a JSON-RPC code, not an
-HTTP status or a rate-limit classification. Do not treat it as proof that the
-task did no work. The bridge does not retry or change models automatically.
+`run_task` returns compact failure metadata. `error.kind` and `error.stage`
+describe the generic bridge failure. An optional `error.acpCode` is a JSON-RPC
+code, not an HTTP status or a rate-limit classification. An optional
+`error.classification` is agent-specific interpretation; check its `source` and
+`evidence`. For example, an OpenCode `message_heuristic` classification is based
+on explicit provider wording, not structured HTTP evidence. If classification is
+absent, do not guess. In particular, `-32603` alone never means rate limited.
+The bridge does not retry or change models automatically.
 
-Before repeating a failed task, consider whether it may have performed work.
+Before repeating a failed task, consider whether it may have performed work. An
+explicitly classified transient failure may support a caller-chosen fallback for
+restartable work. An ambiguous failure must not be silently replayed.
 `read_only` is not an OS sandbox. For a restartable planning or research task,
 the caller may explicitly choose another currently advertised model through the
 generic `config` map, but should first check that the alternate model's data-use

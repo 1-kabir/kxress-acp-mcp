@@ -118,6 +118,14 @@ app.onRequest("session/prompt", async ({ params, client }) => {
   if (promptText === "prompt failure") {
     throw new Error("PRIVATE_FAILURE_SENTINEL");
   }
+  if (promptText === "rate limit failure") {
+    throw new Error(
+      "Rate limit exceeded. Please try again later. PRIVATE_PROVIDER_DIAGNOSTIC_SENTINEL",
+    );
+  }
+  if (promptText === "unrelated provider failure") {
+    throw new Error("PRIVATE_PROVIDER_DIAGNOSTIC_SENTINEL: connection reset");
+  }
   if (promptText === "process crash") {
     Deno.exit(17);
   }

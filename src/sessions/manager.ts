@@ -43,6 +43,7 @@ export interface PromptRecord {
   stopReason?: string;
   error?: string;
   errorCode?: number;
+  errorData?: unknown;
   done: Promise<void>;
 }
 
@@ -307,6 +308,9 @@ export class SessionManager {
         error && typeof error === "object" &&
         "code" in error && typeof error.code === "number"
       ) record.errorCode = error.code;
+      if (error && typeof error === "object" && "data" in error) {
+        record.errorData = error.data;
+      }
     } finally {
       session.promptActive = false;
     }

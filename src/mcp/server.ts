@@ -2,6 +2,11 @@ import { McpServer } from "@modelcontextprotocol/server";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import type { AgentMap } from "../agents/config.ts";
+import {
+  type AgentFailureClassifiers,
+  classifyAgentFailure,
+} from "../agents/failure_classifiers.ts";
+import { classifyOpenCodeFailure } from "../agents/opencode_failure_classifier.ts";
 import { discoverAdvertisedModels } from "../models/discovery.ts";
 import {
   enrichAdvertisedModels,
@@ -12,6 +17,11 @@ import { SessionManager } from "../sessions/manager.ts";
 
 type McpServerOptions = {
   loadOpenCodeCatalog?: (signal: AbortSignal) => Promise<OpenCodeCatalog>;
+  failureClassifiers?: AgentFailureClassifiers;
+};
+
+const defaultFailureClassifiers: AgentFailureClassifiers = {
+  opencode: classifyOpenCodeFailure,
 };
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -31,6 +41,7 @@ function runTaskFailure(
   kind: string,
   stage: string,
   acpCode?: number,
+  classification?: ReturnType<typeof classifyAgentFailure>,
 ) {
   return {
     content: [{
@@ -41,6 +52,7 @@ function runTaskFailure(
           kind,
           stage,
           ...(acpCode === undefined ? {} : { acpCode }),
+          ...(classification ? { classification } : {}),
         },
       }),
     }],
@@ -55,6 +67,10 @@ export function createMcpServer(
   const server = new McpServer({ name: "acp-mcp", version: "0.2.0" });
   const loadOpenCodeCatalog = options.loadOpenCodeCatalog ??
     ((signal) => fetchOpenCodeZenCatalog(signal));
+  const failureClassifiers = {
+    ...defaultFailureClassifiers,
+    ...options.failureClassifiers,
+  };
   server.registerTool("list_agents", {
     description: "List configured ACP agents",
     inputSchema: z.object({}),
@@ -260,11 +276,27 @@ export function createMcpServer(
           return runTaskFailure("cancelled", "cancelled", "prompt");
         }
         await close();
+        const classification = classifyAgentFailure(
+          agents,
+          failureClassifiers,
+          agentId,
+          {
+            agentId,
+            model: agents[agentId]?.modelConfigId
+              ? config?.[agents[agentId].modelConfigId!]
+              : undefined,
+            stage: "prompt",
+            acpCode: promptRecord.errorCode,
+            errorMessage: promptRecord.error,
+            errorData: promptRecord.errorData,
+          },
+        );
         return runTaskFailure(
           "failed",
           "prompt_failed",
           "prompt",
           promptRecord.errorCode,
+          classification,
         );
       } catch {
         await close();

@@ -1,5 +1,6 @@
 import { createMcpServer } from "../src/mcp/server.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
+import type { AgentFailureClassifiers } from "../src/agents/failure_classifiers.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
 function managerFor(agentId: "raw" | "fake" = "fake") {
@@ -19,7 +20,11 @@ function managerFor(agentId: "raw" | "fake" = "fake") {
   });
 }
 
-async function harness(agentId: "raw" | "fake" = "fake") {
+async function harness(
+  agentId: "raw" | "fake" = "fake",
+  failureClassifier?: string,
+  failureClassifiers?: AgentFailureClassifiers,
+) {
   const manager = managerFor(agentId);
   const closedChildren: Promise<unknown>[] = [];
   const closedStderr: Array<() => string> = [];
@@ -31,12 +36,140 @@ async function harness(agentId: "raw" | "fake" = "fake") {
     await originalClose(id);
   };
   const server = createMcpServer(
-    { [agentId]: { command: "unused", args: [] } },
+    {
+      [agentId]: {
+        command: "unused",
+        args: [],
+        ...(failureClassifier ? { failureClassifier } : {}),
+      },
+    },
     manager,
+    { failureClassifiers },
   );
   const mcp = await connectMcp(server);
   return { manager, server, mcp, closedChildren, closedStderr };
 }
+
+Deno.test("run_task enriches only recognized OpenCode failures", async () => {
+  const { manager, server, mcp } = await harness(
+    "fake",
+    "opencode",
+  );
+  try {
+    const rateLimited = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "rate limit failure",
+      }).response,
+    );
+    const failure = rateLimited.error as Record<string, unknown>;
+    if (
+      rateLimited.status !== "failed" || failure.kind !== "prompt_failed" ||
+      failure.stage !== "prompt" || failure.acpCode !== -32603
+    ) {
+      throw new Error(
+        `Generic failure fields changed: ${JSON.stringify(failure)}`,
+      );
+    }
+    if (
+      JSON.stringify(failure.classification) !== JSON.stringify({
+        reason: "rate_limited",
+        source: "opencode",
+        evidence: "message_heuristic",
+      })
+    ) {
+      throw new Error(
+        `Rate limit was not classified: ${JSON.stringify(failure)}`,
+      );
+    }
+    const raw = JSON.stringify(rateLimited);
+    if (raw.includes("PRIVATE_PROVIDER_DIAGNOSTIC_SENTINEL")) {
+      throw new Error("OpenCode diagnostic text leaked to caller");
+    }
+
+    const unrelated = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "unrelated provider failure",
+      }).response,
+    );
+    const unrelatedError = unrelated.error as Record<string, unknown>;
+    if ("classification" in unrelatedError) {
+      throw new Error("Unrelated OpenCode error was classified");
+    }
+    if (
+      JSON.stringify(unrelated).includes("PRIVATE_PROVIDER_DIAGNOSTIC_SENTINEL")
+    ) {
+      throw new Error("Unrelated diagnostic text leaked to caller");
+    }
+    if (manager.sessions.size) throw new Error("Failure leaked a session");
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
+Deno.test("generic agents do not infer rate limits from ACP -32603", async () => {
+  const { manager, server, mcp } = await harness();
+  try {
+    const result = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "rate limit failure",
+      }).response,
+    );
+    const error = result.error as Record<string, unknown>;
+    if (
+      result.status !== "failed" || error.kind !== "prompt_failed" ||
+      error.stage !== "prompt" || error.acpCode !== -32603 ||
+      "classification" in error
+    ) {
+      throw new Error(
+        `Generic agent failure was enriched: ${JSON.stringify(result)}`,
+      );
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
+Deno.test("failure classifier exceptions preserve generic failures", async () => {
+  const { manager, server, mcp } = await harness(
+    "fake",
+    "thrower",
+    {
+      thrower: () => {
+        throw new Error("PRIVATE_CLASSIFIER_SENTINEL");
+      },
+    },
+  );
+  try {
+    const result = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "rate limit failure",
+      }).response,
+    );
+    const error = result.error as Record<string, unknown>;
+    if (
+      result.status !== "failed" || error.kind !== "prompt_failed" ||
+      error.stage !== "prompt" || error.acpCode !== -32603 ||
+      "classification" in error ||
+      JSON.stringify(result).includes("PRIVATE_CLASSIFIER_SENTINEL")
+    ) {
+      throw new Error(
+        `Classifier exception affected failure: ${JSON.stringify(result)}`,
+      );
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
 
 Deno.test("run_task advertises external disclosure and mutation accurately", async () => {
   const { manager, server, mcp } = await harness();
