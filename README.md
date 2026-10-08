@@ -68,6 +68,18 @@ the bridge responds to ACP permission requests; it does not keep repository data
 local, restrict network access, or sandbox the child process. Codex and other
 MCP hosts continue to apply their own approval and security policies.
 
+`run_task.idleTimeoutMs` defaults to 10 minutes and limits consecutive silence
+from the task's ACP session. Any inbound `session/update` for that session
+resets it, including update variants this bridge does not recognize. Active
+tasks can run longer than 10 minutes; there is no absolute runtime limit. MCP
+request cancellation still cancels the task immediately. For
+`permission_required` handoffs, `permissionLeaseMs` (default 2 minutes) controls
+how long the session remains available for operator resolution; after the
+handoff, that lease owns the session lifecycle.
+
+ACP updates for the active session and ACP permission requests count as task
+activity. The bridge does not use arbitrary subprocess stderr as a heartbeat.
+
 Tools include `run_task`, `list_models`, `list_agents`, `start_session`,
 `load_session`, `get_session`, `prompt`, `get_events`, `cancel_prompt`,
 `resolve_permission`, `set_config_option`, `set_mode`, `list_sessions`, and

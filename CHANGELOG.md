@@ -8,6 +8,9 @@
   to `task`.
 - Rename the `discover_models` MCP tool to `list_models`. No deprecated aliases
   are provided; update MCP callers and per-tool approval settings.
+- Rename `run_task.timeoutMs` to `idleTimeoutMs`; it now limits consecutive
+  silence rather than total task duration. `permissionLeaseMs` configures the
+  separate operator handoff lease.
 
 ### Added
 

@@ -166,9 +166,14 @@ export function createMcpServer(
         ]).optional().describe(
           "ACP permission response policy (defaults to read_only); this does not sandbox the process or keep data local",
         ),
-        timeoutMs: z.number().int().min(1).max(600000).optional().describe(
-          "Maximum task duration in milliseconds (defaults to 120000)",
-        ),
+        idleTimeoutMs: z.number().int().min(1).max(3600000).optional()
+          .describe(
+            "Maximum consecutive time without ACP activity (defaults to 600000); active tasks may run longer",
+          ),
+        permissionLeaseMs: z.number().int().min(1).max(600000).optional()
+          .describe(
+            "How long an unresolved operator permission handoff remains available (defaults to 120000)",
+          ),
       },
     },
     async (
@@ -179,7 +184,8 @@ export function createMcpServer(
         config,
         modeId,
         permissionPolicy = "read_only",
-        timeoutMs = 120000,
+        idleTimeoutMs = 600000,
+        permissionLeaseMs = 120000,
       },
       extra,
     ) => {
@@ -187,6 +193,7 @@ export function createMcpServer(
       let closed = false;
       let failureStage = "session_start";
       let promptRecord: ReturnType<SessionManager["beginPrompt"]> | undefined;
+      let abortHandler: (() => void) | undefined;
       const close = async () => {
         if (!sessionId || closed) return;
         closed = true;
@@ -206,18 +213,21 @@ export function createMcpServer(
         failureStage = "prompt_start";
         promptRecord = manager.beginPrompt(session.id, text);
         failureStage = "prompt";
-        const deadline = Date.now() + timeoutMs;
+        const signal = extra.mcpReq.signal;
+        let resolveAbort!: () => void;
+        const aborted = new Promise<"cancelled">((resolve) => {
+          resolveAbort = () => resolve("cancelled");
+        });
+        if (signal.aborted) resolveAbort();
+        else {
+          abortHandler = resolveAbort;
+          signal.addEventListener("abort", abortHandler, { once: true });
+        }
         while (promptRecord.state === "running") {
-          const signal = extra.mcpReq.signal;
           if (signal?.aborted) {
             await manager.cancelPrompt(session.id, promptRecord.id);
             await close();
             return runTaskFailure("cancelled", "cancelled", "prompt");
-          }
-          if (Date.now() >= deadline) {
-            await manager.cancelPrompt(session.id, promptRecord.id);
-            await close();
-            return runTaskFailure("timed_out", "timeout", "prompt");
           }
           if (
             permissionPolicy === "operator" && session.pendingPermissions.size
@@ -234,7 +244,7 @@ export function createMcpServer(
             session.permissionLease = setTimeout(() => {
               session.permissionLease = undefined;
               void close();
-            }, timeoutMs);
+            }, permissionLeaseMs);
             return {
               content: [{
                 type: "text",
@@ -242,17 +252,61 @@ export function createMcpServer(
                   status: "permission_required",
                   sessionId,
                   permissionId: pending.id,
-                  leaseTimeoutMs: timeoutMs,
+                  leaseTimeoutMs: permissionLeaseMs,
                   action,
                   choices: pending.options,
                 }),
               }],
             };
           }
-          await Promise.race([
-            promptRecord.done,
-            new Promise((resolve) => setTimeout(resolve, 20)),
+          const activityVersion = promptRecord.activityVersion;
+          const remaining = idleTimeoutMs -
+            (performance.now() - promptRecord.lastActivityAt);
+          if (remaining <= 0) {
+            if (signal.aborted) {
+              await manager.cancelPrompt(session.id, promptRecord.id);
+              await close();
+              return runTaskFailure("cancelled", "cancelled", "prompt");
+            }
+            if (
+              promptRecord.activityVersion !== activityVersion ||
+              performance.now() - promptRecord.lastActivityAt < idleTimeoutMs
+            ) continue;
+            await manager.cancelPrompt(session.id, promptRecord.id);
+            await close();
+            return runTaskFailure("timed_out", "timeout", "prompt");
+          }
+          const activity = manager.waitForPromptActivity(
+            session.id,
+            promptRecord.id,
+            activityVersion,
+          );
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const idleExpired = new Promise<"idle_timeout">((resolve) => {
+            timer = setTimeout(() => resolve("idle_timeout"), remaining);
+          });
+          const outcome = await Promise.race([
+            promptRecord.done.then(() => "prompt_done" as const),
+            activity.promise.then(() => "activity" as const),
+            idleExpired,
+            aborted,
           ]);
+          if (timer !== undefined) clearTimeout(timer);
+          activity.cancel();
+          if (outcome === "cancelled" || signal.aborted) {
+            await manager.cancelPrompt(session.id, promptRecord.id);
+            await close();
+            return runTaskFailure("cancelled", "cancelled", "prompt");
+          }
+          if (outcome === "idle_timeout") {
+            if (
+              promptRecord.activityVersion !== activityVersion ||
+              performance.now() - promptRecord.lastActivityAt < idleTimeoutMs
+            ) continue;
+            await manager.cancelPrompt(session.id, promptRecord.id);
+            await close();
+            return runTaskFailure("timed_out", "timeout", "prompt");
+          }
         }
         if (promptRecord.state === "completed") {
           if (!promptRecord.text.trim()) {
@@ -308,6 +362,10 @@ export function createMcpServer(
           failureStage,
           promptRecord?.errorCode,
         );
+      } finally {
+        if (abortHandler) {
+          extra.mcpReq.signal.removeEventListener("abort", abortHandler);
+        }
       }
     },
   );

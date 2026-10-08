@@ -224,6 +224,13 @@ Deno.test("run_task advertises external disclosure and mutation accurately", asy
         "permissionPolicy description conflates permission and isolation",
       );
     }
+    if (
+      !schema.properties?.idleTimeoutMs ||
+      !schema.properties?.permissionLeaseMs ||
+      schema.properties.timeoutMs
+    ) {
+      throw new Error("run_task timeout schema was not migrated clearly");
+    }
   } finally {
     await mcp.close();
     await manager.closeAll();
@@ -326,12 +333,14 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
       agentId: "fake",
       task: "operator delegate",
       permissionPolicy: "operator",
-      timeoutMs: 70,
+      idleTimeoutMs: 50,
+      permissionLeaseMs: 250,
     }).response;
     const wire = reply as { result: { content: Array<{ text: string }> } };
     const handoff = parseToolResult(reply);
     if (
-      handoff.status !== "permission_required" || handoff.leaseTimeoutMs !== 70
+      handoff.status !== "permission_required" ||
+      handoff.leaseTimeoutMs !== 250
     ) {
       throw new Error(
         `Unexpected permission handoff: ${JSON.stringify(handoff)}`,
@@ -349,7 +358,11 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
     const sessionId = String(handoff.sessionId);
     const permissionId = String(handoff.permissionId);
     const expiringSession = manager.get(sessionId);
-    await new Promise((resolve) => setTimeout(resolve, 140));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (!manager.sessions.has(sessionId)) {
+      throw new Error("Prompt idle timeout overrode the permission lease");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 180));
     if (manager.sessions.has(sessionId)) {
       throw new Error("Permission lease did not close the session");
     }
@@ -376,7 +389,8 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
         agentId: "fake",
         task: "operator delegate",
         permissionPolicy: "operator",
-        timeoutMs: 70,
+        idleTimeoutMs: 50,
+        permissionLeaseMs: 250,
       }).response,
     );
     if (continuation.status !== "permission_required") {
@@ -495,7 +509,7 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
     const timed = await mcp.callTool("run_task", {
       agentId: "fake",
       task: "wait",
-      timeoutMs: 40,
+      idleTimeoutMs: 50,
     }).response;
     const timeoutResult = parseToolResult(timed);
     if (
@@ -508,14 +522,21 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
     }
     const cancelled = mcp.callTool("run_task", {
       agentId: "fake",
-      task: "wait",
-      timeoutMs: 5000,
+      task: "active stream",
+      idleTimeoutMs: 5000,
     });
     for (let i = 0; i < 100 && manager.sessions.size === 0; i++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     if (!manager.sessions.size) {
       throw new Error("Delegation did not start before cancellation");
+    }
+    const runningSession = [...manager.sessions.values()][0];
+    for (let i = 0; i < 100 && !runningSession.prompt?.activityVersion; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (!runningSession.prompt?.activityVersion) {
+      throw new Error("Active cancellation fixture did not emit updates");
     }
     await mcp.cancel(cancelled.id);
     for (let i = 0; i < 100 && manager.sessions.size > 0; i++) {
@@ -525,23 +546,34 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
       throw new Error("MCP request cancellation leaked a session");
     }
     for (
-      const prompt of ["prompt failure", "process crash", "empty response"]
+      const prompt of [
+        "late response",
+        "prompt failure",
+        "process crash",
+        "empty response",
+      ]
     ) {
       const reply = await mcp.callTool("run_task", {
         agentId: "fake",
         task: prompt,
+        ...(prompt === "late response" ? { idleTimeoutMs: 40 } : {}),
       })
         .response;
       const result = parseToolResult(reply);
       const failure = result.error as Record<string, unknown> | undefined;
       const expectedKind = prompt === "empty response"
         ? "invalid_response"
+        : prompt === "late response"
+        ? "timeout"
         : "prompt_failed";
       const expectedStage = prompt === "empty response"
         ? "prompt_complete"
         : "prompt";
+      const expectedStatus = prompt === "late response"
+        ? "timed_out"
+        : "failed";
       if (
-        result.status !== "failed" || !failure ||
+        result.status !== expectedStatus || !failure ||
         failure.kind !== expectedKind || failure.stage !== expectedStage ||
         Object.keys(result).sort().join(",") !== "error,status"
       ) {
@@ -575,13 +607,92 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
       throw new Error("Server unusable after failure cleanup");
     }
     await Promise.all(closedChildren);
-    if (closedChildren.length !== 6) {
+    if (closedChildren.length !== 7) {
       throw new Error(
-        `Expected cleanup for six child processes, got ${closedChildren.length}`,
+        `Expected cleanup for seven child processes, got ${closedChildren.length}`,
       );
     }
     if (!closedStderr.some((tail) => tail().includes("ACP_CANCEL_RECEIVED"))) {
       throw new Error("MCP cancellation did not reach ACP session/cancel");
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
+Deno.test("run_task idle timeout resets on known and unknown ACP updates", async () => {
+  const { manager, server, mcp } = await harness();
+  try {
+    for (const task of ["active heartbeat", "unknown heartbeat"]) {
+      const reply = await mcp.callTool("run_task", {
+        agentId: "fake",
+        task,
+        idleTimeoutMs: 100,
+      }).response;
+      const result = parseToolResult(reply);
+      if (
+        result.status !== "completed" ||
+        result.response !== "heartbeat completed"
+      ) {
+        throw new Error(
+          `${task} did not outlive its idle timeout: ${JSON.stringify(result)}`,
+        );
+      }
+      if (manager.sessions.size) throw new Error(`${task} leaked a session`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    if (manager.sessions.size) {
+      throw new Error("A completed idle timer affected later task state");
+    }
+    const reusable = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "hello",
+      }).response,
+    );
+    if (reusable.status !== "completed") {
+      throw new Error("Server was not reusable after activity-based timeouts");
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
+Deno.test("activity in another session does not reset a silent task", async () => {
+  const { manager, server, mcp } = await harness();
+  try {
+    const silentCall = mcp.callTool("run_task", {
+      agentId: "fake",
+      task: "wait",
+      idleTimeoutMs: 100,
+    });
+    for (let i = 0; i < 100 && manager.sessions.size === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (manager.sessions.size !== 1) {
+      throw new Error("Silent task did not start before second session");
+    }
+    const activeReply = mcp.callTool("run_task", {
+      agentId: "fake",
+      task: "active heartbeat",
+      idleTimeoutMs: 100,
+    });
+    const [silentWire, activeWire] = await Promise.all([
+      silentCall.response,
+      activeReply.response,
+    ]);
+    if (parseToolResult(silentWire).status !== "timed_out") {
+      throw new Error("Other-session updates prevented silent task timeout");
+    }
+    if (parseToolResult(activeWire).status !== "completed") {
+      throw new Error("Active task did not remain isolated from peer timeout");
+    }
+    if (manager.sessions.size) {
+      throw new Error("Concurrent tasks leaked sessions");
     }
   } finally {
     await mcp.close();

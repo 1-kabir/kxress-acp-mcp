@@ -40,6 +40,9 @@ export interface PromptRecord {
   id: string;
   state: "running" | "completed" | "cancelled" | "failed";
   text: string;
+  lastActivityAt: number;
+  activityVersion: number;
+  activityWaiters: Set<() => void>;
   stopReason?: string;
   error?: string;
   errorCode?: number;
@@ -278,11 +281,49 @@ export class SessionManager {
       id: crypto.randomUUID(),
       state: "running",
       text: "",
+      lastActivityAt: performance.now(),
+      activityVersion: 0,
+      activityWaiters: new Set(),
       done: Promise.resolve(),
     };
     session.prompt = record;
     record.done = this.consumePrompt(session, record, text);
     return record;
+  }
+
+  waitForPromptActivity(
+    sessionId: string,
+    promptId: string,
+    activityVersion: number,
+  ): { promise: Promise<void>; cancel: () => void } {
+    const prompt = this.get(sessionId).prompt;
+    if (!prompt || prompt.id !== promptId) {
+      throw new Error(`Unknown prompt: ${promptId}`);
+    }
+    if (
+      prompt.state !== "running" || prompt.activityVersion !== activityVersion
+    ) {
+      return { promise: Promise.resolve(), cancel: () => {} };
+    }
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => resolve = done);
+    const waiter = () => {
+      prompt.activityWaiters.delete(waiter);
+      resolve();
+    };
+    prompt.activityWaiters.add(waiter);
+    return {
+      promise,
+      cancel: () => prompt.activityWaiters.delete(waiter),
+    };
+  }
+
+  private recordPromptActivity(session: ManagedSession): void {
+    const prompt = session.prompt;
+    if (!prompt || prompt.state !== "running") return;
+    prompt.lastActivityAt = performance.now();
+    prompt.activityVersion++;
+    for (const waiter of [...prompt.activityWaiters]) waiter();
   }
 
   private async consumePrompt(
@@ -346,6 +387,7 @@ export class SessionManager {
     }
     if (prompt.state === "running") {
       prompt.state = "cancelled";
+      for (const waiter of [...prompt.activityWaiters]) waiter();
       for (const [id, pending] of session.pendingPermissions) {
         pending.resolve({ outcome: { outcome: "cancelled" } });
         session.pendingPermissions.delete(id);
@@ -403,6 +445,7 @@ export class SessionManager {
     session: ManagedSession,
     params: unknown,
   ) {
+    this.recordPromptActivity(session);
     const raw = params as { update?: unknown };
     const update = raw.update as {
       sessionUpdate?: string;
@@ -501,6 +544,7 @@ export class SessionManager {
     const choose = (kind: string) =>
       options.find((option) => option.kind === kind);
     if (!session) return { outcome: { outcome: "cancelled" as const } };
+    this.recordPromptActivity(session);
     const requestId = crypto.randomUUID();
     const raw = {
       sessionId: params.sessionId,

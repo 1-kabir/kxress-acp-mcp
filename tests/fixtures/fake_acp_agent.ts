@@ -159,6 +159,54 @@ app.onRequest("session/prompt", async ({ params, client }) => {
     }
     return { stopReason: "cancelled" };
   }
+  if (promptText === "active stream") {
+    let index = 0;
+    while (!cancelled.has(sessionId)) {
+      await client.notify("session/update", {
+        sessionId,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: `stream-${index++}` },
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return { stopReason: "cancelled" };
+  }
+  if (promptText === "late response") {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await client.notify("session/update", {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "too late" },
+      },
+    });
+    return { stopReason: "end_turn" };
+  }
+  if (promptText === "active heartbeat" || promptText === "unknown heartbeat") {
+    const unknown = promptText === "unknown heartbeat";
+    for (let i = 0; i < 8; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await client.notify("session/update", {
+        sessionId,
+        update: unknown
+          ? { sessionUpdate: "future_event_variant", marker: `unknown-${i}` }
+          : {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: `thought-${i}` },
+          },
+      } as never);
+    }
+    await client.notify("session/update", {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "heartbeat completed" },
+      },
+    });
+    return { stopReason: "end_turn" };
+  }
   await client.notify("session/update", {
     sessionId,
     update: {

@@ -35,6 +35,15 @@ closes its managed ACP session. Internal ACP updates are not returned by
 default. Do not call `get_events` or poll session state for ordinary one-shot
 work.
 
+`run_task.idleTimeoutMs` limits how long the task's own ACP session can remain
+silent (default: 10 minutes). Any inbound session update resets the timer,
+including unknown future update variants. Do not increase it merely because a
+planning task may take a long time; active tasks can run beyond the idle
+timeout. Choose a generous idle timeout for potentially long model inference
+waits. Caller cancellation remains immediate. There is no absolute run-time cap.
+`permissionLeaseMs` separately controls how long an operator handoff remains
+available (default: 2 minutes).
+
 ## Select models and other settings
 
 ACP config IDs belong to the agent. Use the `config` map with the advertised
