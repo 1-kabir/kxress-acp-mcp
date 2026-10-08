@@ -7,6 +7,7 @@ import {
   classifyAgentFailure,
 } from "../agents/failure_classifiers.ts";
 import { classifyOpenCodeFailure } from "../agents/opencode_failure_classifier.ts";
+import { findExecutablePath } from "../runtime/process.ts";
 import { discoverAdvertisedModels } from "../models/discovery.ts";
 import {
   enrichAdvertisedModels,
@@ -72,21 +73,25 @@ export function createMcpServer(
     ...options.failureClassifiers,
   };
   server.registerTool("list_agents", {
-    description: "List configured ACP agents",
+    description:
+      "List configured ACP agents and whether their launch executable is present. commandFound does not verify authentication or provider access.",
     inputSchema: z.object({}),
-  }, (): Promise<CallToolResult> =>
-    Promise.resolve({
+  }, async (): Promise<CallToolResult> => {
+    const listedAgents = await Promise.all(
+      Object.entries(agents).map(async ([id, agent]) => ({
+        id,
+        displayName: agent.displayName ?? id,
+        commandFound: !!await findExecutablePath(agent.command),
+        installHint: agent.installHint,
+      })),
+    );
+    return {
       content: [{
         type: "text",
-        text: JSON.stringify(
-          Object.entries(agents).map(([id, agent]) => ({
-            id,
-            displayName: agent.displayName ?? id,
-            installHint: agent.installHint,
-          })),
-        ),
+        text: JSON.stringify(listedAgents),
       }],
-    }));
+    };
+  });
   server.registerTool("start_session", {
     description: "Start an ACP session and optionally send an initial prompt",
     inputSchema: {

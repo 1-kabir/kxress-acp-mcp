@@ -39,6 +39,27 @@ absolute executable path for `command`.
 The default profile launches `opencode acp`; authenticate separately with
 `opencode auth login`.
 
+Built-in agent IDs use their canonical ACP launch paths:
+
+- `opencode` starts OpenCode's native `opencode acp` mode.
+- `codex` starts the maintained `codex-acp` adapter. Install it globally with
+  `npm install -g @agentclientprotocol/codex-acp`. To use the documented
+  one-shot route, configure `command: "npx"` and
+  `args: ["-y", "@agentclientprotocol/codex-acp"]`; this may download the
+  package when first run. The adapter bundles a compatible Codex CLI by default
+  and supports `CODEX_PATH` when you want to select another executable.
+- `antigravity` starts Google's separate first-party ACP server. Install it from
+  the
+  [ACP Registry](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp);
+  on Windows the binary is `agy_acp_server.exe`. Put it on `PATH` or configure
+  its absolute path.
+
+These are launch differences only. Once started, every profile uses the same ACP
+session, configuration, activity-based idle timeout, permission, event, and
+cleanup flow. Custom ACP stdio commands continue to work without a built-in
+profile. `list_agents` includes `commandFound` to report whether the configured
+executable is present; it does not check authentication or provider access.
+
 ## Agent configuration
 
 Pass `--config <path>` to load an explicit JSON config. On Windows the default

@@ -8,6 +8,44 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
+export async function findExecutablePath(
+  command: string,
+  pathValue = Deno.env.get("PATH") ?? "",
+): Promise<string | undefined> {
+  const windows = Deno.build.os === "windows";
+  const hasExtension = windows && /\.[^\\/]+$/.test(command);
+  const extensions = (Deno.env.get("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .filter((extension) => extension.toLowerCase() !== ".exe");
+  const candidates = windows && !hasExtension
+    ? [command + ".exe", ...extensions.map((extension) => command + extension)]
+    : [command];
+  const hasDirectory = command.includes("\\") || command.includes("/");
+  const separator = windows ? ";" : ":";
+  const roots = hasDirectory
+    ? [""]
+    : pathValue.split(separator).filter(Boolean);
+  for (const root of roots) {
+    for (const candidate of candidates) {
+      const full = root
+        ? `${root.replace(/[\\/]$/, "")}${windows ? "\\" : "/"}${candidate}`
+        : candidate;
+      try {
+        const info = await Deno.stat(full);
+        if (!info.isFile) continue;
+        if (
+          !windows && info.mode !== null && info.mode !== undefined &&
+          (info.mode & 0o111) === 0
+        ) continue;
+        return full;
+      } catch {
+        // Search the next PATH candidate.
+      }
+    }
+  }
+  return undefined;
+}
+
 export async function resolveWindowsExecutable(
   command: string,
 ): Promise<string> {

@@ -11,6 +11,11 @@ the user asks to inspect available agents or models.
 ## Choose the tool
 
 - Use `list_agents` to see configured ACP agents.
+- Built-in IDs are `opencode`, `codex`, and `antigravity`. They launch through
+  OpenCode's native ACP mode, the maintained Codex ACP adapter, and Google's
+  first-party Antigravity ACP server, respectively. The generic bridge uses the
+  same ACP runtime after each command starts. `list_agents.commandFound` reports
+  executable presence only; it does not verify credentials.
 - Use `list_models` when model choices are unknown or need live validation. It
   reports models advertised by the current ACP session; optional OpenCode
   metadata only enriches those choices.

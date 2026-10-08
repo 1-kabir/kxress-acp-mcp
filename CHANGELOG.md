@@ -14,6 +14,8 @@
 
 ### Added
 
+- Built-in Codex ACP adapter and first-party Antigravity ACP server profiles.
+  `list_agents` now reports whether each profile's executable is present.
 - `run_task` failures now include a compact generic error kind and stage, with a
   JSON-RPC code when the ACP agent provides one. Provider messages and raw
   diagnostics remain private; the bridge does not retry or switch models.

@@ -24,6 +24,9 @@ export function defaultConfigPath(): string {
 }
 
 export async function loadAgents(configPath?: string): Promise<AgentMap> {
+  const antigravityCommand = Deno.build.os === "windows"
+    ? "agy_acp_server"
+    : "agy_acp_server.par";
   const agents: AgentMap = {
     opencode: {
       command: "opencode",
@@ -34,6 +37,20 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
       modelConfigId: "model",
       modelEnrichment: "opencode_zen",
       failureClassifier: "opencode",
+    },
+    codex: {
+      command: "codex-acp",
+      args: [],
+      displayName: "Codex",
+      installHint:
+        "Install globally with npm install -g @agentclientprotocol/codex-acp, or explicitly configure npx -y @agentclientprotocol/codex-acp. CODEX_PATH can select another Codex executable.",
+    },
+    antigravity: {
+      command: antigravityCommand,
+      args: Deno.build.os === "linux" ? ["--uid="] : [],
+      displayName: "Antigravity",
+      installHint:
+        "Install Google Antigravity ACP from the official Agent Client Protocol Registry. On Windows, configure agy_acp_server.exe or add it to PATH.",
     },
   };
   const path = configPath ?? defaultConfigPath();
