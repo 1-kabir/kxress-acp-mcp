@@ -28,9 +28,16 @@ async function runIntegration(
   };
   const manager = new SessionManager(agents);
   const closedChildren: Promise<Deno.CommandStatus>[] = [];
+  const closedSessions: Array<{ eventCount: number; eventKinds: string[] }> =
+    [];
   const close = manager.close.bind(manager);
   manager.close = async (id) => {
-    closedChildren.push(manager.get(id).process.child.status);
+    const session = manager.get(id);
+    closedChildren.push(session.process.child.status);
+    closedSessions.push({
+      eventCount: session.events.length,
+      eventKinds: [...new Set(session.events.map((event) => event.kind))],
+    });
     await close(id);
   };
   const server = createMcpServer(agents, manager);
@@ -42,12 +49,20 @@ async function runIntegration(
       }).response,
     );
     if (discovery.status !== "completed" || !Array.isArray(discovery.models)) {
-      throw new Error(`${agentId} ACP model discovery failed`);
+      throw new Error(
+        `${agentId} ACP model discovery failed: ${JSON.stringify(discovery)}`,
+      );
     }
+    const models = discovery.models as Array<{
+      configId: string;
+      id: string;
+      selected: boolean;
+    }>;
     const result = parseToolResult(
       await mcp.callTool("run_task", {
         agentId,
-        task: "Reply exactly with: OK. Do not inspect files or use tools.",
+        task:
+          "Reply with exactly the two letters OK and no punctuation. Do not inspect files or use tools.",
         permissionPolicy: "read_only",
         idleTimeoutMs: 600000,
       }).response,
@@ -65,7 +80,19 @@ async function runIntegration(
       throw new Error(`${agentId} ACP child did not exit successfully`);
     }
     console.log(
-      `${agentId}: ${discovery.models.length} ACP-advertised models; read-only OK task completed; ${statuses.length} ACP child processes exited`,
+      `${agentId}: ${discovery.models.length} ACP-advertised models; ` +
+        `model config IDs=${
+          JSON.stringify([...new Set(models.map((model) => model.configId))])
+        }; ` +
+        `selected=${
+          JSON.stringify(
+            models.filter((model) => model.selected).map((model) => model.id),
+          )
+        }; ` +
+        `read-only OK task completed; session events=${
+          JSON.stringify(closedSessions)
+        }; ` +
+        `${statuses.length} ACP child processes exited`,
     );
   } finally {
     await mcp.close();
