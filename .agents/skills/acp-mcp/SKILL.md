@@ -59,6 +59,43 @@ waits. Caller cancellation remains immediate. There is no absolute run-time cap.
 `permissionLeaseMs` separately controls how long an operator handoff remains
 available (default: 2 minutes).
 
+## Plan or research from a disposable workspace
+
+When planning or research should not write into the real checkout, create a
+snapshot and pass its returned `cwd` to `run_task`. From the repository root,
+run this in PowerShell:
+
+```powershell
+$snapshot = mise exec -- deno run --allow-env --allow-read --allow-write --allow-run scripts/planning_workspace.ts create (Get-Location).Path | ConvertFrom-Json
+```
+
+Then call `run_task` with `cwd: $snapshot.cwd`. After the ACP call has returned
+and its process is closed, clean up even when the task failed or was cancelled:
+
+```powershell
+mise exec -- deno run --allow-env --allow-read --allow-write --allow-run scripts/planning_workspace.ts cleanup $snapshot.cwd
+```
+
+The helper copies tracked files' current filesystem contents (whether their
+edits are staged or unstaged) plus untracked non-ignored files. It does not copy
+the Git index, so the snapshot does not preserve staging distinctions. It omits
+untracked ignored files, `.git`, and symlinks/reparse-point entries; it does not
+follow external link targets. Git submodule contents are not copied. Each
+invocation gets a unique directory under `%TEMP%\acp-mcp-workspaces` (or the
+platform temp directory), outside the source checkout, so concurrent snapshots
+do not share state. Creation failure prevents the ACP call. A cleanup error is
+surfaced with the leftover workspace path for explicit removal.
+
+This workflow protects the original checkout from ordinary reads, writes,
+deletions, and file creation performed relative to the planner's snapshot cwd.
+It is not an OS sandbox: an agent process still has the user's normal access to
+absolute paths, other directories, credentials, processes, and the network.
+`permissionPolicy: read_only` remains only an ACP permission-request response
+policy. A snapshot is also not a secret-scanning boundary; only use it when the
+files selected by the inclusion rules are appropriate to send to the configured
+model provider. `run_task` itself always uses exactly the `cwd` supplied by its
+caller.
+
 ## Select models and other settings
 
 ACP config IDs belong to the agent. Use the `config` map with the advertised

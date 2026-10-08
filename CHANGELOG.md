@@ -14,6 +14,10 @@
 
 ### Added
 
+- Add an explicit helper for unique disposable planning snapshots. It copies
+  tracked working-tree contents and non-ignored untracked files without Git
+  metadata, and documents that the snapshot is mutation containment rather than
+  an OS sandbox.
 - OpenCode Zen and Go enrichment now covers provider-qualified advertised
   models, distinguishes current per-token price from subscription access and
   limited-time free status, adds the documented Jev paid-counterpart tier, and

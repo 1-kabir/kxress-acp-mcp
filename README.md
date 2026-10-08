@@ -140,6 +140,23 @@ policies. See the
 [ACP permission request protocol](https://agentclientprotocol.com/protocol/v1/tool-calls#requesting-permission)
 for the agent's permission-request behavior.
 
+For planning or research where writes to the real checkout are undesirable,
+`scripts/planning_workspace.ts` creates a unique disposable snapshot outside the
+repository. It copies tracked files' current filesystem contents (whether their
+edits are staged or unstaged) and untracked non-ignored files. It does not copy
+the Git index or preserve staging distinctions. It omits untracked ignored
+files, `.git`, symlinks/reparse-point entries, and Git submodule contents. Pass
+the reported `cwd` to `run_task`, then run the helper's `cleanup` action after
+the ACP process closes, including after failures or cancellation. Creation
+errors stop the workflow; cleanup errors report the remaining path. The ACP
+result is still the task result if cleanup fails.
+
+The snapshot keeps ordinary relative planner writes and deletions out of the
+original checkout. It is not an OS sandbox and does not prevent access through
+absolute paths, other directories, credentials, subprocesses, or the network.
+Review the copied files before sending repository context to a model provider.
+See the ACP usage skill for the Windows PowerShell commands.
+
 `run_task.idleTimeoutMs` defaults to 10 minutes and limits consecutive silence
 from the task's ACP session. Any inbound `session/update` for that session
 resets it, including update variants this bridge does not recognize. Active
