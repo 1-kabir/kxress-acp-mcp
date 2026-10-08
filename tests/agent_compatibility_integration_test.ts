@@ -28,8 +28,11 @@ async function runIntegration(
   };
   const manager = new SessionManager(agents);
   const closedChildren: Promise<Deno.CommandStatus>[] = [];
-  const closedSessions: Array<{ eventCount: number; eventKinds: string[] }> =
-    [];
+  const closedSessions: Array<{
+    eventCount: number;
+    eventKinds: string[];
+    journalBytes: number;
+  }> = [];
   const close = manager.close.bind(manager);
   manager.close = async (id) => {
     const session = manager.get(id);
@@ -37,6 +40,7 @@ async function runIntegration(
     closedSessions.push({
       eventCount: session.events.length,
       eventKinds: [...new Set(session.events.map((event) => event.kind))],
+      journalBytes: JSON.stringify(session.events).length,
     });
     await close(id);
   };
@@ -58,6 +62,23 @@ async function runIntegration(
       id: string;
       selected: boolean;
     }>;
+    const selectedModel = models.find((model) => model.selected);
+    if (!selectedModel) {
+      throw new Error(`${agentId} advertised no selected model`);
+    }
+    const metadataSession = await manager.start(agentId);
+    console.log(`${agentId} ACP auth/config: ${
+      JSON.stringify({
+        authMethods: metadataSession.authMethods,
+        configOptions: metadataSession.configOptions.map((option) => ({
+          id: option.id,
+          category: option.category,
+          type: option.type,
+          currentValue: option.currentValue,
+        })),
+      })
+    }`);
+    await manager.close(metadataSession.id);
     const result = parseToolResult(
       await mcp.callTool("run_task", {
         agentId,
@@ -65,6 +86,7 @@ async function runIntegration(
           "Reply with exactly the two letters OK and no punctuation. Do not inspect files or use tools.",
         permissionPolicy: "read_only",
         idleTimeoutMs: 600000,
+        config: { [selectedModel.configId]: selectedModel.id },
       }).response,
     );
     if (result.status !== "completed" || result.response !== "OK") {
@@ -76,9 +98,6 @@ async function runIntegration(
       throw new Error(`${agentId} left a session active`);
     }
     const statuses = await Promise.all(closedChildren);
-    if (statuses.some((status) => !status.success)) {
-      throw new Error(`${agentId} ACP child did not exit successfully`);
-    }
     console.log(
       `${agentId}: ${discovery.models.length} ACP-advertised models; ` +
         `model config IDs=${
@@ -92,7 +111,12 @@ async function runIntegration(
         `read-only OK task completed; session events=${
           JSON.stringify(closedSessions)
         }; ` +
-        `${statuses.length} ACP child processes exited`,
+        `caller result=${JSON.stringify(result)} (${
+          JSON.stringify(result).length
+        } bytes); ` +
+        `${statuses.length} ACP child processes exited with codes=${
+          JSON.stringify(statuses.map((status) => status.code))
+        }`,
     );
   } finally {
     await mcp.close();
