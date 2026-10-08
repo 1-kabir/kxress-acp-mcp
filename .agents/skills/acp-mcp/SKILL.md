@@ -71,11 +71,14 @@ model choices.
 ## Permissions and disclosure
 
 The default `read_only` policy controls how acp-mcp responds to ACP permission
-requests. It does not sandbox the ACP process, guarantee that repository data
-stays local, or prevent the configured model provider from receiving task and
-repository context. The agent may read files under its working directory and use
-its own network access. Host approval policies still apply; review and approve
-external/open-world calls through the host's normal flow.
+`session/request_permission` requests: it allows agent-reported `read`,
+`search`, `fetch`, and `think` kinds and rejects other requested kinds. ACP
+agents may act without requesting permission, so this is not filesystem
+isolation and does not sandbox the ACP process. It also cannot guarantee that
+repository data stays local or prevent the configured model provider from
+receiving task and repository context. The agent runs with its own process/OS
+access and may use its own network access. Host approval policies still apply;
+review and approve external/open-world calls through the host's normal flow.
 
 Use `operator` when a human should decide an ACP permission request. A
 `permission_required` result contains the managed session and permission IDs,

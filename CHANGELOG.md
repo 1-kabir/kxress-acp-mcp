@@ -32,3 +32,9 @@
 - Agent profiles may opt into compact semantic failure classification. The
   OpenCode classifier recognizes explicit rate-limit wording as a heuristic;
   generic ACP codes alone are never interpreted as provider conditions.
+
+### Changed
+
+- Clarify that `read_only` governs only ACP permission requests and is not a
+  filesystem sandbox; deterministic coverage demonstrates that a fake ACP
+  process can write directly without requesting permission.

@@ -3,7 +3,16 @@ import { SessionManager } from "../src/sessions/manager.ts";
 import type { AgentFailureClassifiers } from "../src/agents/failure_classifiers.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
-function managerFor(agentId: "raw" | "fake" = "fake") {
+function managerFor(agentId: "raw" | "fake" = "fake", cwd = Deno.cwd()) {
+  const fixturePath = new URL(
+    `./fixtures/${
+      agentId === "raw" ? "raw_wire_acp_agent" : "fake_acp_agent"
+    }.ts`,
+    import.meta.url,
+  ).pathname;
+  const absoluteFixturePath = Deno.build.os === "windows"
+    ? decodeURIComponent(fixturePath.replace(/^\//, ""))
+    : fixturePath;
   return new SessionManager({
     [agentId]: {
       command: Deno.execPath(),
@@ -12,10 +21,9 @@ function managerFor(agentId: "raw" | "fake" = "fake") {
         "--allow-env",
         "--allow-read",
         "--allow-write",
-        `tests/fixtures/${
-          agentId === "raw" ? "raw_wire_acp_agent" : "fake_acp_agent"
-        }.ts`,
+        absoluteFixturePath,
       ],
+      cwd,
     },
   });
 }
@@ -24,8 +32,9 @@ async function harness(
   agentId: "raw" | "fake" = "fake",
   failureClassifier?: string,
   failureClassifiers?: AgentFailureClassifiers,
+  agentCwd?: string,
 ) {
-  const manager = managerFor(agentId);
+  const manager = managerFor(agentId, agentCwd);
   const closedChildren: Promise<Deno.CommandStatus>[] = [];
   const closedStderr: Array<() => string> = [];
   const originalClose = manager.close.bind(manager);
@@ -222,6 +231,16 @@ Deno.test("run_task advertises external disclosure and mutation accurately", asy
     if (!policyDescription?.includes("does not sandbox")) {
       throw new Error(
         "permissionPolicy description conflates permission and isolation",
+      );
+    }
+    if (
+      !policyDescription.includes("may act without requesting permission") ||
+      !policyDescription.includes(
+        "allows agent-reported read, search, fetch, and think kinds",
+      )
+    ) {
+      throw new Error(
+        "permissionPolicy description overstates read_only guarantees",
       );
     }
     if (
@@ -480,6 +499,15 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
 
 Deno.test("run_task applies allow_all only when requested and defaults to read_only", async () => {
   const { manager, server, mcp, closedChildren } = await harness();
+  let permissionRequests = 0;
+  const close = manager.close.bind(manager);
+  manager.close = async (id) => {
+    permissionRequests +=
+      manager.get(id).events.filter((event) =>
+        event.kind === "permission_request"
+      ).length;
+    await close(id);
+  };
   try {
     const denied = await mcp.callTool("run_task", {
       agentId: "fake",
@@ -497,13 +525,70 @@ Deno.test("run_task applies allow_all only when requested and defaults to read_o
       throw new Error("Explicit allow_all was not applied");
     }
     await Promise.all(closedChildren);
-    if (closedChildren.length !== 2) {
-      throw new Error("Permission policy sessions did not close");
+    if (closedChildren.length !== 2 || permissionRequests !== 2) {
+      throw new Error(
+        `Expected two closed sessions and permission requests; closed=${closedChildren.length}, requests=${permissionRequests}`,
+      );
     }
   } finally {
     await mcp.close();
     await manager.closeAll();
     await server.close();
+  }
+});
+
+Deno.test("read_only cannot stop a fake agent's direct process write", async () => {
+  const dir = await Deno.makeTempDir();
+  const { manager, server, mcp, closedChildren } = await harness(
+    "fake",
+    undefined,
+    undefined,
+    dir,
+  );
+  let eventKinds: string[] = [];
+  const close = manager.close.bind(manager);
+  manager.close = async (id) => {
+    eventKinds = manager.get(id).events.map((event) => event.kind);
+    await close(id);
+  };
+  const separator = Deno.build.os === "windows" ? "\\" : "/";
+  const writtenFile = `${dir}${separator}DIRECT_WRITE.txt`;
+  try {
+    const result = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "direct write without permission",
+        cwd: dir,
+        permissionPolicy: "read_only",
+      }).response,
+    );
+    if (
+      result.status !== "completed" || result.response !==
+        "Wrote DIRECT_WRITE.txt"
+    ) {
+      throw new Error(
+        `Unexpected direct-write task result: ${JSON.stringify(result)}`,
+      );
+    }
+    if (
+      await Deno.readTextFile(writtenFile) !== "written without ACP permission"
+    ) {
+      throw new Error("Fake agent did not write through its OS process access");
+    }
+    if (eventKinds.includes("permission_request")) {
+      throw new Error(
+        "Direct fake-agent write unexpectedly requested ACP permission",
+      );
+    }
+    await Promise.all(closedChildren);
+    if (closedChildren.length !== 1 || manager.sessions.size) {
+      throw new Error("Direct-write test leaked its ACP child or session");
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+    await Deno.remove(dir, { recursive: true });
   }
 });
 

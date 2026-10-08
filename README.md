@@ -125,14 +125,20 @@ is `%APPDATA%\acp-mcp\config.json`; elsewhere it is
 ```
 
 Configured agents run with the current user's OS permissions. The bridge does
-not sandbox subprocesses. ACP permission policy controls permission responses;
-`read_only` is the default and does not provide OS-level isolation.
+not sandbox subprocesses. ACP permission policy controls responses to
+`session/request_permission`; it does not intercept ordinary tool calls or
+provide OS-level isolation. By default, `read_only` allows requested
+agent-reported `read`, `search`, `fetch`, and `think` kinds and rejects other
+requested kinds. ACP agents may perform actions without requesting permission,
+so `read_only` does not guarantee that a task cannot modify files.
 
 The `run_task` tool may send its task and repository content read by the ACP
-agent to that agent's configured model provider. `read_only` only controls how
-the bridge responds to ACP permission requests; it does not keep repository data
-local, restrict network access, or sandbox the child process. Codex and other
-MCP hosts continue to apply their own approval and security policies.
+agent to that agent's configured model provider. `read_only` does not keep
+repository data local, restrict network access, or sandbox the child process.
+Codex and other MCP hosts continue to apply their own approval and security
+policies. See the
+[ACP permission request protocol](https://agentclientprotocol.com/protocol/v1/tool-calls#requesting-permission)
+for the agent's permission-request behavior.
 
 `run_task.idleTimeoutMs` defaults to 10 minutes and limits consecutive silence
 from the task's ACP session. Any inbound `session/update` for that session
@@ -168,8 +174,10 @@ use `"true"` or `"false"`. The ACP client advertises boolean config-option
 support and converts those strings to protocol booleans. `permissionPolicy`
 defaults to `read_only`; `operator` exposes requests through `get_session` and
 waits for `resolve_permission`, while `allow_all` and `deny_all` apply
-advertised ACP options. These policies rely on ACP permission requests and do
-not sandbox the child process.
+advertised ACP options. `read_only` allows requests whose advertised tool kind
+is `read`, `search`, `fetch`, or `think`, and rejects other requested kinds.
+These policies apply only when an agent requests permission; they do not prevent
+an agent from acting without a request or sandbox the child process.
 
 `load_session` starts a fresh agent process and calls `session/load` only when
 the agent advertises that capability. Supply the original absolute working

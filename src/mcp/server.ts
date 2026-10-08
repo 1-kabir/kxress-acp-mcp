@@ -143,7 +143,7 @@ export function createMcpServer(
     "run_task",
     {
       description:
-        "Run one task through a configured ACP agent and return only its final answer. Failures include a compact generic kind and stage; ACP codes are protocol codes, not provider HTTP status. No automatic retries or model fallback are performed. Use explicit session tools for multi-turn work or event inspection. The task and repository content read by the agent may be sent to its configured model provider. permissionPolicy controls ACP permission responses; it does not prevent external data disclosure or sandbox the agent process. Host approval policies still apply.",
+        "Run one task through a configured ACP agent and return only its final answer. Failures include a compact generic kind and stage; ACP codes are protocol codes, not provider HTTP status. No automatic retries or model fallback are performed. Use explicit session tools for multi-turn work or event inspection. The task and repository content read by the agent may be sent to its configured model provider; permissionPolicy does not prevent external data disclosure. permissionPolicy controls only ACP session/request_permission responses. read_only allows agent-reported read, search, fetch, and think kinds and rejects other requested kinds; agents may act without requesting permission. This is not filesystem isolation or an OS sandbox. Host approval policies still apply.",
       annotations: {
         title: "Run ACP task",
         readOnlyHint: false,
@@ -169,7 +169,7 @@ export function createMcpServer(
           "allow_all",
           "deny_all",
         ]).optional().describe(
-          "ACP permission response policy (defaults to read_only); this does not sandbox the process or keep data local",
+          "ACP session/request_permission response policy (defaults to read_only). read_only allows agent-reported read, search, fetch, and think kinds and rejects other requested kinds. Agents may act without requesting permission; this does not sandbox the process or keep data local.",
         ),
         idleTimeoutMs: z.number().int().min(1).max(3600000).optional()
           .describe(

@@ -139,6 +139,19 @@ app.onRequest("session/prompt", async ({ params, client }) => {
   if (promptText === "complete then exit nonzero on close") {
     exitNonzeroAfterClose = true;
   }
+  if (promptText === "direct write without permission") {
+    const separator = Deno.build.os === "windows" ? "\\" : "/";
+    const path = `${Deno.cwd()}${separator}DIRECT_WRITE.txt`;
+    await Deno.writeTextFile(path, "written without ACP permission");
+    await client.notify("session/update", {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Wrote DIRECT_WRITE.txt" },
+      },
+    });
+    return { stopReason: "end_turn" };
+  }
   if (promptText === "empty response") return { stopReason: "end_turn" };
   if (promptText === "permission" || promptText === "operator delegate") {
     const answer = await client.request("session/request_permission", {
