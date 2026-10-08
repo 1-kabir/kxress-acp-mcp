@@ -62,14 +62,14 @@ Configured agents run with the current user's OS permissions. The bridge does
 not sandbox subprocesses. ACP permission policy controls permission responses;
 `read_only` is the default and does not provide OS-level isolation.
 
-Tools include `delegate`, `list_agents`, `start_session`, `load_session`,
-`get_session`, `prompt`, `get_events`, `cancel_prompt`, `resolve_permission`,
-`set_config_option`, `set_mode`, `list_sessions`, and `close_session`. A prompt
-call accepts `wait` and `waitMs`; if it is still running at the wait limit, the
-response includes its prompt ID. Use `get_events` with the session ID and
-`afterSequence` cursor to read updates, or `cancel_prompt` to send ACP
-cancellation. Raw ACP payloads and thought events are omitted from polling
-results unless requested.
+Tools include `delegate`, `discover_models`, `list_agents`, `start_session`,
+`load_session`, `get_session`, `prompt`, `get_events`, `cancel_prompt`,
+`resolve_permission`, `set_config_option`, `set_mode`, `list_sessions`, and
+`close_session`. A prompt call accepts `wait` and `waitMs`; if it is still
+running at the wait limit, the response includes its prompt ID. Use `get_events`
+with the session ID and `afterSequence` cursor to read updates, or
+`cancel_prompt` to send ACP cancellation. Raw ACP payloads and thought events
+are omitted from polling results unless requested.
 
 Inbound `session/update` notifications are intercepted at the public SDK stream
 boundary before SDK notification validation. The bridge journals their original
@@ -108,6 +108,18 @@ cancellation.
 
 ACP activity and event journals remain server-side unless a tool explicitly
 returns them (for example, `get_events`).
+
+Use `discover_models` to inspect model choices exposed by a live ACP session. It
+starts and closes a temporary `read_only` session, and returns only the
+advertised choices with their ACP config ID so a later `start_session` can
+select one through the existing `config` map. Agents without model choices
+return an empty list. Set `enrich: true` to request optional OpenCode Zen
+metadata for the OpenCode profile; metadata is attached only to exact IDs
+already advertised by ACP. The official
+[OpenCode Zen model endpoint](https://opencode.ai/zen/v1/models) and
+[Zen documentation](https://opencode.ai/docs/zen/) provide the catalog and
+pricing data. Metadata lookup failures preserve the available ACP model list. No
+catalog or availability cache is used.
 
 Sessions and event journals are held in memory by the `acp-mcp` process. A
 server restart loses this bridge state. Loading an existing ACP session depends

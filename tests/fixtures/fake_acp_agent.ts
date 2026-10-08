@@ -6,7 +6,61 @@ app.onRequest(
   "initialize",
   () => ({ protocolVersion: 1, agentCapabilities: { loadSession: true } }),
 );
-app.onRequest("session/new", () => ({ sessionId: crypto.randomUUID() }));
+app.onRequest("session/new", () => {
+  const delayArgument = Deno.args.find((arg) =>
+    arg.startsWith("--session-delay-ms=")
+  );
+  if (delayArgument) {
+    const delay = Number(delayArgument.split("=")[1]);
+    return new Promise((resolve) => {
+      setTimeout(
+        () => resolve({ sessionId: crypto.randomUUID(), configOptions: [] }),
+        delay,
+      );
+    });
+  }
+  if (Deno.args.includes("--session-fail")) {
+    throw new Error("fixture session creation failed");
+  }
+  const configOptions = Deno.args.includes("--advertise-models")
+    ? [
+      {
+        id: "engine-selector",
+        name: "Engine",
+        category: "model",
+        type: "select" as const,
+        currentValue: "opencode/fledge-alpha-free",
+        options: [
+          {
+            value: "opencode/fledge-alpha-free",
+            name: "opencode/Fledge Alpha Free",
+          },
+          { value: "opencode/paid-model", name: "Paid Model" },
+          {
+            value: "opencode/available-without-metadata",
+            name: "Unmatched ACP Model",
+          },
+        ],
+      },
+      {
+        id: "backend-choice",
+        name: "Backend model",
+        type: "select" as const,
+        currentValue: "local/model-z",
+        options: [{ value: "local/model-z", name: "Local Model Z" }],
+      },
+      {
+        id: "mode",
+        name: "Mode",
+        category: "mode",
+        type: "select" as const,
+        currentValue: "hidden/model",
+        options: [{ value: "hidden/model", name: "Not a model" }],
+      },
+    ]
+    : [];
+  return { sessionId: crypto.randomUUID(), configOptions };
+});
 app.onRequest("session/load", () => ({}));
 app.onRequest("session/prompt", async ({ params, client }) => {
   const sessionId = params.sessionId;

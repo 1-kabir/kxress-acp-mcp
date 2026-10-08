@@ -2,10 +2,38 @@ import { McpServer } from "@modelcontextprotocol/server";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import type { AgentMap } from "../agents/config.ts";
+import { discoverAdvertisedModels } from "../models/discovery.ts";
+import {
+  enrichAdvertisedModels,
+  fetchOpenCodeZenCatalog,
+  type OpenCodeCatalog,
+} from "../models/opencode_zen.ts";
 import { SessionManager } from "../sessions/manager.ts";
 
-export function createMcpServer(agents: AgentMap, manager: SessionManager) {
+type McpServerOptions = {
+  loadOpenCodeCatalog?: (signal: AbortSignal) => Promise<OpenCodeCatalog>;
+};
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  let abort: (() => void) | undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  return Promise.race([promise, cancelled]).finally(() => {
+    if (abort) signal.removeEventListener("abort", abort);
+  });
+}
+
+export function createMcpServer(
+  agents: AgentMap,
+  manager: SessionManager,
+  options: McpServerOptions = {},
+) {
   const server = new McpServer({ name: "acp-mcp", version: "0.1.0" });
+  const loadOpenCodeCatalog = options.loadOpenCodeCatalog ??
+    ((signal) => fetchOpenCodeZenCatalog(signal));
   server.registerTool("list_agents", {
     description: "List configured ACP agents",
     inputSchema: z.object({}),
@@ -211,6 +239,130 @@ export function createMcpServer(agents: AgentMap, manager: SessionManager) {
             text: JSON.stringify({ status: "failed" }),
           }],
         };
+      }
+    },
+  );
+  server.registerTool(
+    "discover_models",
+    {
+      description:
+        "Discover models advertised by a live ACP session, with optional OpenCode metadata",
+      inputSchema: {
+        agentId: z.string(),
+        cwd: z.string().optional(),
+        enrich: z.boolean().optional(),
+        timeoutMs: z.number().int().min(1).max(120000).optional(),
+      },
+    },
+    async (
+      { agentId, cwd, enrich = false, timeoutMs = 30000 },
+      extra,
+    ) => {
+      const definition = agents[agentId];
+      if (!definition) {
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: JSON.stringify({ status: "failed", stage: "acp_discovery" }),
+          }],
+        };
+      }
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      const signal = AbortSignal.any([extra.mcpReq.signal, timeoutSignal]);
+      let session: Awaited<ReturnType<typeof manager.start>> | undefined;
+      let startPromise: ReturnType<typeof manager.start> | undefined;
+      try {
+        startPromise = manager.start(
+          agentId,
+          cwd,
+          {},
+          undefined,
+          "read_only",
+        );
+        session = await abortable(startPromise, signal);
+        if (extra.mcpReq.signal.aborted) {
+          return {
+            isError: true,
+            content: [{
+              type: "text",
+              text: JSON.stringify({ status: "failed", stage: "cancelled" }),
+            }],
+          };
+        }
+        const models = discoverAdvertisedModels(
+          session.configOptions,
+          definition,
+        );
+        let enrichedModels = models;
+        let enrichment: { source?: string; status: string; sourceUrl?: string };
+        if (!enrich) {
+          enrichment = { status: "not_requested" };
+        } else if (definition.modelEnrichment !== "opencode_zen") {
+          enrichment = { status: "not_supported" };
+        } else {
+          try {
+            const catalog = await loadOpenCodeCatalog(signal);
+            enrichedModels = enrichAdvertisedModels(models, catalog);
+            enrichment = {
+              source: "opencode_zen",
+              status: "available",
+              sourceUrl: "https://opencode.ai/docs/zen/",
+            };
+          } catch {
+            if (extra.mcpReq.signal.aborted) {
+              return {
+                isError: true,
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "failed",
+                    stage: "cancelled",
+                  }),
+                }],
+              };
+            }
+            enrichedModels = models;
+            enrichment = {
+              source: "opencode_zen",
+              status: "unavailable",
+              sourceUrl: "https://opencode.ai/docs/zen/",
+            };
+          }
+        }
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              status: "completed",
+              availabilitySource: "acp",
+              models: enrichedModels,
+              enrichment,
+            }),
+          }],
+        };
+      } catch {
+        const timedOut = timeoutSignal.aborted && !extra.mcpReq.signal.aborted;
+        if (!session && startPromise) {
+          void startPromise.then((lateSession) => manager.close(lateSession.id))
+            .catch(() => undefined);
+        }
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              status: timedOut ? "timed_out" : "failed",
+              stage: "acp_discovery",
+            }),
+          }],
+        };
+      } finally {
+        if (session) {
+          try {
+            await manager.close(session.id);
+          } catch { /* Session may have closed during request cancellation. */ }
+        }
       }
     },
   );
