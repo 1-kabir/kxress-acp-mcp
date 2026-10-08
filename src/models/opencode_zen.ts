@@ -3,22 +3,136 @@ import type { DiscoveredModel } from "./discovery.ts";
 export const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 export const OPENCODE_ZEN_DOCS_URL = "https://opencode.ai/docs/zen/";
 
+export type UnderlyingCostTier = "low" | "medium" | "high" | "premium";
+
+export interface OpenCodeModelPricing {
+  currency: "USD";
+  unit: "per_million_tokens";
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export interface OpenCodeModelInfo {
   id: string;
   name?: string;
+  /** Current Zen pricing, not the model's underlying economic positioning. */
+  pricing?: OpenCodeModelPricing;
+  /** True only when current published input and output prices are both zero. */
   free?: boolean;
-  pricing?: {
-    currency: "USD";
-    unit: "per_million_tokens";
-    input: number;
-    output: number;
-    cacheRead?: number;
-    cacheWrite?: number;
+  pricingStatus?: "limited_time";
+  paidCounterpart?: {
+    id: string;
+    relation: "documented_variant";
+    sourceUrl: string;
   };
+  underlyingCostTier?: {
+    value: UnderlyingCostTier;
+    basis: "published_pricing" | "paid_counterpart";
+    confidence: "direct" | "documented_counterpart";
+    sourceUrl: string;
+    counterpartId?: string;
+  };
+  privacy?: {
+    trainingUse:
+      | "not_used_for_training"
+      | "may_be_used_for_improvement"
+      | "may_be_used_for_training";
+    retention?: "zero" | "not_zero" | "thirty_days" | "provider_policy";
+    sourceUrl: string;
+  };
+  provenance?: { source: "opencode_zen" };
 }
 
 export interface OpenCodeCatalog {
   models: Map<string, OpenCodeModelInfo>;
+}
+
+const limitedTimeFreeIds = new Set([
+  "big-pickle",
+  "exo-free",
+  "fledge-alpha-free",
+  "jev-1.13-free",
+  "ling-3.0-flash-fin-free",
+  "ling-3.1-flash-free",
+  "longcat-2.5-preview-free",
+  "mimo-v2.5-free",
+  "mimo-v2.6-flash-free",
+  "muse-spark-1.3-contributor-free",
+  "nemotron-3-ultra-free",
+  "nemotron-3.5-lightning-free",
+  "space-bunny-free",
+]);
+
+/** Exact pair described by OpenCode's Zen docs; never derived from the ID suffix. */
+const documentedPaidCounterparts = new Map([
+  ["jev-1.13-free", "jev-1.13"],
+]);
+
+const documentedPrivacy = new Map<string, OpenCodeModelInfo["privacy"]>([
+  ["space-bunny-free", {
+    trainingUse: "not_used_for_training",
+    retention: "zero",
+    sourceUrl: OPENCODE_ZEN_DOCS_URL,
+  }],
+  ["longcat-2.5-preview-free", {
+    trainingUse: "not_used_for_training",
+    retention: "zero",
+    sourceUrl: OPENCODE_ZEN_DOCS_URL,
+  }],
+  ["jev-1.13-free", {
+    trainingUse: "not_used_for_training",
+    retention: "provider_policy",
+    sourceUrl: OPENCODE_ZEN_DOCS_URL,
+  }],
+  ["jev-1.13", {
+    trainingUse: "not_used_for_training",
+    retention: "provider_policy",
+    sourceUrl: OPENCODE_ZEN_DOCS_URL,
+  }],
+  ...[
+    "big-pickle",
+    "exo-free",
+    "fledge-alpha-free",
+    "ling-3.0-flash-fin-free",
+    "ling-3.1-flash-free",
+    "mimo-v2.5-free",
+    "mimo-v2.6-flash-free",
+  ].map((id) =>
+    [id, {
+      trainingUse: "may_be_used_for_improvement" as const,
+      sourceUrl: OPENCODE_ZEN_DOCS_URL,
+    }] as const
+  ),
+  ...[
+    "nemotron-3-ultra-free",
+    "nemotron-3.5-lightning-free",
+  ].map((id) =>
+    [id, {
+      trainingUse: "may_be_used_for_improvement" as const,
+      retention: "not_zero" as const,
+      sourceUrl: OPENCODE_ZEN_DOCS_URL,
+    }] as const
+  ),
+  ["muse-spark-1.3-contributor-free", {
+    trainingUse: "may_be_used_for_training",
+    retention: "not_zero",
+    sourceUrl: OPENCODE_ZEN_DOCS_URL,
+  }],
+]);
+
+/** Coarse project bands over max(input, output) USD per 1M tokens. */
+export function economicTier(
+  pricing: OpenCodeModelPricing | undefined,
+): UnderlyingCostTier | undefined {
+  if (!pricing) return undefined;
+  const representativePrice = Math.max(pricing.input, pricing.output);
+  if (representativePrice <= 0) return undefined;
+  if (representativePrice < 1) return "low";
+  if (representativePrice < 5) return "medium";
+  if (representativePrice < 20) return "high";
+  return "premium";
 }
 
 function text(html: string): string {
@@ -104,6 +218,9 @@ function parseDocs(html: string): Map<string, OpenCodeModelInfo> {
       id,
       name: row[0],
       free: input === 0 && output === 0,
+      ...(input === 0 && output === 0 && limitedTimeFreeIds.has(id)
+        ? { pricingStatus: "limited_time" }
+        : {}),
       pricing: {
         currency: "USD",
         unit: "per_million_tokens",
@@ -112,6 +229,10 @@ function parseDocs(html: string): Map<string, OpenCodeModelInfo> {
         ...(cacheRead === undefined ? {} : { cacheRead }),
         ...(cacheWrite === undefined ? {} : { cacheWrite }),
       },
+      ...(documentedPrivacy.get(id)
+        ? { privacy: documentedPrivacy.get(id) }
+        : {}),
+      provenance: { source: "opencode_zen" },
     });
   }
   return result;
@@ -136,10 +257,46 @@ export async function fetchOpenCodeZenCatalog(
   }
   const docs = parseDocs(await docsResponse.text());
   const models = new Map<string, OpenCodeModelInfo>();
+  const catalogIds = new Set<string>();
   for (const item of api.data) {
     if (typeof item.id !== "string") continue;
+    catalogIds.add(item.id);
     const detail = docs.get(item.id);
     models.set(item.id, detail ?? { id: item.id });
+  }
+  for (const [id, counterpartId] of documentedPaidCounterparts) {
+    const model = models.get(id);
+    const counterpart = models.get(counterpartId);
+    if (
+      !model || !catalogIds.has(counterpartId) || !counterpart?.pricing
+    ) continue;
+    model.paidCounterpart = {
+      id: `opencode/${counterpartId}`,
+      relation: "documented_variant",
+      sourceUrl: OPENCODE_ZEN_DOCS_URL,
+    };
+    const tier = economicTier(counterpart.pricing);
+    if (tier) {
+      model.underlyingCostTier = {
+        value: tier,
+        basis: "paid_counterpart",
+        confidence: "documented_counterpart",
+        sourceUrl: OPENCODE_ZEN_DOCS_URL,
+        counterpartId: `opencode/${counterpartId}`,
+      };
+    }
+  }
+  for (const model of models.values()) {
+    if (model.underlyingCostTier || model.free) continue;
+    const tier = economicTier(model.pricing);
+    if (tier) {
+      model.underlyingCostTier = {
+        value: tier,
+        basis: "published_pricing",
+        confidence: "direct",
+        sourceUrl: OPENCODE_ZEN_DOCS_URL,
+      };
+    }
   }
   return { models };
 }
@@ -153,15 +310,28 @@ export function enrichAdvertisedModels(
     const catalogId = model.id.slice("opencode/".length);
     const metadata = catalog.models.get(catalogId);
     if (!metadata) return model;
+    const modelMetadata = {
+      ...(metadata.name ? { name: metadata.name } : {}),
+      ...(metadata.free === undefined ? {} : { free: metadata.free }),
+      ...(metadata.pricing ? { pricing: metadata.pricing } : {}),
+      ...(metadata.pricingStatus
+        ? { pricingStatus: metadata.pricingStatus }
+        : {}),
+      ...(metadata.paidCounterpart
+        ? { paidCounterpart: metadata.paidCounterpart }
+        : {}),
+      ...(metadata.underlyingCostTier
+        ? { underlyingCostTier: metadata.underlyingCostTier }
+        : {}),
+      ...(metadata.privacy ? { privacy: metadata.privacy } : {}),
+      ...(metadata.provenance ? { provenance: metadata.provenance } : {}),
+    };
+    if (!Object.keys(modelMetadata).length) return model;
     const displayName = model.name.replace(/^opencode\//, "");
     return {
       ...model,
-      metadata: {
-        ...(metadata.name ? { name: metadata.name } : {}),
-        ...(metadata.free === undefined ? {} : { free: metadata.free }),
-        ...(metadata.pricing ? { pricing: metadata.pricing } : {}),
-      },
-      name: model.name || metadata.name || displayName,
+      metadata: modelMetadata,
+      name: metadata.name || displayName,
     };
   });
 }

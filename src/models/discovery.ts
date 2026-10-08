@@ -7,18 +7,8 @@ export interface DiscoveredModel {
   available: true;
   selected: boolean;
   availabilitySource: "acp";
-  metadata?: {
-    name?: string;
-    free?: boolean;
-    pricing?: {
-      currency: "USD";
-      unit: "per_million_tokens";
-      input: number;
-      output: number;
-      cacheRead?: number;
-      cacheWrite?: number;
-    };
-  };
+  /** Optional agent-specific enrichment; availability fields above stay ACP-owned. */
+  metadata?: Record<string, unknown>;
 }
 
 function choices(value: unknown): Array<Record<string, unknown>> {

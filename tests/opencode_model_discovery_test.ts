@@ -35,12 +35,27 @@ Deno.test({
       const fledge = models.find((model) =>
         model.id === "opencode/fledge-alpha-free"
       );
+      const metadataSummary = models
+        .filter((model) =>
+          [
+            "opencode/fledge-alpha-free",
+            "opencode/longcat-2.5-preview-free",
+            "opencode/jev-1.13-free",
+          ].includes(String(model.id))
+        )
+        .map((model) => ({
+          id: model.id,
+          metadata: model.metadata,
+        }));
       console.log(
         `OpenCode discovery: ${models.length} ACP-advertised models; Fledge advertised=${
           Boolean(fledge)
         }; enrichment=${
           (result.enrichment as Record<string, unknown>)?.status
         }`,
+      );
+      console.log(
+        `OpenCode routing metadata: ${JSON.stringify(metadataSummary)}`,
       );
       if (
         models.length === 0 ||

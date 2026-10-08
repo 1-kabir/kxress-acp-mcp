@@ -202,6 +202,30 @@ already advertised by ACP. The official
 pricing data. Metadata lookup failures preserve the available ACP model list. No
 catalog or availability cache is used.
 
+For OpenCode models, enrichment keeps current `pricing`/`free` separate from
+optional `pricingStatus: "limited_time"` and `underlyingCostTier`. The cost tier
+is a coarse project band derived from the maximum published input/output price
+per million tokens: below $1 is `low`, below $5 is `medium`, below $20 is
+`high`, and $20 or more is `premium`. A zero-priced model gets no underlying
+tier unless OpenCode documents an exact paid counterpart. The current documented
+`jev-1.13-free` to `jev-1.13` relationship is represented explicitly; similar
+model names alone never establish a counterpart. Tier and privacy facts include
+source provenance. Privacy metadata is only attached for exact documented model
+exceptions; absent metadata means unknown, not a guarantee.
+
+`run_task` never retries or switches models. For restartable planning/research,
+the caller may compose `list_models` and separate `run_task` calls using an
+explicit, bounded model preference order. Only a failure classification allowed
+by that workflow (currently OpenCode's explicit-wording `rate_limited`
+heuristic) can authorize fallback; generic `-32603`, unclassified failures, and
+idle timeouts do not. A model being ACP-advertised means it is selectable, not
+healthy. Keep privacy/data-use constraints across fallback; unknown metadata
+must fail closed when the workflow requires a known property. Do not silently
+move from known source-model data terms to weaker or unknown candidate terms. A
+free price does not imply equal privacy or underlying economic tier. Never
+replay arbitrary implementation tasks automatically, and do not persist a
+model's failure state.
+
 Sessions and event journals are held in memory by the `acp-mcp` process. A
 server restart loses this bridge state. Loading an existing ACP session depends
 on support from the underlying agent.

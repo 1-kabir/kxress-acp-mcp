@@ -1,6 +1,7 @@
 import { createMcpServer } from "../src/mcp/server.ts";
 import type { AgentMap } from "../src/agents/config.ts";
 import {
+  economicTier,
   fetchOpenCodeZenCatalog,
   OPENCODE_ZEN_DOCS_URL,
   OPENCODE_ZEN_MODELS_URL,
@@ -67,6 +68,13 @@ const mockCatalog = () =>
             { id: "fledge-alpha-free", owned_by: "opencode" },
             { id: "remote-only-model", owned_by: "opencode" },
             { id: "paid-model", owned_by: "opencode" },
+            { id: "jev-1.13-free", owned_by: "opencode" },
+            { id: "jev-1.13", owned_by: "opencode" },
+            { id: "longcat-2.5-preview-free", owned_by: "opencode" },
+            { id: "example-free", owned_by: "opencode" },
+            { id: "example", owned_by: "opencode" },
+            { id: "muse-spark-1.3-contributor-free", owned_by: "opencode" },
+            { id: "nemotron-3-ultra-free", owned_by: "opencode" },
           ],
         }));
       }
@@ -75,10 +83,32 @@ const mockCatalog = () =>
           new Response(`
         <table><tr><th>Model</th><th>ID</th></tr>
         <tr><td>Fledge Alpha Free</td><td>fledge-alpha-free</td></tr>
-        <tr><td>Paid Model</td><td>paid-model</td></tr></table>
+        <tr><td>Paid Model</td><td>paid-model</td></tr>
+        <tr><td>Jev 1.13 Free</td><td>jev-1.13-free</td></tr>
+        <tr><td>Jev 1.13</td><td>jev-1.13</td></tr>
+        <tr><td>LongCat 2.5 Preview Free</td><td>longcat-2.5-preview-free</td></tr>
+        <tr><td>Example Free</td><td>example-free</td></tr>
+        <tr><td>Example</td><td>example</td></tr>
+        <tr><td>Muse Spark 1.3 Contributor Free</td><td>muse-spark-1.3-contributor-free</td></tr>
+        <tr><td>Nemotron 3 Ultra Free</td><td>nemotron-3-ultra-free</td></tr></table>
         <table><tr><th>Model</th><th>Input</th><th>Output</th><th>Cached Read</th><th>Cached Write</th></tr>
         <tr><td>Fledge Alpha Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr>
-        <tr><td>Paid Model</td><td>$0.25</td><td>$1.50</td><td>$0.05</td><td>$0.10</td></tr></table>
+        <tr><td>Paid Model</td><td>$0.25</td><td>$1.50</td><td>$0.05</td><td>$0.10</td></tr>
+        <tr><td>Jev 1.13 Free</td><td>Free</td><td>Free</td><td>-</td><td>-</td></tr>
+        <tr><td>Jev 1.13</td><td>$0.042</td><td>Free</td><td>-</td><td>-</td></tr>
+        <tr><td>LongCat 2.5 Preview Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr>
+        <tr><td>Example Free</td><td>Free</td><td>Free</td><td>-</td><td>-</td></tr>
+        <tr><td>Example</td><td>$0.20</td><td>$1.30</td><td>-</td><td>-</td></tr>
+        <tr><td>Muse Spark 1.3 Contributor Free</td><td>Free</td><td>Free</td><td>-</td><td>-</td></tr>
+        <tr><td>Nemotron 3 Ultra Free</td><td>Free</td><td>Free</td><td>-</td><td>-</td></tr></table>
+        <h2>Privacy</h2>
+        <p>All our models are hosted in the US and EU. Providers follow zero-retention and do not use data for model training, except:</p>
+        <ul>
+          <li>Fledge Alpha Free: Collected data may be used to improve the model.</li>
+          <li>LongCat 2.5 Preview Free: Provider follows zero-retention and does not use data for model training.</li>
+          <li>Muse Spark 1.3 Contributor Free: Prompts and completions may be used for future Meta model training.</li>
+          <li>Nemotron 3 Ultra Free: Trial prompts are logged for security and product improvement.</li>
+        </ul>
       `),
         );
       }
@@ -286,6 +316,91 @@ Deno.test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes
     await manager.closeAll();
     await server.close();
   }
+});
+
+Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay distinct", async () => {
+  const catalog = await mockCatalog();
+  const fledge = catalog.models.get("fledge-alpha-free");
+  if (
+    fledge?.free !== true || fledge.pricingStatus !== "limited_time" ||
+    fledge.underlyingCostTier || fledge.paidCounterpart?.id
+  ) {
+    throw new Error(
+      "Fledge's current promotional price was incorrectly treated as its underlying tier or counterpart",
+    );
+  }
+  if (
+    fledge.privacy?.trainingUse !== "may_be_used_for_improvement" ||
+    fledge.privacy.retention !== undefined ||
+    fledge.privacy.sourceUrl !== OPENCODE_ZEN_DOCS_URL
+  ) {
+    throw new Error("Fledge privacy metadata was not conservative/provenanced");
+  }
+
+  const longcat = catalog.models.get("longcat-2.5-preview-free");
+  if (
+    longcat?.privacy?.trainingUse !== "not_used_for_training" ||
+    longcat.privacy.retention !== "zero" ||
+    longcat.privacy.sourceUrl !== OPENCODE_ZEN_DOCS_URL
+  ) throw new Error("Documented LongCat privacy facts were not retained");
+
+  const museSpark = catalog.models.get("muse-spark-1.3-contributor-free");
+  if (
+    museSpark?.privacy?.trainingUse !== "may_be_used_for_training" ||
+    museSpark.privacy.retention !== "not_zero" ||
+    museSpark.privacy.sourceUrl !== OPENCODE_ZEN_DOCS_URL
+  ) throw new Error("Documented Muse Spark data use was not normalized");
+  const nemotron = catalog.models.get("nemotron-3-ultra-free");
+  if (
+    nemotron?.privacy?.trainingUse !== "may_be_used_for_improvement" ||
+    nemotron.privacy.retention !== "not_zero"
+  ) throw new Error("Documented Nemotron trial data use was not normalized");
+
+  const jevFree = catalog.models.get("jev-1.13-free");
+  if (
+    jevFree?.paidCounterpart?.id !== "opencode/jev-1.13" ||
+    jevFree.privacy?.trainingUse !== "not_used_for_training" ||
+    jevFree.privacy.retention !== "provider_policy" ||
+    jevFree.paidCounterpart.relation !== "documented_variant" ||
+    jevFree.underlyingCostTier?.value !== "low" ||
+    jevFree.underlyingCostTier.basis !== "paid_counterpart" ||
+    jevFree.underlyingCostTier.counterpartId !== "opencode/jev-1.13" ||
+    jevFree.underlyingCostTier.confidence !== "documented_counterpart" ||
+    jevFree.underlyingCostTier.sourceUrl !== OPENCODE_ZEN_DOCS_URL
+  ) throw new Error("Documented Jev counterpart/tier was not derived");
+
+  const directPriced = catalog.models.get("paid-model");
+  if (
+    directPriced?.underlyingCostTier?.value !== "medium" ||
+    directPriced.underlyingCostTier.basis !== "published_pricing" ||
+    directPriced.underlyingCostTier.confidence !== "direct" ||
+    directPriced.underlyingCostTier.sourceUrl !== OPENCODE_ZEN_DOCS_URL
+  ) throw new Error("Published-price tier or provenance was not retained");
+
+  const unrelatedFree = catalog.models.get("example-free");
+  if (
+    unrelatedFree?.free !== true || unrelatedFree.pricingStatus ||
+    unrelatedFree.paidCounterpart || unrelatedFree.underlyingCostTier
+  ) throw new Error("Name similarity fabricated promotional/counterpart facts");
+  if (
+    catalog.models.get("remote-only-model")?.privacy ||
+    catalog.models.get("remote-only-model")?.underlyingCostTier
+  ) throw new Error("Unsupported metadata was fabricated for an unknown model");
+});
+
+Deno.test("underlying economic tiers use deterministic published-price bands", () => {
+  const tier = (input: number, output: number) =>
+    economicTier({
+      currency: "USD",
+      unit: "per_million_tokens",
+      input,
+      output,
+    });
+  if (
+    tier(0.5, 0.99) !== "low" || tier(1, 4.99) !== "medium" ||
+    tier(5, 19.99) !== "high" || tier(20, 0) !== "premium" ||
+    tier(0, 0) !== undefined || economicTier(undefined) !== undefined
+  ) throw new Error("Economic price bands or unknown handling changed");
 });
 
 Deno.test("metadata failure preserves ACP availability and ACP failure remains an error", async () => {

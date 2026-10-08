@@ -91,9 +91,36 @@ Before repeating a failed task, consider whether it may have performed work. An
 explicitly classified transient failure may support a caller-chosen fallback for
 restartable work. An ambiguous failure must not be silently replayed.
 `read_only` is not an OS sandbox. For a restartable planning or research task,
-the caller may explicitly choose another currently advertised model through the
-generic `config` map, but should first check that the alternate model's data-use
-terms are acceptable. Current `list_models` enrichment reports OpenCode
-pricing/free metadata, not privacy guarantees. Do not rotate through models
-automatically or infer that all free models have the same privacy or
-availability characteristics.
+the caller owns the complete fallback decision; `run_task` always executes only
+the requested model. Use this bounded workflow:
+
+1. Keep an explicit ordered list of models allowed for this task. The first
+   preference wins; economic tier never overrides that order.
+2. If candidate metadata matters, call `list_models` with `enrich: true` and
+   keep only models currently advertised by ACP. Advertisement means selectable,
+   not healthy or currently accepting requests.
+3. Check `free`, `pricingStatus`, `underlyingCostTier`, and `privacy`
+   separately. Current zero price does not mean a low underlying cost tier.
+   Missing privacy metadata means unknown; if policy requires a known privacy
+   property, reject unknown candidates. Do not silently cross from known
+   source-model terms to weaker or unknown candidate terms unless the user or
+   workflow explicitly permits that change. A no-training policy rejects
+   candidates that may use prompts for improvement/training.
+4. Run the preferred model once. Consider the next explicitly allowed model only
+   for a classification the workflow permits. The current OpenCode
+   `rate_limited` result uses `source: "opencode"` and
+   `evidence: "message_heuristic"`; accept that heuristic only when the workflow
+   explicitly allows it. Generic `-32603`, other unclassified errors, and idle
+   timeouts do not authorize replay.
+5. Limit the workflow to its declared attempt count (normally two for a simple
+   fallback), skip models already tried during this workflow, and stop when no
+   explicitly allowed candidate remains. Failure state is attempt-local; do not
+   persist model health.
+
+Replay is only for work the caller has explicitly judged restartable, such as
+planning or research. `read_only` does not guarantee idempotence or prevent
+external effects. Do not apply this workflow automatically to implementation
+tasks. For example, Fledge Alpha Free remains the preferred planning model when
+explicitly selected; its current free price is promotional and OpenCode
+documents that its free-period data may be used to improve the model. A fallback
+to it must respect that disclosure policy.
