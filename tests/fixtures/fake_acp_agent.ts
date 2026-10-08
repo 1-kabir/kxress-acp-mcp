@@ -6,6 +6,7 @@ import {
 
 const app = agent({ name: "fake-acp-agent" });
 const cancelled = new Set<string>();
+let exitNonzeroAfterClose = false;
 let booleanOptionsSupported = false;
 let activeConfigOptions: SessionConfigOption[] = [];
 app.onRequest(
@@ -91,6 +92,12 @@ app.onRequest("session/new", () => {
   return { sessionId: crypto.randomUUID(), configOptions };
 });
 app.onRequest("session/load", () => ({}));
+app.onRequest("session/close", () => {
+  if (exitNonzeroAfterClose) {
+    setTimeout(() => Deno.exit(23), 25);
+  }
+  return {};
+});
 app.onRequest("session/set_config_option", ({ params }) => {
   const { configId, type, value } = params as {
     configId: string;
@@ -128,6 +135,9 @@ app.onRequest("session/prompt", async ({ params, client }) => {
   }
   if (promptText === "process crash") {
     Deno.exit(17);
+  }
+  if (promptText === "complete then exit nonzero on close") {
+    exitNonzeroAfterClose = true;
   }
   if (promptText === "empty response") return { stopReason: "end_turn" };
   if (promptText === "permission" || promptText === "operator delegate") {

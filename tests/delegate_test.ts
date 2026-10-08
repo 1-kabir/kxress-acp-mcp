@@ -26,7 +26,7 @@ async function harness(
   failureClassifiers?: AgentFailureClassifiers,
 ) {
   const manager = managerFor(agentId);
-  const closedChildren: Promise<unknown>[] = [];
+  const closedChildren: Promise<Deno.CommandStatus>[] = [];
   const closedStderr: Array<() => string> = [];
   const originalClose = manager.close.bind(manager);
   manager.close = async (id) => {
@@ -318,6 +318,46 @@ Deno.test("run_task returns one compact answer while retaining internal ACP upda
     await Promise.all(closedChildren);
     if (closedChildren.length !== 2) {
       throw new Error("Expected both one-shot child processes to exit");
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
+Deno.test("completed run_task result survives nonzero child cleanup exit", async () => {
+  const { manager, server, mcp, closedChildren } = await harness();
+  try {
+    const result = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "complete then exit nonzero on close",
+      }).response,
+    );
+    if (
+      JSON.stringify(result) !== JSON.stringify({
+        status: "completed",
+        response: "fake reply",
+        stopReason: "end_turn",
+      })
+    ) {
+      throw new Error(
+        `Nonzero cleanup exit changed completed result: ${
+          JSON.stringify(result)
+        }`,
+      );
+    }
+    const [status] = await Promise.all(closedChildren);
+    if (closedChildren.length !== 1 || status.code !== 23) {
+      throw new Error(
+        `Expected one terminated child with diagnostic exit code 23, got ${
+          JSON.stringify(status)
+        }`,
+      );
+    }
+    if (manager.sessions.size) {
+      throw new Error("Completed run leaked its session after child exit");
     }
   } finally {
     await mcp.close();

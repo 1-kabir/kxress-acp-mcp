@@ -50,7 +50,7 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
       args: Deno.build.os === "linux" ? ["--uid="] : [],
       displayName: "Antigravity",
       installHint:
-        "Install Google Antigravity ACP from the official Agent Client Protocol Registry. On Windows, configure agy_acp_server.exe or add it to PATH.",
+        "Install Google Antigravity ACP from the official Agent Client Protocol Registry. Configure the executable's absolute path in the acp-mcp agent config (Windows: agy_acp_server.exe); changing PATH is not required.",
     },
   };
   const path = configPath ?? defaultConfigPath();

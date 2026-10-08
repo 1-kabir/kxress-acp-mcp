@@ -60,6 +60,51 @@ cleanup flow. Custom ACP stdio commands continue to work without a built-in
 profile. `list_agents` includes `commandFound` to report whether the configured
 executable is present; it does not check authentication or provider access.
 
+### Antigravity authentication
+
+The normal `agy` CLI profile and the ACP server's profile are separate. The
+normal CLI login alone does not establish ACP authentication. On Windows, the
+ACP profile selector is `%USERPROFILE%\.gemini\antigravity-acp\settings.json`:
+
+```json
+{ "auth": { "type": "oauth-personal" } }
+```
+
+Authenticate through the official ACP server if its existing state requires it.
+After that authentication has been completed once, fresh server processes can
+reuse the ACP server's persisted authentication state. It manages its own
+runtime files in this profile; do not copy token files or credentials from the
+CLI profile.
+
+### Stable Antigravity ACP installation on Windows
+
+Download the Windows archive listed by the official
+[ACP Registry entry](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json)
+and extract the entire archive in a user-local directory such as
+`%LOCALAPPDATA%\acp-mcp\agents\antigravity\<version>\`. Keep
+`localharness_external.exe` alongside `agy_acp_server.exe`; the server needs
+both. Then configure `agents.antigravity.command` in
+`%APPDATA%\acp-mcp\config.json` to the absolute path of `agy_acp_server.exe` and
+set `args` to `[]`. For example:
+
+```json
+{
+  "agents": {
+    "antigravity": {
+      "command": "C:\\Users\\<user>\\AppData\\Local\\acp-mcp\\agents\\antigravity\\<version>\\agy_acp_server.exe",
+      "args": []
+    }
+  }
+}
+```
+
+`acp-mcp` supports absolute executable paths but does not expand environment
+variables inside `command`; substitute the actual user-local path. This explicit
+configuration is checked by `list_agents` and avoids a PATH change. The current
+ACP Registry entry provides the current official archive URL and version but no
+archive checksum; the 1.3.0 Windows executables were Authenticode-verified as
+signed by Google LLC.
+
 ## Agent configuration
 
 Pass `--config <path>` to load an explicit JSON config. On Windows the default

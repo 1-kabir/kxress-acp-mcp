@@ -16,6 +16,16 @@ the user asks to inspect available agents or models.
   first-party Antigravity ACP server, respectively. The generic bridge uses the
   same ACP runtime after each command starts. `list_agents.commandFound` reports
   executable presence only; it does not verify credentials.
+- For Antigravity, a `session_start_failed` result reporting authentication
+  required can mean its separate ACP profile lacks an auth selector even when
+  the normal `agy` CLI is authenticated. Check
+  `~/.gemini/antigravity-acp/settings.json` for
+  `{"auth":{"type":"oauth-personal"}}`; if needed, authenticate through the
+  official ACP server. Fresh ACP server processes have reused persisted ACP auth
+  state without another login. Never copy credential files or extract secrets.
+  If the executable is missing, check the configured absolute
+  `agents.antigravity.command` path or install the official Registry binary;
+  `acp-mcp` does not expand environment variables inside command values.
 - Use `list_models` when model choices are unknown or need live validation. It
   reports models advertised by the current ACP session; optional OpenCode
   metadata only enriches those choices.

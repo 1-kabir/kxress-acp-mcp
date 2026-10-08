@@ -33,7 +33,7 @@ Deno.test("built-in profiles describe ACP launch routes without vendor behavior"
       !agents.codex.installHint?.includes("@agentclientprotocol/codex-acp") ||
       !agents.antigravity.installHint?.includes(
         "Agent Client Protocol Registry",
-      )
+      ) || !agents.antigravity.installHint?.includes("absolute path")
     ) throw new Error("Built-in profiles lack canonical install hints");
   } finally {
     await Deno.remove(dir, { recursive: true });

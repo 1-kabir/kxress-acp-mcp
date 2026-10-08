@@ -10,7 +10,9 @@ async function runIntegration(
   const missingConfig = `${Deno.cwd()}${
     Deno.build.os === "windows" ? "\\" : "/"
   }acp-mcp-nonexistent-${crypto.randomUUID()}.json`;
-  const configured = await loadAgents(missingConfig);
+  const configured = await loadAgents(
+    agentId === "antigravity" ? undefined : missingConfig,
+  );
   const definition = configured[agentId];
   const executable = await findExecutablePath(definition.command);
   if (!executable) {
@@ -47,6 +49,23 @@ async function runIntegration(
   const server = createMcpServer(agents, manager);
   const mcp = await connectMcp(server);
   try {
+    if (agentId === "antigravity") {
+      const listed = parseToolResult(
+        await mcp.callTool("list_agents", {}).response,
+      );
+      const row = Array.isArray(listed)
+        ? listed.find((item) => (item as { id?: unknown }).id === agentId) as {
+          commandFound?: unknown;
+        } | undefined
+        : undefined;
+      if (row?.commandFound !== true) {
+        throw new Error(
+          `Antigravity configured executable was not launchable: ${
+            JSON.stringify(listed)
+          }`,
+        );
+      }
+    }
     const discovery = parseToolResult(
       await mcp.callTool("list_models", {
         agentId,

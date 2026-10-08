@@ -21,6 +21,11 @@
   remains in the ACP usage skill; `run_task` never routes or retries.
 - Built-in Codex ACP adapter and first-party Antigravity ACP server profiles.
   `list_agents` now reports whether each profile's executable is present.
+- Live validation confirmed Antigravity reuses its persisted ACP authentication
+  across fresh server processes. Documentation covers the separate ACP auth
+  selector and a stable user-local executable configured by absolute path. The
+  opt-in compatibility test checks launchability and child termination without
+  requiring zero exit status after a completed task.
 - `run_task` failures now include a compact generic error kind and stage, with a
   JSON-RPC code when the ACP agent provides one. Provider messages and raw
   diagnostics remain private; the bridge does not retry or switch models.
