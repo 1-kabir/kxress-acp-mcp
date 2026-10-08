@@ -1,5 +1,6 @@
 import {
   cleanupWorkspaceSnapshot,
+  cloneWorkspaceSnapshot,
   createWorkspaceSnapshot,
 } from "../src/workspaces/snapshot.ts";
 
@@ -145,6 +146,37 @@ Deno.test("snapshot mutations do not affect the original and cleanup is safe", a
     snapshot = undefined;
   } finally {
     await snapshot?.cleanup();
+    await Deno.remove(source, { recursive: true });
+  }
+});
+
+Deno.test("attempt clones share one source state without sharing mutations", async () => {
+  const source = await repository();
+  let canonical:
+    | Awaited<ReturnType<typeof createWorkspaceSnapshot>>
+    | undefined;
+  let first: Awaited<ReturnType<typeof cloneWorkspaceSnapshot>> | undefined;
+  let second: Awaited<ReturnType<typeof cloneWorkspaceSnapshot>> | undefined;
+  try {
+    canonical = await createWorkspaceSnapshot(source);
+    first = await cloneWorkspaceSnapshot(canonical.cwd);
+    second = await cloneWorkspaceSnapshot(canonical.cwd);
+    await Deno.writeTextFile(`${first.cwd}/BAD.txt`, "attempt one mutation");
+    await Deno.writeTextFile(`${first.cwd}/tracked.txt`, "attempt one edit");
+    if (
+      await Deno.stat(`${second.cwd}/BAD.txt`).then(() => true).catch(() =>
+        false
+      ) ||
+      await Deno.readTextFile(`${second.cwd}/tracked.txt`) !==
+        "current modified version" ||
+      await Deno.stat(`${canonical.cwd}/BAD.txt`).then(() => true).catch(() =>
+        false
+      )
+    ) throw new Error("Attempt clone inherited another attempt's mutation");
+  } finally {
+    await first?.cleanup();
+    await second?.cleanup();
+    await canonical?.cleanup();
     await Deno.remove(source, { recursive: true });
   }
 });

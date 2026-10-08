@@ -7,7 +7,7 @@
   },
   "tasks": {
     "start": "deno run --allow-env --allow-read --allow-run --allow-net=opencode.ai src/main.ts",
-    "check": "deno check src/main.ts scripts/planning_workspace.ts tests/fixtures/fake_acp_agent.ts tests/fixtures/raw_wire_acp_agent.ts tests/workspaces_test.ts",
+    "check": "deno check src/main.ts scripts/planning_workspace.ts scripts/planning_workflow.ts tests/fixtures/fake_acp_agent.ts tests/fixtures/raw_wire_acp_agent.ts tests/planning_workflow_test.ts tests/workspaces_test.ts",
     "test": "deno test --allow-env --allow-read --allow-run --allow-write --allow-net=opencode.ai"
   }
 }

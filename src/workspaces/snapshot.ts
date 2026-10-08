@@ -95,6 +95,81 @@ async function removePartialWorkspace(cwd: string, originalError: unknown) {
   }
 }
 
+function workspaceRootPath() {
+  const tempRoot = Deno.env.get("TEMP") ?? Deno.env.get("TMP") ??
+    Deno.env.get("TMPDIR");
+  if (!tempRoot) throw new Error("No temporary directory is configured");
+  return join(tempRoot, "acp-mcp-workspaces");
+}
+
+function samePath(left: string, right: string) {
+  return Deno.build.os === "windows"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+async function validateWorkspaceSnapshot(cwd: string) {
+  const expectedRoot = await Deno.realPath(workspaceRootPath());
+  const realCwd = await Deno.realPath(cwd);
+  const parent = await Deno.realPath(join(realCwd, ".."));
+  if (
+    !samePath(parent, expectedRoot) ||
+    !/^plan-[a-z0-9]+$/i.test(realCwd.split(/[\\/]/).at(-1) ?? "")
+  ) {
+    throw new Error(
+      "Refusing to use a path outside the planning workspace root",
+    );
+  }
+  const manifestPath = `${realCwd}.json`;
+  const manifest = JSON.parse(
+    await Deno.readTextFile(manifestPath),
+  ) as WorkspaceManifest;
+  if (
+    manifest.version !== 1 ||
+    !samePath(await Deno.realPath(manifest.cwd), realCwd)
+  ) {
+    throw new Error(
+      "Planning workspace manifest does not match the requested path",
+    );
+  }
+  return { expectedRoot, realCwd, manifestPath, manifest };
+}
+
+async function writeManifest(cwd: string, sourceRoot: string) {
+  await Deno.writeTextFile(
+    `${cwd}.json`,
+    JSON.stringify({ version: 1, cwd, sourceRoot } satisfies WorkspaceManifest),
+  );
+}
+
+function snapshotHandle(
+  cwd: string,
+  sourceRoot: string,
+  fileCount: number,
+  sizeBytes: number,
+  startedAt: number,
+): WorkspaceSnapshot {
+  let cleaned = false;
+  return {
+    cwd,
+    sourceRoot,
+    fileCount,
+    sizeBytes,
+    creationMs: performance.now() - startedAt,
+    async cleanup() {
+      if (cleaned) return;
+      try {
+        await cleanupWorkspaceSnapshot(cwd);
+        cleaned = true;
+      } catch (error) {
+        throw new Error(
+          `Workspace cleanup failed; path may remain at ${cwd}: ${error}`,
+        );
+      }
+    },
+  };
+}
+
 /**
  * Copies the current Git working-tree file state into a unique temp directory.
  * Tracked files' current filesystem contents and non-ignored untracked files
@@ -112,10 +187,7 @@ export async function createWorkspaceSnapshot(
     "--show-toplevel",
   ]);
   const sourceRoot = await Deno.realPath(gitRootText);
-  const tempRoot = Deno.env.get("TEMP") ?? Deno.env.get("TMP") ??
-    Deno.env.get("TMPDIR");
-  if (!tempRoot) throw new Error("No temporary directory is configured");
-  const workspaceRoot = join(tempRoot, "acp-mcp-workspaces");
+  const workspaceRoot = workspaceRootPath();
   await Deno.mkdir(workspaceRoot, { recursive: true });
   const realWorkspaceRoot = await Deno.realPath(workspaceRoot);
   if (isWithin(sourceRoot, realWorkspaceRoot)) {
@@ -165,72 +237,65 @@ export async function createWorkspaceSnapshot(
     throw error;
   }
 
-  const manifestPath = `${cwd}.json`;
-  const manifest: WorkspaceManifest = { version: 1, cwd, sourceRoot };
   try {
-    await Deno.writeTextFile(manifestPath, JSON.stringify(manifest));
+    await writeManifest(cwd, sourceRoot);
   } catch (error) {
     await removePartialWorkspace(cwd, error);
     throw error;
   }
 
-  let cleaned = false;
-  return {
+  return snapshotHandle(cwd, sourceRoot, fileCount, sizeBytes, startedAt);
+}
+
+/** Makes an independent attempt workspace from the immutable canonical snapshot. */
+export async function cloneWorkspaceSnapshot(
+  sourceSnapshotPath: string,
+): Promise<WorkspaceSnapshot> {
+  const source = await validateWorkspaceSnapshot(sourceSnapshotPath);
+  const startedAt = performance.now();
+  const cwd = await Deno.makeTempDir({
+    dir: source.expectedRoot,
+    prefix: "plan-",
+  });
+  let fileCount = 0;
+  let sizeBytes = 0;
+
+  const copyDirectory = async (sourceDir: string, destinationDir: string) => {
+    for await (const entry of Deno.readDir(sourceDir)) {
+      const sourcePath = join(sourceDir, entry.name);
+      const destinationPath = join(destinationDir, entry.name);
+      const info = await Deno.lstat(sourcePath);
+      if (info.isSymlink) continue;
+      if (info.isDirectory) {
+        await Deno.mkdir(destinationPath);
+        await copyDirectory(sourcePath, destinationPath);
+      } else if (info.isFile) {
+        await Deno.copyFile(sourcePath, destinationPath);
+        fileCount++;
+        sizeBytes += info.size;
+      }
+    }
+  };
+
+  try {
+    await copyDirectory(source.realCwd, cwd);
+    await writeManifest(cwd, source.manifest.sourceRoot);
+  } catch (error) {
+    await removePartialWorkspace(cwd, error);
+    throw error;
+  }
+  return snapshotHandle(
     cwd,
-    sourceRoot,
+    source.manifest.sourceRoot,
     fileCount,
     sizeBytes,
-    creationMs: performance.now() - startedAt,
-    async cleanup() {
-      if (cleaned) return;
-      try {
-        await Deno.remove(cwd, { recursive: true });
-      } catch (error) {
-        throw new Error(
-          `Workspace cleanup failed; path may remain at ${cwd}: ${error}`,
-        );
-      }
-      try {
-        await Deno.remove(manifestPath);
-      } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) {
-          throw new Error(
-            `Workspace removed but manifest may remain at ${manifestPath}: ${error}`,
-          );
-        }
-      }
-      cleaned = true;
-    },
-  };
+    startedAt,
+  );
 }
 
 /** Removes only a direct child workspace created by createWorkspaceSnapshot. */
 export async function cleanupWorkspaceSnapshot(cwd: string) {
-  const tempRoot = Deno.env.get("TEMP") ?? Deno.env.get("TMP") ??
-    Deno.env.get("TMPDIR");
-  if (!tempRoot) throw new Error("No temporary directory is configured");
-  const expectedRoot = await Deno.realPath(
-    join(tempRoot, "acp-mcp-workspaces"),
-  );
-  const realCwd = await Deno.realPath(cwd);
-  const parent = await Deno.realPath(join(realCwd, ".."));
-  if (
-    parent !== expectedRoot ||
-    !/^plan-[a-z0-9]+$/i.test(realCwd.split(/[\\/]/).at(-1) ?? "")
-  ) {
-    throw new Error(
-      "Refusing to remove a path outside the planning workspace root",
-    );
-  }
-  const manifestPath = `${realCwd}.json`;
-  const manifest = JSON.parse(
-    await Deno.readTextFile(manifestPath),
-  ) as WorkspaceManifest;
-  if (manifest.version !== 1 || await Deno.realPath(manifest.cwd) !== realCwd) {
-    throw new Error(
-      "Planning workspace manifest does not match the requested path",
-    );
-  }
-  await Deno.remove(realCwd, { recursive: true });
-  await Deno.remove(manifestPath);
+  const workspace = await validateWorkspaceSnapshot(cwd);
+  await Deno.remove(workspace.realCwd, { recursive: true });
+  await Deno.remove(workspace.manifestPath);
 }

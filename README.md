@@ -140,22 +140,39 @@ policies. See the
 [ACP permission request protocol](https://agentclientprotocol.com/protocol/v1/tool-calls#requesting-permission)
 for the agent's permission-request behavior.
 
-For planning or research where writes to the real checkout are undesirable,
-`scripts/planning_workspace.ts` creates a unique disposable snapshot outside the
-repository. It copies tracked files' current filesystem contents (whether their
-edits are staged or unstaged) and untracked non-ignored files. It does not copy
-the Git index or preserve staging distinctions. It omits untracked ignored
-files, `.git`, symlinks/reparse-point entries, and Git submodule contents. Pass
-the reported `cwd` to `run_task`, then run the helper's `cleanup` action after
-the ACP process closes, including after failures or cancellation. Creation
-errors stop the workflow; cleanup errors report the remaining path. The ACP
-result is still the task result if cleanup fails.
+For repository planning or research where relative writes should not touch the
+real checkout, use the orchestration script from PowerShell:
+
+```powershell
+mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts --repo (Get-Location).Path --task "Inspect this repository and propose a plan" --privacy-policy allow_any
+```
+
+It defaults to `opencode:opencode/nemotron-3-ultra-free`, verifies that live ACP
+discovery advertises it, and prints a compact JSON result with the selected
+model, attempts, response, and cleanup warnings. The privacy policy is explicit:
+`allow_any` permits provider terms or unknown metadata; `require_no_training`
+and `require_no_training_and_zero_retention` require matching known metadata.
+Fallback candidates are never automatic. Add explicit ordered
+`--fallback agentId:modelId` values and `--allow-rate-limited-fallback` to allow
+retry only after a recognized `rate_limited` classification. Timeouts and
+ambiguous failures stop without replay. No paid or OpenCode Go candidate is
+added by default.
+
+The workflow captures one canonical snapshot and creates a fresh clone for each
+model attempt, so failed-attempt mutations cannot contaminate fallback input and
+all candidates see the same source state. Snapshots include current tracked
+filesystem contents and untracked non-ignored files; they omit the Git index,
+untracked ignored files, `.git`, symlink/reparse entries, and submodule
+contents. Cleanup runs after attempts and reports leftovers. A hard process or
+machine crash may leave temp directories behind.
 
 The snapshot keeps ordinary relative planner writes and deletions out of the
 original checkout. It is not an OS sandbox and does not prevent access through
 absolute paths, other directories, credentials, subprocesses, or the network.
 Review the copied files before sending repository context to a model provider.
-See the ACP usage skill for the Windows PowerShell commands.
+For low-level workflows, `scripts/planning_workspace.ts` exposes explicit
+snapshot `create` and `cleanup` actions. `run_task` itself remains a one-model
+primitive and always uses exactly its supplied `cwd`.
 
 `run_task.idleTimeoutMs` defaults to 10 minutes and limits consecutive silence
 from the task's ACP session. Any inbound `session/update` for that session

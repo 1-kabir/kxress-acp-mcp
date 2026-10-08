@@ -61,30 +61,50 @@ available (default: 2 minutes).
 
 ## Plan or research from a disposable workspace
 
-When planning or research should not write into the real checkout, create a
-snapshot and pass its returned `cwd` to `run_task`. From the repository root,
-run this in PowerShell:
+For repository planning/research where relative writes should not touch the real
+checkout, prefer the planning workflow script. From PowerShell, one command
+creates snapshots, checks live model discovery and privacy metadata, runs the
+selected planner, and cleans up:
 
 ```powershell
-$snapshot = mise exec -- deno run --allow-env --allow-read --allow-write --allow-run scripts/planning_workspace.ts create (Get-Location).Path | ConvertFrom-Json
+mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts --repo (Get-Location).Path --task "Inspect this repository and propose a plan" --privacy-policy allow_any
 ```
 
-Then call `run_task` with `cwd: $snapshot.cwd`. After the ACP call has returned
-and its process is closed, clean up even when the task failed or was cancelled:
+The preferred candidate defaults to `opencode:opencode/nemotron-3-ultra-free`,
+but it is run only if live `list_models` advertises that exact model. The
+privacy policy is required: `allow_any` permits provider terms or unknown
+metadata and the output reports known privacy facts; `require_no_training`
+requires explicit no-training metadata; `require_no_training_and_zero_retention`
+requires both no-training and zero-retention metadata. Unknown metadata fails
+the two stricter policies.
 
-```powershell
-mise exec -- deno run --allow-env --allow-read --allow-write --allow-run scripts/planning_workspace.ts cleanup $snapshot.cwd
-```
+Fallbacks are opt-in and ordered. Specify each exact candidate yourself, for
+example `--fallback opencode:opencode/longcat-2.5-preview-free`. Add
+`--allow-rate-limited-fallback` to permit retry after an allowed `rate_limited`
+classification. That includes the OpenCode message heuristic, so this flag is an
+explicit approval of that evidence. The script never adds models from the
+catalog automatically, and defaults to at most two model attempts. Timeouts,
+unclassified failures, generic `-32603`, and other failures stop the workflow.
+Each candidate must be ACP-advertised and satisfy the same privacy policy.
 
-The helper copies tracked files' current filesystem contents (whether their
-edits are staged or unstaged) plus untracked non-ignored files. It does not copy
-the Git index, so the snapshot does not preserve staging distinctions. It omits
-untracked ignored files, `.git`, and symlinks/reparse-point entries; it does not
-follow external link targets. Git submodule contents are not copied. Each
-invocation gets a unique directory under `%TEMP%\acp-mcp-workspaces` (or the
-platform temp directory), outside the source checkout, so concurrent snapshots
-do not share state. Creation failure prevents the ACP call. A cleanup error is
-surfaced with the leftover workspace path for explicit removal.
+The workflow captures one canonical snapshot of current tracked filesystem
+contents plus untracked non-ignored files, then makes a fresh independent clone
+for each model attempt. Relative edits in one attempt do not appear in another
+attempt's clone, and every candidate sees the same captured source state even if
+the parent checkout changes meanwhile. This is not protection against an agent
+deliberately accessing another path with its normal OS permissions. The
+canonical snapshot and every attempt clone are cleaned after use. A hard process
+or machine crash may leave temp workspaces behind; there is no background
+cleanup service.
+
+The snapshot helper copies current tracked file contents (whether their edits
+are staged or unstaged) and untracked non-ignored files. It does not copy the
+Git index, untracked ignored files, `.git`, symlinks/reparse-point entries, or
+submodule contents. Creation failure prevents execution; cleanup failure is
+included in the JSON result with the remaining path. The compact result shows
+the selected model, attempted/skipped candidates, classifications, response, and
+cleanup warnings. Direct `run_task` remains useful when isolation is not needed;
+it always executes in exactly the supplied `cwd`.
 
 This workflow protects the original checkout from ordinary reads, writes,
 deletions, and file creation performed relative to the planner's snapshot cwd.
