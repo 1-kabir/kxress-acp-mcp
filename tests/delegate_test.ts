@@ -320,6 +320,41 @@ Deno.test("run_task applies allow_all only when requested and defaults to read_o
   }
 });
 
+Deno.test("run_task reports startup failures without exposing their detail", async () => {
+  const { manager, server, mcp } = await harness();
+  manager.start = () => {
+    throw new Error("PRIVATE_START_FAILURE_SENTINEL");
+  };
+  try {
+    const reply = await mcp.callTool("run_task", {
+      agentId: "fake",
+      task: "hello",
+    }).response;
+    const result = parseToolResult(reply);
+    if (
+      result.status !== "failed" ||
+      JSON.stringify(result.error) !== JSON.stringify({
+          kind: "session_start_failed",
+          stage: "session_start",
+        })
+    ) {
+      throw new Error(
+        `Unexpected startup failure result: ${JSON.stringify(result)}`,
+      );
+    }
+    if (JSON.stringify(reply).includes("PRIVATE_START_FAILURE_SENTINEL")) {
+      throw new Error("Startup error details leaked to the MCP caller");
+    }
+    if (manager.sessions.size) {
+      throw new Error("Startup failure left a managed session active");
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
 Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and empty output clean up", async () => {
   const { manager, server, mcp, closedChildren, closedStderr } =
     await harness();
@@ -329,8 +364,12 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
       task: "wait",
       timeoutMs: 40,
     }).response;
+    const timeoutResult = parseToolResult(timed);
     if (
-      parseToolResult(timed).status !== "timed_out" || manager.sessions.size
+      timeoutResult.status !== "timed_out" ||
+      (timeoutResult.error as Record<string, unknown>)?.kind !== "timeout" ||
+      (timeoutResult.error as Record<string, unknown>)?.stage !== "prompt" ||
+      manager.sessions.size
     ) {
       throw new Error("Timeout did not return compactly and clean up");
     }
@@ -361,10 +400,28 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
       })
         .response;
       const result = parseToolResult(reply);
+      const failure = result.error as Record<string, unknown> | undefined;
+      const expectedKind = prompt === "empty response"
+        ? "invalid_response"
+        : "prompt_failed";
+      const expectedStage = prompt === "empty response"
+        ? "prompt_complete"
+        : "prompt";
       if (
-        result.status !== "failed" || Object.keys(result).join(",") !== "status"
+        result.status !== "failed" || !failure ||
+        failure.kind !== expectedKind || failure.stage !== expectedStage ||
+        Object.keys(result).sort().join(",") !== "error,status"
       ) {
-        throw new Error(`Failure response was not compact for '${prompt}'`);
+        throw new Error(
+          `Unexpected structured failure for '${prompt}': ${
+            JSON.stringify(result)
+          }`,
+        );
+      }
+      if (
+        prompt === "prompt failure" && typeof failure.acpCode !== "number"
+      ) {
+        throw new Error("ACP JSON-RPC error code was not retained");
       }
       if (
         JSON.stringify((reply as { result?: unknown }).result).includes(

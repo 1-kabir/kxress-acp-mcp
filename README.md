@@ -112,6 +112,16 @@ session and permission IDs, advertised choices, and lease duration. Resolve it
 with `resolve_permission` and use low-level tools to continue or close that
 session. Unused permission continuations close when the lease expires.
 
+`run_task` failures return a compact `error` with a generic `kind` and `stage`.
+For example, `prompt_failed` means the ACP prompt request failed; an optional
+`acpCode` is a JSON-RPC code and does not identify an HTTP status or prove a
+provider rate limit. Provider messages, stderr, and event history stay private.
+The tool does not retry or switch models automatically. A failed prompt may have
+already performed work, and `read_only` is not an OS sandbox, so callers must
+decide whether restarting a particular task is safe. `timed_out` means the
+bridge deadline expired while waiting for the prompt; it is separate from a
+provider rate-limit failure.
+
 ### Implementation planning
 
 For repository planning, let the ACP agent inspect the checkout itself:

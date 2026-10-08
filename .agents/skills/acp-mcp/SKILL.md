@@ -61,3 +61,19 @@ the explicit session tools before the lease expires.
 Use `get_events` only when the user asks to inspect ACP activity or when
 debugging a session. Thought and raw event data may be sensitive and should be
 retrieved only when needed.
+
+## Handle task failures
+
+`run_task` returns compact failure metadata. `error.kind: "prompt_failed"` says
+the ACP prompt failed; an optional `error.acpCode` is a JSON-RPC code, not an
+HTTP status or a rate-limit classification. Do not treat it as proof that the
+task did no work. The bridge does not retry or change models automatically.
+
+Before repeating a failed task, consider whether it may have performed work.
+`read_only` is not an OS sandbox. For a restartable planning or research task,
+the caller may explicitly choose another currently advertised model through the
+generic `config` map, but should first check that the alternate model's data-use
+terms are acceptable. Current `list_models` enrichment reports OpenCode
+pricing/free metadata, not privacy guarantees. Do not rotate through models
+automatically or infer that all free models have the same privacy or
+availability characteristics.

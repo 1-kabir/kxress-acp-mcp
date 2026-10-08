@@ -26,6 +26,27 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
+function runTaskFailure(
+  status: "failed" | "timed_out" | "cancelled",
+  kind: string,
+  stage: string,
+  acpCode?: number,
+) {
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify({
+        status,
+        error: {
+          kind,
+          stage,
+          ...(acpCode === undefined ? {} : { acpCode }),
+        },
+      }),
+    }],
+  };
+}
+
 export function createMcpServer(
   agents: AgentMap,
   manager: SessionManager,
@@ -101,7 +122,7 @@ export function createMcpServer(
     "run_task",
     {
       description:
-        "Run one task through a configured ACP agent and return only its final answer. Use this for bounded one-shot work; use explicit session tools for multi-turn work or event inspection. The task and repository content read by the agent may be sent to its configured model provider. permissionPolicy controls ACP permission responses; it does not prevent external data disclosure or sandbox the agent process. Host approval policies still apply.",
+        "Run one task through a configured ACP agent and return only its final answer. Failures include a compact generic kind and stage; ACP codes are protocol codes, not provider HTTP status. No automatic retries or model fallback are performed. Use explicit session tools for multi-turn work or event inspection. The task and repository content read by the agent may be sent to its configured model provider. permissionPolicy controls ACP permission responses; it does not prevent external data disclosure or sandbox the agent process. Host approval policies still apply.",
       annotations: {
         title: "Run ACP task",
         readOnlyHint: false,
@@ -148,6 +169,8 @@ export function createMcpServer(
     ) => {
       let sessionId: string | undefined;
       let closed = false;
+      let failureStage = "session_start";
+      let promptRecord: ReturnType<SessionManager["beginPrompt"]> | undefined;
       const close = async () => {
         if (!sessionId || closed) return;
         closed = true;
@@ -164,29 +187,21 @@ export function createMcpServer(
           permissionPolicy,
         );
         sessionId = session.id;
-        const promptRecord = manager.beginPrompt(session.id, text);
+        failureStage = "prompt_start";
+        promptRecord = manager.beginPrompt(session.id, text);
+        failureStage = "prompt";
         const deadline = Date.now() + timeoutMs;
         while (promptRecord.state === "running") {
           const signal = extra.mcpReq.signal;
           if (signal?.aborted) {
             await manager.cancelPrompt(session.id, promptRecord.id);
             await close();
-            return {
-              content: [{
-                type: "text",
-                text: JSON.stringify({ status: "failed" }),
-              }],
-            };
+            return runTaskFailure("cancelled", "cancelled", "prompt");
           }
           if (Date.now() >= deadline) {
             await manager.cancelPrompt(session.id, promptRecord.id);
             await close();
-            return {
-              content: [{
-                type: "text",
-                text: JSON.stringify({ status: "timed_out" }),
-              }],
-            };
+            return runTaskFailure("timed_out", "timeout", "prompt");
           }
           if (
             permissionPolicy === "operator" && session.pendingPermissions.size
@@ -226,12 +241,11 @@ export function createMcpServer(
         if (promptRecord.state === "completed") {
           if (!promptRecord.text.trim()) {
             await close();
-            return {
-              content: [{
-                type: "text",
-                text: JSON.stringify({ status: "failed" }),
-              }],
-            };
+            return runTaskFailure(
+              "failed",
+              "invalid_response",
+              "prompt_complete",
+            );
           }
           const result = {
             status: "completed",
@@ -241,21 +255,27 @@ export function createMcpServer(
           await close();
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
+        if (promptRecord.state === "cancelled") {
+          await close();
+          return runTaskFailure("cancelled", "cancelled", "prompt");
+        }
         await close();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ status: "failed" }),
-          }],
-        };
+        return runTaskFailure(
+          "failed",
+          "prompt_failed",
+          "prompt",
+          promptRecord.errorCode,
+        );
       } catch {
         await close();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ status: "failed" }),
-          }],
-        };
+        return runTaskFailure(
+          "failed",
+          failureStage === "session_start"
+            ? "session_start_failed"
+            : "prompt_start_failed",
+          failureStage,
+          promptRecord?.errorCode,
+        );
       }
     },
   );

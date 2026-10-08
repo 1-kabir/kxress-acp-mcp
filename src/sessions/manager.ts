@@ -42,6 +42,7 @@ export interface PromptRecord {
   text: string;
   stopReason?: string;
   error?: string;
+  errorCode?: number;
   done: Promise<void>;
 }
 
@@ -302,6 +303,10 @@ export class SessionManager {
     } catch (error) {
       record.state = "failed";
       record.error = error instanceof Error ? error.message : String(error);
+      if (
+        error && typeof error === "object" &&
+        "code" in error && typeof error.code === "number"
+      ) record.errorCode = error.code;
     } finally {
       session.promptActive = false;
     }
