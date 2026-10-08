@@ -6,7 +6,7 @@ export interface AgentDefinition {
   cwd?: string;
   env?: Record<string, string>;
   modelConfigId?: string;
-  modelEnrichment?: "opencode_zen";
+  modelEnrichment?: "opencode_catalog";
   failureClassifier?: string;
 }
 
@@ -35,7 +35,7 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
       installHint:
         "Install OpenCode and authenticate with opencode auth login.",
       modelConfigId: "model",
-      modelEnrichment: "opencode_zen",
+      modelEnrichment: "opencode_catalog",
       failureClassifier: "opencode",
     },
     codex: {

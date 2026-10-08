@@ -2,6 +2,10 @@ import type { DiscoveredModel } from "./discovery.ts";
 
 export const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 export const OPENCODE_ZEN_DOCS_URL = "https://opencode.ai/docs/zen/";
+export const OPENCODE_GO_MODELS_URL = "https://opencode.ai/zen/go/v1/models";
+export const OPENCODE_GO_DOCS_URL = "https://opencode.ai/docs/go/";
+
+type OpenCodeMetadataSource = "opencode_zen" | "opencode_go";
 
 export type UnderlyingCostTier = "low" | "medium" | "high" | "premium";
 
@@ -17,14 +21,17 @@ export interface OpenCodeModelPricing {
 export interface OpenCodeModelInfo {
   id: string;
   name?: string;
-  /** Current Zen pricing, not the model's underlying economic positioning. */
+  /** Current per-token pricing, not the model's underlying economic positioning. */
   pricing?: OpenCodeModelPricing;
   /** True only when current published input and output prices are both zero. */
   free?: boolean;
   pricingStatus?: "limited_time";
+  /** OpenCode Go usage is included in a paid monthly subscription. */
+  subscriptionRequired?: true;
   paidCounterpart?: {
     id: string;
-    relation: "documented_variant";
+    relation: "exact_paid_counterpart";
+    pricing: OpenCodeModelPricing;
     sourceUrl: string;
   };
   underlyingCostTier?: {
@@ -35,14 +42,14 @@ export interface OpenCodeModelInfo {
     counterpartId?: string;
   };
   privacy?: {
-    trainingUse:
+    trainingUse?:
       | "not_used_for_training"
       | "may_be_used_for_improvement"
       | "may_be_used_for_training";
     retention?: "zero" | "not_zero" | "thirty_days" | "provider_policy";
     sourceUrl: string;
   };
-  provenance?: { source: "opencode_zen" };
+  provenance?: { source: OpenCodeMetadataSource };
 }
 
 export interface OpenCodeCatalog {
@@ -65,7 +72,7 @@ const limitedTimeFreeIds = new Set([
   "space-bunny-free",
 ]);
 
-/** Exact pair described by OpenCode's Zen docs; never derived from the ID suffix. */
+/** Exact pair explicitly described by OpenCode's Zen docs. */
 const documentedPaidCounterparts = new Map([
   ["jev-1.13-free", "jev-1.13"],
 ]);
@@ -166,7 +173,10 @@ function price(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function parseDocs(html: string): Map<string, OpenCodeModelInfo> {
+function parseDocs(
+  html: string,
+  source: OpenCodeMetadataSource,
+): Map<string, OpenCodeModelInfo> {
   const tables = tableRows(html);
   const catalogRows =
     tables.find((rows) =>
@@ -202,6 +212,16 @@ function parseDocs(html: string): Map<string, OpenCodeModelInfo> {
     cell.includes("cached write")
   );
   const result = new Map<string, OpenCodeModelInfo>();
+  for (const [name, id] of idsByName) {
+    result.set(id, {
+      id,
+      name,
+      ...(source === "opencode_go"
+        ? { subscriptionRequired: true as const }
+        : {}),
+      provenance: { source },
+    });
+  }
   for (const row of pricingRows.slice(1)) {
     const id = idsByName.get((row[0] ?? "").toLowerCase());
     if (!id) continue;
@@ -215,6 +235,7 @@ function parseDocs(html: string): Map<string, OpenCodeModelInfo> {
       ? price(row[cacheWriteColumn] ?? "")
       : undefined;
     result.set(id, {
+      ...result.get(id),
       id,
       name: row[0],
       free: input === 0 && output === 0,
@@ -229,50 +250,112 @@ function parseDocs(html: string): Map<string, OpenCodeModelInfo> {
         ...(cacheRead === undefined ? {} : { cacheRead }),
         ...(cacheWrite === undefined ? {} : { cacheWrite }),
       },
-      ...(documentedPrivacy.get(id)
+      ...(source === "opencode_zen" && documentedPrivacy.get(id)
         ? { privacy: documentedPrivacy.get(id) }
         : {}),
-      provenance: { source: "opencode_zen" },
     });
+  }
+
+  if (source === "opencode_go") {
+    const privacyRows = tables.find((rows) => {
+      const headers = rows[0]?.map((cell) => cell.toLowerCase()) ?? [];
+      return headers.includes("model") &&
+        headers.some((cell) => cell.includes("model training")) &&
+        headers.some((cell) => cell.includes("data retention"));
+    }) ?? [];
+    const privacyHeader = privacyRows[0]?.map((cell) => cell.toLowerCase()) ??
+      [];
+    const modelIndex = privacyHeader.indexOf("model");
+    const trainingIndex = privacyHeader.findIndex((cell) =>
+      cell.includes("model training")
+    );
+    const retentionIndex = privacyHeader.findIndex((cell) =>
+      cell.includes("data retention")
+    );
+    for (const row of privacyRows.slice(1)) {
+      const id = idsByName.get((row[modelIndex] ?? "").toLowerCase());
+      if (!id) continue;
+      const training = (row[trainingIndex] ?? "").toLowerCase();
+      const retentionText = (row[retentionIndex] ?? "").toLowerCase();
+      const trainingUse = training === "not used"
+        ? "not_used_for_training"
+        : training === "yes"
+        ? "may_be_used_for_training"
+        : undefined;
+      const retention = /\b0 days\b/.test(retentionText)
+        ? "zero"
+        : /\b30 days\b/.test(retentionText)
+        ? "thirty_days"
+        : /not zdr/.test(retentionText)
+        ? "not_zero"
+        : undefined;
+      const model = result.get(id);
+      if (model && (trainingUse || retention)) {
+        model.privacy = {
+          ...(trainingUse ? { trainingUse } : {}),
+          ...(retention ? { retention } : {}),
+          sourceUrl: OPENCODE_GO_DOCS_URL,
+        };
+      }
+    }
   }
   return result;
 }
 
-export async function fetchOpenCodeZenCatalog(
+export async function fetchOpenCodeCatalog(
   signal: AbortSignal,
   fetcher: typeof fetch = fetch,
 ): Promise<OpenCodeCatalog> {
-  const [modelsResponse, docsResponse] = await Promise.all([
-    fetcher(OPENCODE_ZEN_MODELS_URL, { signal }),
-    fetcher(OPENCODE_ZEN_DOCS_URL, { signal }),
-  ]);
-  if (!modelsResponse.ok || !docsResponse.ok) {
-    throw new Error("OpenCode metadata source unavailable");
-  }
-  const api = await modelsResponse.json() as {
-    data?: Array<{ id?: unknown; owned_by?: unknown }>;
-  };
-  if (!Array.isArray(api.data)) {
-    throw new Error("Invalid OpenCode model catalog");
-  }
-  const docs = parseDocs(await docsResponse.text());
   const models = new Map<string, OpenCodeModelInfo>();
-  const catalogIds = new Set<string>();
-  for (const item of api.data) {
-    if (typeof item.id !== "string") continue;
-    catalogIds.add(item.id);
-    const detail = docs.get(item.id);
-    models.set(item.id, detail ?? { id: item.id });
+  const catalogs = [
+    {
+      prefix: "opencode",
+      endpoint: OPENCODE_ZEN_MODELS_URL,
+      docsUrl: OPENCODE_ZEN_DOCS_URL,
+      source: "opencode_zen" as const,
+    },
+    {
+      prefix: "opencode-go",
+      endpoint: OPENCODE_GO_MODELS_URL,
+      docsUrl: OPENCODE_GO_DOCS_URL,
+      source: "opencode_go" as const,
+    },
+  ];
+  for (const catalog of catalogs) {
+    const [modelsResponse, docsResponse] = await Promise.all([
+      fetcher(catalog.endpoint, { signal }),
+      fetcher(catalog.docsUrl, { signal }),
+    ]);
+    if (!modelsResponse.ok || !docsResponse.ok) {
+      throw new Error("OpenCode metadata source unavailable");
+    }
+    const api = await modelsResponse.json() as {
+      data?: Array<{ id?: unknown; owned_by?: unknown }>;
+    };
+    if (!Array.isArray(api.data)) {
+      throw new Error("Invalid OpenCode model catalog");
+    }
+    const docs = parseDocs(await docsResponse.text(), catalog.source);
+    for (const item of api.data) {
+      if (typeof item.id !== "string") continue;
+      const qualifiedId = `${catalog.prefix}/${item.id}`;
+      const detail = docs.get(item.id);
+      models.set(qualifiedId, {
+        ...(detail ?? { id: item.id }),
+        id: qualifiedId,
+      });
+    }
   }
   for (const [id, counterpartId] of documentedPaidCounterparts) {
-    const model = models.get(id);
-    const counterpart = models.get(counterpartId);
-    if (
-      !model || !catalogIds.has(counterpartId) || !counterpart?.pricing
-    ) continue;
+    const qualifiedId = `opencode/${id}`;
+    const qualifiedCounterpartId = `opencode/${counterpartId}`;
+    const model = models.get(qualifiedId);
+    const counterpart = models.get(qualifiedCounterpartId);
+    if (!model || !counterpart?.pricing) continue;
     model.paidCounterpart = {
-      id: `opencode/${counterpartId}`,
-      relation: "documented_variant",
+      id: qualifiedCounterpartId,
+      relation: "exact_paid_counterpart",
+      pricing: counterpart.pricing,
       sourceUrl: OPENCODE_ZEN_DOCS_URL,
     };
     const tier = economicTier(counterpart.pricing);
@@ -282,7 +365,7 @@ export async function fetchOpenCodeZenCatalog(
         basis: "paid_counterpart",
         confidence: "documented_counterpart",
         sourceUrl: OPENCODE_ZEN_DOCS_URL,
-        counterpartId: `opencode/${counterpartId}`,
+        counterpartId: qualifiedCounterpartId,
       };
     }
   }
@@ -294,7 +377,9 @@ export async function fetchOpenCodeZenCatalog(
         value: tier,
         basis: "published_pricing",
         confidence: "direct",
-        sourceUrl: OPENCODE_ZEN_DOCS_URL,
+        sourceUrl: model.provenance?.source === "opencode_go"
+          ? OPENCODE_GO_DOCS_URL
+          : OPENCODE_ZEN_DOCS_URL,
       };
     }
   }
@@ -306,9 +391,11 @@ export function enrichAdvertisedModels(
   catalog: OpenCodeCatalog,
 ): DiscoveredModel[] {
   return models.map((model) => {
-    if (!model.id.startsWith("opencode/")) return model;
-    const catalogId = model.id.slice("opencode/".length);
-    const metadata = catalog.models.get(catalogId);
+    if (
+      !model.id.startsWith("opencode/") &&
+      !model.id.startsWith("opencode-go/")
+    ) return model;
+    const metadata = catalog.models.get(model.id);
     if (!metadata) return model;
     const modelMetadata = {
       ...(metadata.name ? { name: metadata.name } : {}),
@@ -316,6 +403,9 @@ export function enrichAdvertisedModels(
       ...(metadata.pricing ? { pricing: metadata.pricing } : {}),
       ...(metadata.pricingStatus
         ? { pricingStatus: metadata.pricingStatus }
+        : {}),
+      ...(metadata.subscriptionRequired
+        ? { subscriptionRequired: metadata.subscriptionRequired }
         : {}),
       ...(metadata.paidCounterpart
         ? { paidCounterpart: metadata.paidCounterpart }

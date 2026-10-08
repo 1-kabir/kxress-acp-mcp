@@ -11,9 +11,9 @@ import { findExecutablePath } from "../runtime/process.ts";
 import { discoverAdvertisedModels } from "../models/discovery.ts";
 import {
   enrichAdvertisedModels,
-  fetchOpenCodeZenCatalog,
+  fetchOpenCodeCatalog,
   type OpenCodeCatalog,
-} from "../models/opencode_zen.ts";
+} from "../models/opencode_catalog.ts";
 import { SessionManager } from "../sessions/manager.ts";
 
 type McpServerOptions = {
@@ -67,7 +67,7 @@ export function createMcpServer(
 ) {
   const server = new McpServer({ name: "acp-mcp", version: "0.2.0" });
   const loadOpenCodeCatalog = options.loadOpenCodeCatalog ??
-    ((signal) => fetchOpenCodeZenCatalog(signal));
+    ((signal) => fetchOpenCodeCatalog(signal));
   const failureClassifiers = {
     ...defaultFailureClassifiers,
     ...options.failureClassifiers,
@@ -427,19 +427,26 @@ export function createMcpServer(
           definition,
         );
         let enrichedModels = models;
-        let enrichment: { source?: string; status: string; sourceUrl?: string };
+        let enrichment: {
+          source?: string;
+          status: string;
+          sourceUrls?: string[];
+        };
         if (!enrich) {
           enrichment = { status: "not_requested" };
-        } else if (definition.modelEnrichment !== "opencode_zen") {
+        } else if (definition.modelEnrichment !== "opencode_catalog") {
           enrichment = { status: "not_supported" };
         } else {
           try {
             const catalog = await loadOpenCodeCatalog(signal);
             enrichedModels = enrichAdvertisedModels(models, catalog);
             enrichment = {
-              source: "opencode_zen",
+              source: "opencode_catalog",
               status: "available",
-              sourceUrl: "https://opencode.ai/docs/zen/",
+              sourceUrls: [
+                "https://opencode.ai/docs/zen/",
+                "https://opencode.ai/docs/go/",
+              ],
             };
           } catch {
             if (extra.mcpReq.signal.aborted) {
@@ -456,9 +463,12 @@ export function createMcpServer(
             }
             enrichedModels = models;
             enrichment = {
-              source: "opencode_zen",
+              source: "opencode_catalog",
               status: "unavailable",
-              sourceUrl: "https://opencode.ai/docs/zen/",
+              sourceUrls: [
+                "https://opencode.ai/docs/zen/",
+                "https://opencode.ai/docs/go/",
+              ],
             };
           }
         }

@@ -12,7 +12,7 @@ Deno.test({
         command: "opencode",
         args: ["acp"],
         modelConfigId: "model",
-        modelEnrichment: "opencode_zen",
+        modelEnrichment: "opencode_catalog",
       },
     };
     const manager = new SessionManager(agents);
@@ -41,6 +41,11 @@ Deno.test({
             "opencode/fledge-alpha-free",
             "opencode/longcat-2.5-preview-free",
             "opencode/jev-1.13-free",
+            "opencode/space-bunny-free",
+            "opencode/muse-spark-1.3-contributor-free",
+            "opencode-go/space-bunny",
+            "opencode-go/longcat-2.5-preview-free",
+            "opencode-go/muse-spark-1.3-contributor",
           ].includes(String(model.id))
         )
         .map((model) => ({
@@ -57,6 +62,41 @@ Deno.test({
       console.log(
         `OpenCode routing metadata: ${JSON.stringify(metadataSummary)}`,
       );
+      console.log(
+        `OpenCode catalog coverage: ${
+          JSON.stringify({
+            advertised: models.length,
+            withPricing: models.filter((model) =>
+              (model.metadata as Record<string, unknown> | undefined)?.pricing
+            ).length,
+            currentlyFreePerToken: models.filter((model) =>
+              (model.metadata as Record<string, unknown> | undefined)?.free ===
+                true
+            ).length,
+            freeModelIds: models.filter((model) =>
+              (model.metadata as Record<string, unknown> | undefined)?.free ===
+                true
+            ).map((model) =>
+              model.id
+            ),
+            withCounterpart: models.filter((model) =>
+              (model.metadata as Record<string, unknown> | undefined)
+                ?.paidCounterpart
+            ).length,
+            withCostTier: models.filter((model) =>
+              (model.metadata as Record<string, unknown> | undefined)
+                ?.underlyingCostTier
+            ).length,
+            withPrivacy: models.filter((model) =>
+              (model.metadata as Record<string, unknown> | undefined)?.privacy
+            ).length,
+            withoutCatalogDetails: models.filter((model) =>
+              !model.metadata
+            )
+              .length,
+          })
+        }`,
+      );
       if (
         models.length === 0 ||
         models.some((model) =>
@@ -72,6 +112,24 @@ Deno.test({
         if (metadata?.free !== true) {
           throw new Error(
             "Advertised Fledge Alpha Free did not receive official free metadata",
+          );
+        }
+        if (metadata.underlyingCostTier || metadata.paidCounterpart) {
+          throw new Error(
+            "Fledge received an unsupported counterpart or economic tier",
+          );
+        }
+      }
+      const longcat = models.find((model) =>
+        model.id === "opencode/longcat-2.5-preview-free"
+      );
+      if (longcat) {
+        const metadata = longcat.metadata as
+          | Record<string, unknown>
+          | undefined;
+        if (metadata?.underlyingCostTier || metadata?.paidCounterpart) {
+          throw new Error(
+            "LongCat received an unsupported counterpart or economic tier",
           );
         }
       }

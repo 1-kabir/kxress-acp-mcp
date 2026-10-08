@@ -2,10 +2,13 @@ import { createMcpServer } from "../src/mcp/server.ts";
 import type { AgentMap } from "../src/agents/config.ts";
 import {
   economicTier,
-  fetchOpenCodeZenCatalog,
+  enrichAdvertisedModels,
+  fetchOpenCodeCatalog,
+  OPENCODE_GO_DOCS_URL,
+  OPENCODE_GO_MODELS_URL,
   OPENCODE_ZEN_DOCS_URL,
   OPENCODE_ZEN_MODELS_URL,
-} from "../src/models/opencode_zen.ts";
+} from "../src/models/opencode_catalog.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { discoverAdvertisedModels } from "../src/models/discovery.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
@@ -26,7 +29,7 @@ function serverFor(
   options: {
     loadOpenCodeCatalog?: (
       signal: AbortSignal,
-    ) => Promise<Awaited<ReturnType<typeof fetchOpenCodeZenCatalog>>>;
+    ) => Promise<Awaited<ReturnType<typeof fetchOpenCodeCatalog>>>;
   } = {},
 ) {
   const agents: AgentMap = Object.fromEntries(agentIds.map((id) => [
@@ -48,7 +51,10 @@ function serverFor(
         }),
       ...(id === "models" ? { modelConfigId: "backend-choice" } : {}),
       ...(id === "opencode"
-        ? { modelConfigId: "model", modelEnrichment: "opencode_zen" as const }
+        ? {
+          modelConfigId: "model",
+          modelEnrichment: "opencode_catalog" as const,
+        }
         : {}),
     },
   ]));
@@ -58,7 +64,7 @@ function serverFor(
 }
 
 const mockCatalog = () =>
-  fetchOpenCodeZenCatalog(
+  fetchOpenCodeCatalog(
     new AbortController().signal,
     (input) => {
       const url = String(input);
@@ -66,6 +72,7 @@ const mockCatalog = () =>
         return Promise.resolve(Response.json({
           data: [
             { id: "fledge-alpha-free", owned_by: "opencode" },
+            { id: "space-bunny-free", owned_by: "opencode" },
             { id: "remote-only-model", owned_by: "opencode" },
             { id: "paid-model", owned_by: "opencode" },
             { id: "jev-1.13-free", owned_by: "opencode" },
@@ -86,6 +93,7 @@ const mockCatalog = () =>
         <tr><td>Paid Model</td><td>paid-model</td></tr>
         <tr><td>Jev 1.13 Free</td><td>jev-1.13-free</td></tr>
         <tr><td>Jev 1.13</td><td>jev-1.13</td></tr>
+        <tr><td>Space Bunny Free</td><td>space-bunny-free</td></tr>
         <tr><td>LongCat 2.5 Preview Free</td><td>longcat-2.5-preview-free</td></tr>
         <tr><td>Example Free</td><td>example-free</td></tr>
         <tr><td>Example</td><td>example</td></tr>
@@ -93,6 +101,7 @@ const mockCatalog = () =>
         <tr><td>Nemotron 3 Ultra Free</td><td>nemotron-3-ultra-free</td></tr></table>
         <table><tr><th>Model</th><th>Input</th><th>Output</th><th>Cached Read</th><th>Cached Write</th></tr>
         <tr><td>Fledge Alpha Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr>
+        <tr><td>Space Bunny Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr>
         <tr><td>Paid Model</td><td>$0.25</td><td>$1.50</td><td>$0.05</td><td>$0.10</td></tr>
         <tr><td>Jev 1.13 Free</td><td>Free</td><td>Free</td><td>-</td><td>-</td></tr>
         <tr><td>Jev 1.13</td><td>$0.042</td><td>Free</td><td>-</td><td>-</td></tr>
@@ -105,11 +114,42 @@ const mockCatalog = () =>
         <p>All our models are hosted in the US and EU. Providers follow zero-retention and do not use data for model training, except:</p>
         <ul>
           <li>Fledge Alpha Free: Collected data may be used to improve the model.</li>
+          <li>Space Bunny Free: Provider follows zero-retention and does not use data for model training.</li>
           <li>LongCat 2.5 Preview Free: Provider follows zero-retention and does not use data for model training.</li>
           <li>Muse Spark 1.3 Contributor Free: Prompts and completions may be used for future Meta model training.</li>
           <li>Nemotron 3 Ultra Free: Trial prompts are logged for security and product improvement.</li>
         </ul>
       `),
+        );
+      }
+      if (url === OPENCODE_GO_MODELS_URL) {
+        return Promise.resolve(Response.json({
+          data: [
+            { id: "space-bunny", owned_by: "opencode" },
+            { id: "longcat-2.5-preview-free", owned_by: "opencode" },
+            { id: "muse-spark-1.3-contributor", owned_by: "opencode" },
+          ],
+        }));
+      }
+      if (url === OPENCODE_GO_DOCS_URL) {
+        return Promise.resolve(
+          new Response(`
+          <table><tr><th>Model</th><th>Model ID</th><th>Endpoint</th></tr>
+            <tr><td>Space Bunny</td><td>space-bunny</td><td>go</td></tr>
+            <tr><td>LongCat 2.5 Preview Free</td><td>longcat-2.5-preview-free</td><td>go</td></tr>
+            <tr><td>Muse Spark 1.3 Contributor</td><td>muse-spark-1.3-contributor</td><td>go</td></tr>
+          </table>
+          <table><tr><th>Model</th><th>Input</th><th>Output</th><th>Cached Read</th><th>Cached Write</th><th>Monthly limit</th></tr>
+            <tr><td>Space Bunny</td><td>$0.15</td><td>$0.60</td><td>$0.03</td><td>-</td><td>$120</td></tr>
+            <tr><td>LongCat 2.5 Preview Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td><td>Unlimited</td></tr>
+            <tr><td>Muse Spark 1.3 Contributor</td><td>$0.10</td><td>$0.20</td><td>$0.002</td><td>-</td><td>$120</td></tr>
+          </table>
+          <table><tr><th>Model</th><th>Model training</th><th>Data retention</th></tr>
+            <tr><td>Space Bunny</td><td>Not used</td><td>0 days</td></tr>
+            <tr><td>LongCat 2.5 Preview Free</td><td>Not used</td><td>0 days</td></tr>
+            <tr><td>Muse Spark 1.3 Contributor</td><td>Yes</td><td>Not ZDR</td></tr>
+          </table>
+        `),
         );
       }
       return Promise.resolve(new Response("not found", { status: 404 }));
@@ -286,7 +326,8 @@ Deno.test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes
     }
     if (
       result.enrichment &&
-      (result.enrichment as Record<string, unknown>).source !== "opencode_zen"
+      (result.enrichment as Record<string, unknown>).source !==
+        "opencode_catalog"
     ) {
       throw new Error("Enrichment provenance was not retained");
     }
@@ -320,7 +361,7 @@ Deno.test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes
 
 Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay distinct", async () => {
   const catalog = await mockCatalog();
-  const fledge = catalog.models.get("fledge-alpha-free");
+  const fledge = catalog.models.get("opencode/fledge-alpha-free");
   if (
     fledge?.free !== true || fledge.pricingStatus !== "limited_time" ||
     fledge.underlyingCostTier || fledge.paidCounterpart?.id
@@ -337,31 +378,37 @@ Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay dis
     throw new Error("Fledge privacy metadata was not conservative/provenanced");
   }
 
-  const longcat = catalog.models.get("longcat-2.5-preview-free");
+  const longcat = catalog.models.get(
+    "opencode/longcat-2.5-preview-free",
+  );
   if (
     longcat?.privacy?.trainingUse !== "not_used_for_training" ||
     longcat.privacy.retention !== "zero" ||
     longcat.privacy.sourceUrl !== OPENCODE_ZEN_DOCS_URL
   ) throw new Error("Documented LongCat privacy facts were not retained");
 
-  const museSpark = catalog.models.get("muse-spark-1.3-contributor-free");
+  const museSpark = catalog.models.get(
+    "opencode/muse-spark-1.3-contributor-free",
+  );
   if (
     museSpark?.privacy?.trainingUse !== "may_be_used_for_training" ||
     museSpark.privacy.retention !== "not_zero" ||
     museSpark.privacy.sourceUrl !== OPENCODE_ZEN_DOCS_URL
   ) throw new Error("Documented Muse Spark data use was not normalized");
-  const nemotron = catalog.models.get("nemotron-3-ultra-free");
+  const nemotron = catalog.models.get("opencode/nemotron-3-ultra-free");
   if (
     nemotron?.privacy?.trainingUse !== "may_be_used_for_improvement" ||
     nemotron.privacy.retention !== "not_zero"
   ) throw new Error("Documented Nemotron trial data use was not normalized");
 
-  const jevFree = catalog.models.get("jev-1.13-free");
+  const jevFree = catalog.models.get("opencode/jev-1.13-free");
   if (
     jevFree?.paidCounterpart?.id !== "opencode/jev-1.13" ||
     jevFree.privacy?.trainingUse !== "not_used_for_training" ||
     jevFree.privacy.retention !== "provider_policy" ||
-    jevFree.paidCounterpart.relation !== "documented_variant" ||
+    jevFree.paidCounterpart.relation !== "exact_paid_counterpart" ||
+    jevFree.paidCounterpart.pricing.input !== 0.042 ||
+    jevFree.paidCounterpart.pricing.output !== 0 ||
     jevFree.underlyingCostTier?.value !== "low" ||
     jevFree.underlyingCostTier.basis !== "paid_counterpart" ||
     jevFree.underlyingCostTier.counterpartId !== "opencode/jev-1.13" ||
@@ -369,7 +416,7 @@ Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay dis
     jevFree.underlyingCostTier.sourceUrl !== OPENCODE_ZEN_DOCS_URL
   ) throw new Error("Documented Jev counterpart/tier was not derived");
 
-  const directPriced = catalog.models.get("paid-model");
+  const directPriced = catalog.models.get("opencode/paid-model");
   if (
     directPriced?.underlyingCostTier?.value !== "medium" ||
     directPriced.underlyingCostTier.basis !== "published_pricing" ||
@@ -377,15 +424,65 @@ Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay dis
     directPriced.underlyingCostTier.sourceUrl !== OPENCODE_ZEN_DOCS_URL
   ) throw new Error("Published-price tier or provenance was not retained");
 
-  const unrelatedFree = catalog.models.get("example-free");
+  const unrelatedFree = catalog.models.get("opencode/example-free");
   if (
     unrelatedFree?.free !== true || unrelatedFree.pricingStatus ||
     unrelatedFree.paidCounterpart || unrelatedFree.underlyingCostTier
   ) throw new Error("Name similarity fabricated promotional/counterpart facts");
   if (
-    catalog.models.get("remote-only-model")?.privacy ||
-    catalog.models.get("remote-only-model")?.underlyingCostTier
+    catalog.models.get("opencode/remote-only-model")?.privacy ||
+    catalog.models.get("opencode/remote-only-model")?.underlyingCostTier
   ) throw new Error("Unsupported metadata was fabricated for an unknown model");
+
+  const goSpaceBunny = catalog.models.get("opencode-go/space-bunny");
+  if (
+    goSpaceBunny?.pricing?.input !== 0.15 ||
+    goSpaceBunny.pricing.output !== 0.6 ||
+    goSpaceBunny.underlyingCostTier?.value !== "low" ||
+    goSpaceBunny.subscriptionRequired !== true ||
+    goSpaceBunny.privacy?.trainingUse !== "not_used_for_training" ||
+    goSpaceBunny.privacy.retention !== "zero" ||
+    goSpaceBunny.provenance?.source !== "opencode_go"
+  ) throw new Error("OpenCode Go pricing/privacy metadata was not parsed");
+
+  const goLongcat = catalog.models.get(
+    "opencode-go/longcat-2.5-preview-free",
+  );
+  if (
+    goLongcat?.free !== true || goLongcat.subscriptionRequired !== true ||
+    goLongcat.pricingStatus !== "limited_time" ||
+    goLongcat.underlyingCostTier || goLongcat.paidCounterpart
+  ) throw new Error("Go subscription/free-price distinction was lost");
+
+  const goMuse = catalog.models.get(
+    "opencode-go/muse-spark-1.3-contributor",
+  );
+  if (
+    goMuse?.privacy?.trainingUse !== "may_be_used_for_training" ||
+    goMuse.privacy.retention !== "not_zero" ||
+    goMuse.subscriptionRequired !== true
+  ) throw new Error("OpenCode Go model-specific training terms were lost");
+
+  const enrichedGo = enrichAdvertisedModels([{
+    id: "opencode-go/space-bunny",
+    name: "opencode-go/Space Bunny",
+    configId: "model",
+    available: true,
+    selected: true,
+    availabilitySource: "acp",
+  }], catalog)[0];
+  const enrichedGoMetadata = enrichedGo.metadata as
+    | Record<string, unknown>
+    | undefined;
+  if (
+    enrichedGo.available !== true || enrichedGoMetadata?.free !== false ||
+    enrichedGoMetadata.subscriptionRequired !== true
+  ) throw new Error("OpenCode Go metadata did not enrich the ACP model");
+
+  const zenSpaceBunny = catalog.models.get("opencode/space-bunny-free");
+  if (
+    zenSpaceBunny?.paidCounterpart || zenSpaceBunny?.underlyingCostTier
+  ) throw new Error("Name similarity fabricated a Space Bunny counterpart");
 });
 
 Deno.test("underlying economic tiers use deterministic published-price bands", () => {

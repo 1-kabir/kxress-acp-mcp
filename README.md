@@ -194,24 +194,34 @@ select one through the existing `config` map. ACP `category: "model"` metadata
 identifies model selectors; the configured profile mapping is used only when the
 live option has no category. Other config options remain available through the
 generic `config` map and explicit session tools. Agents without model choices
-return an empty list. Set `enrich: true` to request optional OpenCode Zen
-metadata for the OpenCode profile; metadata is attached only to exact IDs
-already advertised by ACP. The official
-[OpenCode Zen model endpoint](https://opencode.ai/zen/v1/models) and
-[Zen documentation](https://opencode.ai/docs/zen/) provide the catalog and
-pricing data. Metadata lookup failures preserve the available ACP model list. No
-catalog or availability cache is used.
+return an empty list. Set `enrich: true` to request optional OpenCode Zen and Go
+metadata for the OpenCode profile; metadata is attached only to exact
+provider-qualified IDs already advertised by ACP. The official
+[Zen model endpoint](https://opencode.ai/zen/v1/models),
+[Zen documentation](https://opencode.ai/docs/zen/),
+[Go model endpoint](https://opencode.ai/zen/go/v1/models), and
+[Go documentation](https://opencode.ai/docs/go/) provide catalog, pricing, and
+data-use information. OpenCode Go token prices apply within a paid monthly
+subscription, which enriched Go entries mark with `subscriptionRequired: true`.
+Metadata lookup failures preserve the available ACP model list. No catalog or
+availability cache is used.
 
 For OpenCode models, enrichment keeps current `pricing`/`free` separate from
 optional `pricingStatus: "limited_time"` and `underlyingCostTier`. The cost tier
 is a coarse project band derived from the maximum published input/output price
 per million tokens: below $1 is `low`, below $5 is `medium`, below $20 is
 `high`, and $20 or more is `premium`. A zero-priced model gets no underlying
-tier unless OpenCode documents an exact paid counterpart. The current documented
+tier unless OpenCode documents an exact paid counterpart. The documented
 `jev-1.13-free` to `jev-1.13` relationship is represented explicitly; similar
-model names alone never establish a counterpart. Tier and privacy facts include
-source provenance. Privacy metadata is only attached for exact documented model
-exceptions; absent metadata means unknown, not a guarantee.
+model names alone never establish a counterpart. OpenCode Go's directly
+published token prices can provide a cost tier for that Go catalog entry, but do
+not automatically establish a counterpart relationship to a Zen model. Tier and
+privacy facts include source provenance. Privacy metadata is only attached where
+the relevant official catalog documents it; absent metadata means unknown, not a
+guarantee. `underlyingCostTier` describes pricing position, not model
+capability. OpenCode Go entries report `free` from per-token prices and
+separately mark the required subscription so zero token price is not mistaken
+for free access.
 
 `run_task` never retries or switches models. For restartable planning/research,
 the caller may compose `list_models` and separate `run_task` calls using an

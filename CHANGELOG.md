@@ -14,11 +14,11 @@
 
 ### Added
 
-- OpenCode model enrichment now distinguishes current price from limited-time
-  free status, adds documented paid-counterpart cost tiers, and exposes
-  model-specific privacy facts with provenance. Planning fallback guidance is
-  bounded and remains in the ACP usage skill; `run_task` never routes or
-  retries.
+- OpenCode Zen and Go enrichment now covers provider-qualified advertised
+  models, distinguishes current per-token price from subscription access and
+  limited-time free status, adds the documented Jev paid-counterpart tier, and
+  exposes source-backed privacy facts. Planning fallback guidance is bounded and
+  remains in the ACP usage skill; `run_task` never routes or retries.
 - Built-in Codex ACP adapter and first-party Antigravity ACP server profiles.
   `list_agents` now reports whether each profile's executable is present.
 - `run_task` failures now include a compact generic error kind and stage, with a

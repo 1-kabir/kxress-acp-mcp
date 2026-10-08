@@ -99,12 +99,14 @@ the requested model. Use this bounded workflow:
 2. If candidate metadata matters, call `list_models` with `enrich: true` and
    keep only models currently advertised by ACP. Advertisement means selectable,
    not healthy or currently accepting requests.
-3. Check `free`, `pricingStatus`, `underlyingCostTier`, and `privacy`
-   separately. Current zero price does not mean a low underlying cost tier.
-   Missing privacy metadata means unknown; if policy requires a known privacy
-   property, reject unknown candidates. Do not silently cross from known
-   source-model terms to weaker or unknown candidate terms unless the user or
-   workflow explicitly permits that change. A no-training policy rejects
+3. Check `free`, `pricingStatus`, `subscriptionRequired`, `underlyingCostTier`,
+   and `privacy` separately. An OpenCode Go model requires a paid monthly
+   subscription even when its published per-token price is zero. Current zero
+   price does not mean a low underlying cost tier, and cost tier is not a
+   capability score. Missing privacy metadata means unknown; if policy requires
+   a known privacy property, reject unknown candidates. Do not silently cross
+   from known source-model terms to weaker or unknown candidate terms unless the
+   user or workflow explicitly permits that change. A no-training policy rejects
    candidates that may use prompts for improvement/training.
 4. Run the preferred model once. Consider the next explicitly allowed model only
    for a classification the workflow permits. The current OpenCode
