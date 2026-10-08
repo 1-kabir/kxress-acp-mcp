@@ -31,7 +31,7 @@ export function createMcpServer(
   manager: SessionManager,
   options: McpServerOptions = {},
 ) {
-  const server = new McpServer({ name: "acp-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "acp-mcp", version: "0.2.0" });
   const loadOpenCodeCatalog = options.loadOpenCodeCatalog ??
     ((signal) => fetchOpenCodeZenCatalog(signal));
   server.registerTool("list_agents", {
@@ -98,12 +98,12 @@ export function createMcpServer(
     }
   });
   server.registerTool(
-    "delegate",
+    "run_task",
     {
       description:
-        "Run a one-shot task in an ACP agent and return only its final answer. The task and any repository content the agent reads may be sent to its configured model provider. permissionPolicy controls ACP permission responses; it does not prevent external data disclosure or sandbox the agent process. Host approval policies still apply.",
+        "Run one task through a configured ACP agent and return only its final answer. Use this for bounded one-shot work; use explicit session tools for multi-turn work or event inspection. The task and repository content read by the agent may be sent to its configured model provider. permissionPolicy controls ACP permission responses; it does not prevent external data disclosure or sandbox the agent process. Host approval policies still apply.",
       annotations: {
-        title: "Delegate to ACP agent",
+        title: "Run ACP task",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -111,7 +111,7 @@ export function createMcpServer(
       },
       inputSchema: {
         agentId: z.string().describe("Configured ACP agent to run"),
-        prompt: z.string().describe(
+        task: z.string().describe(
           "Task instructions. Repository context is read by the ACP agent; do not include file contents unless intended for its model provider.",
         ),
         cwd: z.string().optional().describe(
@@ -130,14 +130,14 @@ export function createMcpServer(
           "ACP permission response policy (defaults to read_only); this does not sandbox the process or keep data local",
         ),
         timeoutMs: z.number().int().min(1).max(600000).optional().describe(
-          "Maximum delegation duration in milliseconds (defaults to 120000)",
+          "Maximum task duration in milliseconds (defaults to 120000)",
         ),
       },
     },
     async (
       {
         agentId,
-        prompt: text,
+        task: text,
         cwd,
         config,
         modeId,
@@ -260,10 +260,10 @@ export function createMcpServer(
     },
   );
   server.registerTool(
-    "discover_models",
+    "list_models",
     {
       description:
-        "Discover models advertised by a live ACP session, with optional OpenCode metadata",
+        "List model choices advertised by a live ACP session, with optional OpenCode metadata",
       inputSchema: {
         agentId: z.string(),
         cwd: z.string().optional(),

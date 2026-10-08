@@ -6,6 +6,7 @@ import {
   OPENCODE_ZEN_MODELS_URL,
 } from "../src/models/opencode_zen.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
+import { discoverAdvertisedModels } from "../src/models/discovery.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
 const modelFixture = {
@@ -30,17 +31,20 @@ function serverFor(
   const agents: AgentMap = Object.fromEntries(agentIds.map((id) => [
     id,
     {
-      ...(id === "models" || id === "opencode" ? modelFixture : {
-        command: Deno.execPath(),
-        args: [
-          "run",
-          "--allow-env",
-          "--allow-read",
-          "tests/fixtures/fake_acp_agent.ts",
-          ...(id === "bad" ? ["--session-fail"] : []),
-          ...(id === "slow" ? ["--session-delay-ms=150"] : []),
-        ],
-      }),
+      ...(id === "models" || id === "opencode" || id === "generic"
+        ? modelFixture
+        : {
+          command: Deno.execPath(),
+          args: [
+            "run",
+            "--allow-env",
+            "--allow-read",
+            "tests/fixtures/fake_acp_agent.ts",
+            ...(id === "bad" ? ["--session-fail"] : []),
+            ...(id === "slow" ? ["--session-delay-ms=150"] : []),
+            ...(id === "bool" ? ["--advertise-bool"] : []),
+          ],
+        }),
       ...(id === "models" ? { modelConfigId: "backend-choice" } : {}),
       ...(id === "opencode"
         ? { modelConfigId: "model", modelEnrichment: "opencode_zen" as const }
@@ -82,12 +86,37 @@ const mockCatalog = () =>
     },
   );
 
+Deno.test("MCP advertises canonical high-level tool names without aliases", async () => {
+  const { server, manager } = serverFor(["plain"]);
+  const mcp = await connectMcp(server);
+  try {
+    const reply = await mcp.listTools().response as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    const names = (reply.result?.tools ?? []).map((tool) => tool.name);
+    for (const expected of ["run_task", "list_models", "list_agents"]) {
+      if (!names.includes(expected)) {
+        throw new Error(`Missing canonical tool ${expected}`);
+      }
+    }
+    for (const removed of ["delegate", "discover_models"]) {
+      if (names.includes(removed)) {
+        throw new Error(`Deprecated tool ${removed} is still advertised`);
+      }
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
 Deno.test("generic model discovery uses ACP options and cleans its temporary session", async () => {
   const { manager, server } = serverFor(["models"]);
   const mcp = await connectMcp(server);
   try {
     const result = parseToolResult(
-      await mcp.callTool("discover_models", {
+      await mcp.callTool("list_models", {
         agentId: "models",
       }).response,
     );
@@ -125,12 +154,52 @@ Deno.test("generic model discovery uses ACP options and cleans its temporary ses
   }
 });
 
+Deno.test("unprofiled agents use ACP model categories and ignore conflicting profile fallbacks", async () => {
+  const { server, manager } = serverFor(["generic"]);
+  const mcp = await connectMcp(server);
+  try {
+    const result = parseToolResult(
+      await mcp.callTool("list_models", { agentId: "generic" }).response,
+    );
+    const models = result.models as Array<Record<string, unknown>>;
+    if (
+      models.length !== 3 ||
+      models.some((model) => model.id === "local/model-z")
+    ) {
+      throw new Error(
+        "An unprofiled agent did not use only its ACP model category",
+      );
+    }
+    const conflicting = discoverAdvertisedModels([{
+      id: "configured-model-id",
+      category: "thought_level",
+      type: "select",
+      currentValue: "high",
+      options: [{ value: "high", name: "High" }],
+    }], {
+      command: "agent",
+      args: [],
+      modelConfigId: "configured-model-id",
+    });
+    if (conflicting.length) {
+      throw new Error("A profile overrode an explicit ACP non-model category");
+    }
+    if (manager.sessions.size) {
+      throw new Error("Unprofiled model listing leaked its temporary session");
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
 Deno.test("no advertised model option returns an empty generic model list", async () => {
   const { manager, server } = serverFor(["plain"]);
   const mcp = await connectMcp(server);
   try {
     const result = parseToolResult(
-      await mcp.callTool("discover_models", {
+      await mcp.callTool("list_models", {
         agentId: "plain",
       }).response,
     );
@@ -158,7 +227,7 @@ Deno.test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes
   const mcp = await connectMcp(server);
   try {
     const result = parseToolResult(
-      await mcp.callTool("discover_models", {
+      await mcp.callTool("list_models", {
         agentId: "opencode",
         enrich: true,
       }).response,
@@ -227,7 +296,7 @@ Deno.test("metadata failure preserves ACP availability and ACP failure remains a
   const mcp = await connectMcp(server);
   try {
     const partial = parseToolResult(
-      await mcp.callTool("discover_models", {
+      await mcp.callTool("list_models", {
         agentId: "opencode",
         enrich: true,
       }).response,
@@ -244,7 +313,7 @@ Deno.test("metadata failure preserves ACP availability and ACP failure remains a
       throw new Error("Metadata failure was not reported compactly");
     }
     const failure = parseToolResult(
-      await mcp.callTool("discover_models", {
+      await mcp.callTool("list_models", {
         agentId: "bad",
       }).response,
     );
@@ -268,7 +337,7 @@ Deno.test("model discovery timeout and MCP cancellation close late sessions", as
   const mcp = await connectMcp(server);
   try {
     const timeout = parseToolResult(
-      await mcp.callTool("discover_models", {
+      await mcp.callTool("list_models", {
         agentId: "slow",
         timeoutMs: 10,
       }).response,
@@ -283,7 +352,7 @@ Deno.test("model discovery timeout and MCP cancellation close late sessions", as
       throw new Error("Late timed-out session was not closed");
     }
 
-    const request = mcp.callTool("discover_models", { agentId: "slow" });
+    const request = mcp.callTool("list_models", { agentId: "slow" });
     await new Promise((resolve) => setTimeout(resolve, 25));
     await mcp.cancel(request.id);
     await new Promise((resolve) => setTimeout(resolve, 250));

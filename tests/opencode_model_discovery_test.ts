@@ -4,7 +4,7 @@ import { SessionManager } from "../src/sessions/manager.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
 Deno.test({
-  name: "OpenCode ACP model discovery with official enrichment",
+  name: "OpenCode ACP model listing with official enrichment",
   ignore: Deno.env.get("ACPMCP_OPENCODE_TEST") !== "1",
   fn: async () => {
     const agents: AgentMap = {
@@ -20,7 +20,7 @@ Deno.test({
     const mcp = await connectMcp(server);
     try {
       const result = parseToolResult(
-        await mcp.callTool("discover_models", {
+        await mcp.callTool("list_models", {
           agentId: "opencode",
           cwd: Deno.cwd(),
           enrich: true,

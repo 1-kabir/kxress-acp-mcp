@@ -11,6 +11,7 @@ Deno.test({
     });
     let delegatedPolicy: string | undefined;
     let internalActivityBytes = 0;
+    let failureDetails: string | undefined;
     const start = manager.start.bind(manager);
     manager.start = (agentId, cwd, config, modeId, permissionPolicy) => {
       delegatedPolicy = permissionPolicy;
@@ -19,10 +20,17 @@ Deno.test({
     const close = manager.close.bind(manager);
     manager.close = async (id) => {
       if (manager.sessions.has(id)) {
+        const session = manager.get(id);
         internalActivityBytes = Math.max(
           internalActivityBytes,
-          JSON.stringify(manager.get(id).events).length,
+          JSON.stringify(session.events).length,
         );
+        if (session.prompt?.state === "failed") {
+          failureDetails = JSON.stringify({
+            error: session.prompt.error,
+            stderr: session.process.stderrTail(),
+          });
+        }
       }
       await close(id);
     };
@@ -45,22 +53,24 @@ Deno.test({
       await manager.close(probe.id);
       if (!advertised) {
         console.log(
-          "Skipping OpenCode delegate call: target free model is not advertised",
+          "Skipping OpenCode run_task: target free model is not advertised",
         );
         return;
       }
       mcp = await connectMcp(server);
-      const wire = await mcp.callTool("delegate", {
+      const wire = await mcp.callTool("run_task", {
         agentId: "opencode",
         config: { model: "opencode/longcat-2.5-preview-free" },
-        prompt:
+        task:
           "Inspect this repository enough to understand its purpose. Return exactly two short paragraphs and do not add headings, bullets, or numbering: paragraph one explains what the project does; paragraph two explains how MCP and ACP are separated architecturally.",
       }).response;
       const result = parseToolResult(wire);
       const response = String(result.response ?? "");
       if (result.status !== "completed" || !response.trim()) {
         throw new Error(
-          `OpenCode delegate did not complete: ${JSON.stringify(result)}`,
+          `OpenCode run_task did not complete: ${JSON.stringify(result)}${
+            failureDetails ? `; internal failure: ${failureDetails}` : ""
+          }`,
         );
       }
       const substantiveParagraphs = response.split(/\n\s*\n/).filter(
@@ -92,10 +102,10 @@ Deno.test({
         );
       }
       console.log(
-        `OpenCode delegate: ${callerResultBytes} caller-result bytes; ${internalActivityBytes} internal event bytes`,
+        `OpenCode run_task: ${callerResultBytes} caller-result bytes; ${internalActivityBytes} internal event bytes`,
       );
       if (manager.sessions.size) {
-        throw new Error("OpenCode delegate left a managed session active");
+        throw new Error("OpenCode run_task left a managed session active");
       }
     } finally {
       await mcp?.close();

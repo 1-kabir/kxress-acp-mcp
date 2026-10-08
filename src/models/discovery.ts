@@ -41,9 +41,11 @@ export function discoverAdvertisedModels(
   const seen = new Set<string>();
   for (const option of configOptions) {
     const configId = typeof option.id === "string" ? option.id : undefined;
+    const isModelOption = option.category === "model" ||
+      ((option.category === undefined || option.category === null) &&
+        configId === agent.modelConfigId);
     if (
-      !configId || option.type !== "select" ||
-      (option.category !== "model" && configId !== agent.modelConfigId)
+      !configId || option.type !== "select" || !isModelOption
     ) continue;
     const currentValue = typeof option.currentValue === "string"
       ? option.currentValue

@@ -62,20 +62,22 @@ Configured agents run with the current user's OS permissions. The bridge does
 not sandbox subprocesses. ACP permission policy controls permission responses;
 `read_only` is the default and does not provide OS-level isolation.
 
-The `delegate` tool may send its task and repository content read by the ACP
+The `run_task` tool may send its task and repository content read by the ACP
 agent to that agent's configured model provider. `read_only` only controls how
 the bridge responds to ACP permission requests; it does not keep repository data
 local, restrict network access, or sandbox the child process. Codex and other
 MCP hosts continue to apply their own approval and security policies.
 
-Tools include `delegate`, `discover_models`, `list_agents`, `start_session`,
+Tools include `run_task`, `list_models`, `list_agents`, `start_session`,
 `load_session`, `get_session`, `prompt`, `get_events`, `cancel_prompt`,
 `resolve_permission`, `set_config_option`, `set_mode`, `list_sessions`, and
-`close_session`. A prompt call accepts `wait` and `waitMs`; if it is still
-running at the wait limit, the response includes its prompt ID. Use `get_events`
-with the session ID and `afterSequence` cursor to read updates, or
-`cancel_prompt` to send ACP cancellation. Raw ACP payloads and thought events
-are omitted from polling results unless requested.
+`close_session`. Use `run_task` for one-shot work. Use explicit session tools
+for multi-turn conversations, manual permission handling, or event inspection. A
+prompt call accepts `wait` and `waitMs`; if it is still running at the wait
+limit, the response includes its prompt ID. Use `get_events` with the session ID
+and `afterSequence` cursor to read updates, or `cancel_prompt` to send ACP
+cancellation. Raw ACP payloads and thought events are omitted from polling
+results unless requested.
 
 Inbound `session/update` notifications are intercepted at the public SDK stream
 boundary before SDK notification validation. The bridge journals their original
@@ -84,25 +86,27 @@ continues through the SDK client.
 
 `start_session` accepts arbitrary advertised config IDs through its `config`
 object and an optional `modeId`. Config values are strings; boolean ACP options
-use `"true"` or `"false"`. `permissionPolicy` defaults to `read_only`;
-`operator` exposes requests through `get_session` and waits for
-`resolve_permission`, while `allow_all` and `deny_all` apply advertised ACP
-options. These policies rely on ACP permission requests and do not sandbox the
-child process.
+use `"true"` or `"false"`. The ACP client advertises boolean config-option
+support and converts those strings to protocol booleans. `permissionPolicy`
+defaults to `read_only`; `operator` exposes requests through `get_session` and
+waits for `resolve_permission`, while `allow_all` and `deny_all` apply
+advertised ACP options. These policies rely on ACP permission requests and do
+not sandbox the child process.
 
 `load_session` starts a fresh agent process and calls `session/load` only when
 the agent advertises that capability. Supply the original absolute working
 directory along with the ACP session ID.
 
-Use `delegate` for one-shot planning, research, review, second opinions,
-repository exploration, and other subagent tasks. It runs one prompt in an
-internal ACP session, waits up to 120 seconds (configurable to 10 minutes),
-returns only the final assistant text and stop reason, then closes the session.
-Internal ACP activity remains inside `acp-mcp`; the MCP caller receives only the
-result returned by `delegate`. The task and files the delegated agent reads may
-be sent to its configured model provider. The permission policy defaults to
-`read_only`; this controls ACP permission responses, not data locality or OS
-isolation. Request `allow_all` explicitly when needed. With `operator`, a
+Use `run_task` for one-shot planning, research, review, second opinions,
+repository exploration, and other tasks. It runs one task in an internal ACP
+session, waits up to 120 seconds (configurable to 10 minutes), returns only the
+final assistant text and stop reason, then closes the session. Internal ACP
+activity remains inside `acp-mcp`; the MCP caller receives only the result
+returned by `run_task`. The task and files the ACP agent reads may be sent to
+its configured model provider. The permission policy defaults to `read_only`;
+this controls ACP permission responses, not data locality or OS isolation. This
+supports subagent-style workflows while remaining a generic one-shot ACP task
+operation. Request `allow_all` explicitly when needed. With `operator`, a
 permission request returns a `permission_required` result containing the managed
 session and permission IDs, advertised choices, and lease duration. Resolve it
 with `resolve_permission` and use low-level tools to continue or close that
@@ -110,21 +114,21 @@ session. Unused permission continuations close when the lease expires.
 
 ### Implementation planning
 
-For repository planning, let the delegated agent inspect the checkout itself:
+For repository planning, let the ACP agent inspect the checkout itself:
 
-1. Use a known advertised model ID directly, or call `discover_models` when you
-   need to validate available choices.
-2. Call `delegate` with the checkout as `cwd` and concise task instructions. Ask
+1. Use a known advertised model ID directly, or call `list_models` when you need
+   to validate available choices.
+2. Call `run_task` with the checkout as `cwd` and concise task instructions. Ask
    the agent to inspect the repository; do not first read files in Codex and
    paste their contents into the task unless you intend to share them.
 3. Review the host's approval prompt for the external ACP call and approve that
    invocation if appropriate.
-4. Use the compact plan returned by `delegate` to guide implementation.
+4. Use the compact plan returned by `run_task` to guide implementation.
 
 In Codex, a per-invocation prompt for this tool can be enabled with:
 
 ```powershell
-codex --ask-for-approval on-request -c 'mcp_servers.acp_mcp.tools.delegate.approval_mode="prompt"'
+codex --ask-for-approval on-request -c 'mcp_servers.acp_mcp.tools.run_task.approval_mode="prompt"'
 ```
 
 This is a temporary command-line override. It does not persist an approval
@@ -140,10 +144,13 @@ cancellation.
 ACP activity and event journals remain server-side unless a tool explicitly
 returns them (for example, `get_events`).
 
-Use `discover_models` to inspect model choices exposed by a live ACP session. It
+Use `list_models` to inspect model choices exposed by a live ACP session. It
 starts and closes a temporary `read_only` session, and returns only the
-advertised choices with their ACP config ID so a later `start_session` can
-select one through the existing `config` map. Agents without model choices
+advertised choices with their ACP config ID so `run_task` or `start_session` can
+select one through the existing `config` map. ACP `category: "model"` metadata
+identifies model selectors; the configured profile mapping is used only when the
+live option has no category. Other config options remain available through the
+generic `config` map and explicit session tools. Agents without model choices
 return an empty list. Set `enrich: true` to request optional OpenCode Zen
 metadata for the OpenCode profile; metadata is attached only to exact IDs
 already advertised by ACP. The official

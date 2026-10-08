@@ -50,6 +50,20 @@ export type PermissionPolicy =
   | "operator"
   | "allow_all"
   | "deny_all";
+
+function configValue(
+  value: string,
+  option: Record<string, unknown> | undefined,
+): { value: string } | { type: "boolean"; value: boolean } {
+  if (option?.type !== "boolean") return { value };
+  if (value !== "true" && value !== "false") {
+    throw new Error(
+      `Boolean config option '${String(option.id)}' must be 'true' or 'false'`,
+    );
+  }
+  return { type: "boolean", value: value === "true" };
+}
+
 export interface PendingPermission {
   id: string;
   toolCall: unknown;
@@ -131,7 +145,9 @@ export class SessionManager {
     try {
       const init = await connection.agent.request("initialize", {
         protocolVersion: 1,
-        clientCapabilities: {},
+        clientCapabilities: {
+          session: { configOptions: { boolean: {} } },
+        },
       });
       if (init.protocolVersion !== 1) {
         throw new Error(`ACP version mismatch: ${init.protocolVersion}`);
@@ -160,8 +176,18 @@ export class SessionManager {
       ];
       const modes =
         (sessionResponse as { modes?: Record<string, unknown> }).modes;
+      const modelConfigIds = new Set(configOptions.flatMap((option) => {
+        const id = typeof option.id === "string" ? option.id : undefined;
+        if (
+          id &&
+          (option.category === "model" ||
+            ((option.category === undefined || option.category === null) &&
+              id === def.modelConfigId))
+        ) return [id];
+        return [];
+      }));
       const desired = Object.entries(config).sort(([a], [b]) =>
-        Number(b === "model") - Number(a === "model")
+        Number(modelConfigIds.has(b)) - Number(modelConfigIds.has(a))
       );
       for (const [configId, value] of desired) {
         const option = configOptions.find((item) => item.id === configId);
@@ -186,9 +212,7 @@ export class SessionManager {
           {
             sessionId: acpId,
             configId,
-            ...(option?.type === "boolean"
-              ? { type: "boolean", value: value === "true" }
-              : { value }),
+            ...configValue(value, option),
           },
         );
         configOptions =
@@ -427,9 +451,7 @@ export class SessionManager {
       {
         sessionId: session.acpSessionId,
         configId,
-        ...(option?.type === "boolean"
-          ? { type: "boolean", value: value === "true" }
-          : { value }),
+        ...configValue(value, option),
       },
     );
     session.configOptions = result.configOptions as Array<

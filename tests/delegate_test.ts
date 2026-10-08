@@ -38,14 +38,21 @@ async function harness(agentId: "raw" | "fake" = "fake") {
   return { manager, server, mcp, closedChildren, closedStderr };
 }
 
-Deno.test("delegate advertises external disclosure and mutation accurately", async () => {
+Deno.test("run_task advertises external disclosure and mutation accurately", async () => {
   const { manager, server, mcp } = await harness();
   try {
     const reply = await mcp.listTools().response as {
       result?: { tools?: Array<Record<string, unknown>> };
     };
-    const tool = reply.result?.tools?.find((item) => item.name === "delegate");
-    if (!tool) throw new Error("delegate tool was not advertised");
+    const tool = reply.result?.tools?.find((item) => item.name === "run_task");
+    if (!tool) throw new Error("run_task tool was not advertised");
+    const names = (reply.result?.tools ?? []).map((item) => item.name);
+    if (names.includes("delegate") || names.includes("discover_models")) {
+      throw new Error("Deprecated high-level tool aliases were advertised");
+    }
+    if (!names.includes("list_models") || !names.includes("list_agents")) {
+      throw new Error("Everyday ACP discovery tools are incomplete");
+    }
     const annotations = tool.annotations as Record<string, unknown>;
     if (
       annotations.readOnlyHint !== false ||
@@ -54,7 +61,7 @@ Deno.test("delegate advertises external disclosure and mutation accurately", asy
       annotations.openWorldHint !== true
     ) {
       throw new Error(
-        `Inaccurate delegate annotations: ${JSON.stringify(annotations)}`,
+        `Inaccurate run_task annotations: ${JSON.stringify(annotations)}`,
       );
     }
     const description = String(tool.description);
@@ -66,12 +73,18 @@ Deno.test("delegate advertises external disclosure and mutation accurately", asy
       ]
     ) {
       if (!description.includes(phrase)) {
-        throw new Error(`delegate description omitted: ${phrase}`);
+        throw new Error(`run_task description omitted: ${phrase}`);
       }
     }
     const schema = tool.inputSchema as {
       properties?: Record<string, { description?: string }>;
     };
+    if (
+      !schema.properties?.task || schema.properties.prompt ||
+      !String(schema.properties.task.description).includes("ACP agent")
+    ) {
+      throw new Error("run_task did not advertise its task input");
+    }
     const policyDescription = schema.properties?.permissionPolicy?.description;
     if (!policyDescription?.includes("does not sandbox")) {
       throw new Error(
@@ -85,7 +98,7 @@ Deno.test("delegate advertises external disclosure and mutation accurately", asy
   }
 });
 
-Deno.test("delegate returns one compact answer while retaining internal ACP updates", async () => {
+Deno.test("run_task returns one compact answer while retaining internal ACP updates", async () => {
   const { manager, server, mcp, closedChildren } = await harness("raw");
   let observed: Array<{ kind: string; raw: unknown }> = [];
   const close = manager.close.bind(manager);
@@ -94,9 +107,9 @@ Deno.test("delegate returns one compact answer while retaining internal ACP upda
     await close(id);
   };
   try {
-    const { response } = mcp.callTool("delegate", {
+    const { response } = mcp.callTool("run_task", {
       agentId: "raw",
-      prompt: "delegate isolation",
+      task: "delegate isolation",
     });
     const wire = await response as { result?: Record<string, unknown> };
     const serialized = JSON.stringify(wire.result);
@@ -152,9 +165,9 @@ Deno.test("delegate returns one compact answer while retaining internal ACP upda
     if (manager.sessions.size !== 0) {
       throw new Error("Successful delegation leaked its session");
     }
-    const second = await mcp.callTool("delegate", {
+    const second = await mcp.callTool("run_task", {
       agentId: "raw",
-      prompt: "again",
+      task: "again",
     }).response;
     if (
       parseToolResult(second).status !== "completed" ||
@@ -176,9 +189,9 @@ Deno.test("delegate returns one compact answer while retaining internal ACP upda
 Deno.test("operator delegation returns a minimal handoff and expires its lease", async () => {
   const { manager, server, mcp, closedChildren } = await harness();
   try {
-    const reply = await mcp.callTool("delegate", {
+    const reply = await mcp.callTool("run_task", {
       agentId: "fake",
-      prompt: "operator delegate",
+      task: "operator delegate",
       permissionPolicy: "operator",
       timeoutMs: 70,
     }).response;
@@ -226,9 +239,9 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
       throw new Error("Permission resolution succeeded after lease expiry");
     }
     const continuation = parseToolResult(
-      await mcp.callTool("delegate", {
+      await mcp.callTool("run_task", {
         agentId: "fake",
-        prompt: "operator delegate",
+        task: "operator delegate",
         permissionPolicy: "operator",
         timeoutMs: 70,
       }).response,
@@ -260,9 +273,9 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
     if (manager.sessions.has(String(continuation.sessionId))) {
       throw new Error("Manual continuation close failed");
     }
-    const subsequent = await mcp.callTool("delegate", {
+    const subsequent = await mcp.callTool("run_task", {
       agentId: "fake",
-      prompt: "hello",
+      task: "hello",
     }).response;
     if (parseToolResult(subsequent).status !== "completed") {
       throw new Error("Server unusable after lease expiry");
@@ -278,19 +291,19 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
   }
 });
 
-Deno.test("delegate applies allow_all only when requested and defaults to read_only", async () => {
+Deno.test("run_task applies allow_all only when requested and defaults to read_only", async () => {
   const { manager, server, mcp, closedChildren } = await harness();
   try {
-    const denied = await mcp.callTool("delegate", {
+    const denied = await mcp.callTool("run_task", {
       agentId: "fake",
-      prompt: "permission",
+      task: "permission",
     }).response;
     if (parseToolResult(denied).response !== "reject") {
       throw new Error("Default read_only policy changed");
     }
-    const allowed = await mcp.callTool("delegate", {
+    const allowed = await mcp.callTool("run_task", {
       agentId: "fake",
-      prompt: "permission",
+      task: "permission",
       permissionPolicy: "allow_all",
     }).response;
     if (parseToolResult(allowed).response !== "allow") {
@@ -307,13 +320,13 @@ Deno.test("delegate applies allow_all only when requested and defaults to read_o
   }
 });
 
-Deno.test("delegate timeout, MCP cancellation, prompt failure, process exit, and empty output clean up", async () => {
+Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and empty output clean up", async () => {
   const { manager, server, mcp, closedChildren, closedStderr } =
     await harness();
   try {
-    const timed = await mcp.callTool("delegate", {
+    const timed = await mcp.callTool("run_task", {
       agentId: "fake",
-      prompt: "wait",
+      task: "wait",
       timeoutMs: 40,
     }).response;
     if (
@@ -321,9 +334,9 @@ Deno.test("delegate timeout, MCP cancellation, prompt failure, process exit, and
     ) {
       throw new Error("Timeout did not return compactly and clean up");
     }
-    const cancelled = mcp.callTool("delegate", {
+    const cancelled = mcp.callTool("run_task", {
       agentId: "fake",
-      prompt: "wait",
+      task: "wait",
       timeoutMs: 5000,
     });
     for (let i = 0; i < 100 && manager.sessions.size === 0; i++) {
@@ -342,7 +355,10 @@ Deno.test("delegate timeout, MCP cancellation, prompt failure, process exit, and
     for (
       const prompt of ["prompt failure", "process crash", "empty response"]
     ) {
-      const reply = await mcp.callTool("delegate", { agentId: "fake", prompt })
+      const reply = await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: prompt,
+      })
         .response;
       const result = parseToolResult(reply);
       if (
@@ -361,9 +377,9 @@ Deno.test("delegate timeout, MCP cancellation, prompt failure, process exit, and
         throw new Error(`Session leaked after '${prompt}'`);
       }
     }
-    const next = await mcp.callTool("delegate", {
+    const next = await mcp.callTool("run_task", {
       agentId: "fake",
-      prompt: "hello",
+      task: "hello",
     }).response;
     if (parseToolResult(next).status !== "completed") {
       throw new Error("Server unusable after failure cleanup");

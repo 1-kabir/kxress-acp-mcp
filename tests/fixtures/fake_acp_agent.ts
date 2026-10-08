@@ -1,10 +1,25 @@
-import { agent, ndJsonStream } from "@agentclientprotocol/sdk";
+import {
+  agent,
+  ndJsonStream,
+  type SessionConfigOption,
+} from "@agentclientprotocol/sdk";
 
 const app = agent({ name: "fake-acp-agent" });
 const cancelled = new Set<string>();
+let booleanOptionsSupported = false;
+let activeConfigOptions: SessionConfigOption[] = [];
 app.onRequest(
   "initialize",
-  () => ({ protocolVersion: 1, agentCapabilities: { loadSession: true } }),
+  ({ params }) => {
+    const capabilities = (params as {
+      clientCapabilities?: {
+        session?: { configOptions?: { boolean?: unknown } };
+      };
+    }).clientCapabilities;
+    booleanOptionsSupported =
+      capabilities?.session?.configOptions?.boolean !== undefined;
+    return { protocolVersion: 1, agentCapabilities: { loadSession: true } };
+  },
 );
 app.onRequest("session/new", () => {
   const delayArgument = Deno.args.find((arg) =>
@@ -22,46 +37,78 @@ app.onRequest("session/new", () => {
   if (Deno.args.includes("--session-fail")) {
     throw new Error("fixture session creation failed");
   }
-  const configOptions = Deno.args.includes("--advertise-models")
-    ? [
-      {
-        id: "engine-selector",
-        name: "Engine",
-        category: "model",
-        type: "select" as const,
-        currentValue: "opencode/fledge-alpha-free",
-        options: [
-          {
-            value: "opencode/fledge-alpha-free",
-            name: "opencode/Fledge Alpha Free",
-          },
-          { value: "opencode/paid-model", name: "Paid Model" },
-          {
-            value: "opencode/available-without-metadata",
-            name: "Unmatched ACP Model",
-          },
-        ],
-      },
-      {
-        id: "backend-choice",
-        name: "Backend model",
-        type: "select" as const,
-        currentValue: "local/model-z",
-        options: [{ value: "local/model-z", name: "Local Model Z" }],
-      },
-      {
-        id: "mode",
-        name: "Mode",
-        category: "mode",
-        type: "select" as const,
-        currentValue: "hidden/model",
-        options: [{ value: "hidden/model", name: "Not a model" }],
-      },
-    ]
-    : [];
+  const configOptions: SessionConfigOption[] =
+    Deno.args.includes("--advertise-models")
+      ? [
+        {
+          id: "engine-selector",
+          name: "Engine",
+          category: "model",
+          type: "select" as const,
+          currentValue: "opencode/fledge-alpha-free",
+          options: [
+            {
+              value: "opencode/fledge-alpha-free",
+              name: "opencode/Fledge Alpha Free",
+            },
+            { value: "opencode/paid-model", name: "Paid Model" },
+            {
+              value: "opencode/available-without-metadata",
+              name: "Unmatched ACP Model",
+            },
+          ],
+        },
+        {
+          id: "backend-choice",
+          name: "Backend model",
+          type: "select" as const,
+          currentValue: "local/model-z",
+          options: [{ value: "local/model-z", name: "Local Model Z" }],
+        },
+        {
+          id: "mode",
+          name: "Mode",
+          category: "mode",
+          type: "select" as const,
+          currentValue: "hidden/model",
+          options: [{ value: "hidden/model", name: "Not a model" }],
+        },
+      ]
+      : [];
+  if (Deno.args.includes("--advertise-bool")) {
+    if (!booleanOptionsSupported) {
+      throw new Error("Client did not advertise boolean config options");
+    }
+    configOptions.push({
+      id: "use-fast-mode",
+      name: "Fast mode",
+      category: "model_config",
+      type: "boolean",
+      currentValue: false,
+    });
+  }
+  activeConfigOptions = configOptions;
   return { sessionId: crypto.randomUUID(), configOptions };
 });
 app.onRequest("session/load", () => ({}));
+app.onRequest("session/set_config_option", ({ params }) => {
+  const { configId, type, value } = params as {
+    configId: string;
+    type?: string;
+    value: string | boolean;
+  };
+  if (configId === "use-fast-mode") {
+    if (type !== "boolean" || typeof value !== "boolean") {
+      throw new Error("Boolean option was not sent with ACP boolean semantics");
+    }
+    activeConfigOptions = activeConfigOptions.map((option) =>
+      option.id === configId
+        ? { ...option, currentValue: value } as SessionConfigOption
+        : option
+    );
+  }
+  return { configOptions: activeConfigOptions };
+});
 app.onRequest("session/prompt", async ({ params, client }) => {
   const sessionId = params.sessionId;
   const promptText = params.prompt.map((block) =>

@@ -212,3 +212,42 @@ Deno.test("loads a session when the fake agent advertises support", async () => 
     await manager.closeAll();
   }
 });
+
+Deno.test("advertises and uses ACP boolean configuration options", async () => {
+  const manager = new SessionManager({
+    bool: {
+      command: Deno.execPath(),
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-read",
+        "tests/fixtures/fake_acp_agent.ts",
+        "--advertise-bool",
+      ],
+    },
+  });
+  try {
+    const session = await manager.start("bool", Deno.cwd(), {
+      "use-fast-mode": "true",
+    });
+    const fastMode = session.configOptions.find((option) =>
+      option.id === "use-fast-mode"
+    );
+    if (fastMode?.currentValue !== true) {
+      throw new Error("String config value was not sent as an ACP boolean");
+    }
+    const updated = await manager.setConfigOption(
+      session.id,
+      "use-fast-mode",
+      "false",
+    );
+    if (
+      updated.find((option) => option.id === "use-fast-mode")?.currentValue !==
+        false
+    ) {
+      throw new Error("Interactive boolean config update did not reach ACP");
+    }
+  } finally {
+    await manager.closeAll();
+  }
+});
