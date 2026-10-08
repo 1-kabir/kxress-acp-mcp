@@ -62,6 +62,12 @@ Configured agents run with the current user's OS permissions. The bridge does
 not sandbox subprocesses. ACP permission policy controls permission responses;
 `read_only` is the default and does not provide OS-level isolation.
 
+The `delegate` tool may send its task and repository content read by the ACP
+agent to that agent's configured model provider. `read_only` only controls how
+the bridge responds to ACP permission requests; it does not keep repository data
+local, restrict network access, or sandbox the child process. Codex and other
+MCP hosts continue to apply their own approval and security policies.
+
 Tools include `delegate`, `discover_models`, `list_agents`, `start_session`,
 `load_session`, `get_session`, `prompt`, `get_events`, `cancel_prompt`,
 `resolve_permission`, `set_config_option`, `set_mode`, `list_sessions`, and
@@ -93,12 +99,37 @@ repository exploration, and other subagent tasks. It runs one prompt in an
 internal ACP session, waits up to 120 seconds (configurable to 10 minutes),
 returns only the final assistant text and stop reason, then closes the session.
 Internal ACP activity remains inside `acp-mcp`; the MCP caller receives only the
-result returned by `delegate`. The permission policy defaults to `read_only`;
-request `allow_all` explicitly when needed. With `operator`, a permission
-request returns a `permission_required` result containing the managed session
-and permission IDs, advertised choices, and lease duration. Resolve it with
-`resolve_permission` and use low-level tools to continue or close that session.
-Unused permission continuations close when the lease expires.
+result returned by `delegate`. The task and files the delegated agent reads may
+be sent to its configured model provider. The permission policy defaults to
+`read_only`; this controls ACP permission responses, not data locality or OS
+isolation. Request `allow_all` explicitly when needed. With `operator`, a
+permission request returns a `permission_required` result containing the managed
+session and permission IDs, advertised choices, and lease duration. Resolve it
+with `resolve_permission` and use low-level tools to continue or close that
+session. Unused permission continuations close when the lease expires.
+
+### Implementation planning
+
+For repository planning, let the delegated agent inspect the checkout itself:
+
+1. Use a known advertised model ID directly, or call `discover_models` when you
+   need to validate available choices.
+2. Call `delegate` with the checkout as `cwd` and concise task instructions. Ask
+   the agent to inspect the repository; do not first read files in Codex and
+   paste their contents into the task unless you intend to share them.
+3. Review the host's approval prompt for the external ACP call and approve that
+   invocation if appropriate.
+4. Use the compact plan returned by `delegate` to guide implementation.
+
+In Codex, a per-invocation prompt for this tool can be enabled with:
+
+```powershell
+codex --ask-for-approval on-request -c 'mcp_servers.acp_mcp.tools.delegate.approval_mode="prompt"'
+```
+
+This is a temporary command-line override. It does not persist an approval
+setting; Codex still asks before running the tool. The host's confirmation
+screen is the approval boundary. `acp-mcp` does not bypass or replace it.
 
 Use the low-level session tools for multi-turn sessions, event inspection,
 manual permission handling, long-running asynchronous work, debugging, and

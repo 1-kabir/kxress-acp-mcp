@@ -32,6 +32,9 @@ export async function connectMcp(server: McpServer) {
     method: "notifications/initialized",
   } as never);
   return {
+    listTools() {
+      return request("tools/list");
+    },
     callTool(name: string, args: Record<string, unknown>) {
       return request("tools/call", { name, arguments: args });
     },

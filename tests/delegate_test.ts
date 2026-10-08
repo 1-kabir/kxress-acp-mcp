@@ -38,6 +38,53 @@ async function harness(agentId: "raw" | "fake" = "fake") {
   return { manager, server, mcp, closedChildren, closedStderr };
 }
 
+Deno.test("delegate advertises external disclosure and mutation accurately", async () => {
+  const { manager, server, mcp } = await harness();
+  try {
+    const reply = await mcp.listTools().response as {
+      result?: { tools?: Array<Record<string, unknown>> };
+    };
+    const tool = reply.result?.tools?.find((item) => item.name === "delegate");
+    if (!tool) throw new Error("delegate tool was not advertised");
+    const annotations = tool.annotations as Record<string, unknown>;
+    if (
+      annotations.readOnlyHint !== false ||
+      annotations.destructiveHint !== true ||
+      annotations.idempotentHint !== false ||
+      annotations.openWorldHint !== true
+    ) {
+      throw new Error(
+        `Inaccurate delegate annotations: ${JSON.stringify(annotations)}`,
+      );
+    }
+    const description = String(tool.description);
+    for (
+      const phrase of [
+        "may be sent to its configured model provider",
+        "does not prevent external data disclosure",
+        "Host approval policies still apply",
+      ]
+    ) {
+      if (!description.includes(phrase)) {
+        throw new Error(`delegate description omitted: ${phrase}`);
+      }
+    }
+    const schema = tool.inputSchema as {
+      properties?: Record<string, { description?: string }>;
+    };
+    const policyDescription = schema.properties?.permissionPolicy?.description;
+    if (!policyDescription?.includes("does not sandbox")) {
+      throw new Error(
+        "permissionPolicy description conflates permission and isolation",
+      );
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
 Deno.test("delegate returns one compact answer while retaining internal ACP updates", async () => {
   const { manager, server, mcp, closedChildren } = await harness("raw");
   let observed: Array<{ kind: string; raw: unknown }> = [];

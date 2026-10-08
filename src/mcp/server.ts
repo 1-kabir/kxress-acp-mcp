@@ -101,20 +101,37 @@ export function createMcpServer(
     "delegate",
     {
       description:
-        "Run a one-shot ACP delegation and return only its final answer",
+        "Run a one-shot task in an ACP agent and return only its final answer. The task and any repository content the agent reads may be sent to its configured model provider. permissionPolicy controls ACP permission responses; it does not prevent external data disclosure or sandbox the agent process. Host approval policies still apply.",
+      annotations: {
+        title: "Delegate to ACP agent",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
       inputSchema: {
-        agentId: z.string(),
-        prompt: z.string(),
-        cwd: z.string().optional(),
-        config: z.record(z.string(), z.string()).optional(),
+        agentId: z.string().describe("Configured ACP agent to run"),
+        prompt: z.string().describe(
+          "Task instructions. Repository context is read by the ACP agent; do not include file contents unless intended for its model provider.",
+        ),
+        cwd: z.string().optional().describe(
+          "Working directory the ACP agent may inspect. Files it reads may be sent to its configured model provider.",
+        ),
+        config: z.record(z.string(), z.string()).optional().describe(
+          "Generic ACP configuration options, such as a model ID",
+        ),
         modeId: z.string().optional(),
         permissionPolicy: z.enum([
           "read_only",
           "operator",
           "allow_all",
           "deny_all",
-        ]).optional(),
-        timeoutMs: z.number().int().min(1).max(600000).optional(),
+        ]).optional().describe(
+          "ACP permission response policy (defaults to read_only); this does not sandbox the process or keep data local",
+        ),
+        timeoutMs: z.number().int().min(1).max(600000).optional().describe(
+          "Maximum delegation duration in milliseconds (defaults to 120000)",
+        ),
       },
     },
     async (
