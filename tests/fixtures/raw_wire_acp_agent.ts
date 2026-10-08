@@ -25,6 +25,9 @@ async function handle(line: string) {
     result = { sessionId: crypto.randomUUID() };
   } else if (message.method === "session/prompt") {
     const sessionId = message.params?.sessionId;
+    const prompt =
+      (message.params?.prompt as Array<{ text?: string }> | undefined)
+        ?.map((part) => part.text ?? "").join("") ?? "";
     if (typeof sessionId === "string") {
       const raw = (
         sessionUpdate: unknown,
@@ -39,27 +42,88 @@ async function handle(line: string) {
           ...extra,
         },
       });
-      await write(raw({
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "raw " },
-      }, { ordinal: 1 }));
-      await write(
-        raw({ sessionUpdate: "future_update", detail: { retained: true } }, {
-          ordinal: 2,
-        }),
-      );
-      await write({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "reply" },
+      if (prompt === "delegate isolation") {
+        const large = "INTERNAL_THOUGHT_MARKER " + "x".repeat(12000);
+        const updates = [
+          {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [{
+              name: "scan",
+              description: "INTERNAL_TOOL_MARKER " + "y".repeat(8000),
+            }],
           },
-          _meta: { fixture: "raw-wire", ordinal: 3 },
-        },
-      });
+          {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: large },
+          },
+          {
+            sessionUpdate: "tool_call",
+            toolCallId: "internal-call",
+            title: "INTERNAL_TOOL_MARKER " + "z".repeat(8000),
+            kind: "read",
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "internal-call",
+            content: [{
+              type: "content",
+              content: {
+                type: "text",
+                text: "TOOL_HISTORY_MARKER " + "q".repeat(8000),
+              },
+            }],
+          },
+          {
+            sessionUpdate: "usage_update",
+            size: { inputTokens: 654321, outputTokens: 123456 },
+          },
+          {
+            sessionUpdate: "future_update",
+            detail: {
+              marker: "UNKNOWN_EVENT_MARKER",
+              payload: "r".repeat(12000),
+            },
+          },
+          {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Delegation " },
+          },
+          {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "complete." },
+          },
+        ];
+        for (const [index, update] of updates.entries()) {
+          await write(
+            raw(update, {
+              ordinal: index + 1,
+              payloadMarker: `RAW_PARAMS_MARKER_${index + 1}`,
+            }),
+          );
+        }
+      } else {
+        await write(raw({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "raw " },
+        }, { ordinal: 1 }));
+        await write(
+          raw({ sessionUpdate: "future_update", detail: { retained: true } }, {
+            ordinal: 2,
+          }),
+        );
+        await write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "reply" },
+            },
+            _meta: { fixture: "raw-wire", ordinal: 3 },
+          },
+        });
+      }
       await write({
         jsonrpc: "2.0",
         method: "session/update",

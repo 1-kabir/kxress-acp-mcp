@@ -62,8 +62,8 @@ Configured agents run with the current user's OS permissions. The bridge does
 not sandbox subprocesses. ACP permission policy controls permission responses;
 `read_only` is the default and does not provide OS-level isolation.
 
-Tools include `list_agents`, `start_session`, `load_session`, `get_session`,
-`prompt`, `get_events`, `cancel_prompt`, `resolve_permission`,
+Tools include `delegate`, `list_agents`, `start_session`, `load_session`,
+`get_session`, `prompt`, `get_events`, `cancel_prompt`, `resolve_permission`,
 `set_config_option`, `set_mode`, `list_sessions`, and `close_session`. A prompt
 call accepts `wait` and `waitMs`; if it is still running at the wait limit, the
 response includes its prompt ID. Use `get_events` with the session ID and
@@ -87,6 +87,27 @@ child process.
 `load_session` starts a fresh agent process and calls `session/load` only when
 the agent advertises that capability. Supply the original absolute working
 directory along with the ACP session ID.
+
+Use `delegate` for one-shot planning, research, review, second opinions,
+repository exploration, and other subagent tasks. It runs one prompt in an
+internal ACP session, waits up to 120 seconds (configurable to 10 minutes),
+returns only the final assistant text and stop reason, then closes the session.
+Internal ACP activity remains inside `acp-mcp`; the MCP caller receives only the
+result returned by `delegate`. The permission policy defaults to `read_only`;
+request `allow_all` explicitly when needed. With `operator`, a permission
+request returns a `permission_required` result containing the managed session
+and permission IDs, advertised choices, and lease duration. Resolve it with
+`resolve_permission` and use low-level tools to continue or close that session.
+Unused permission continuations close when the lease expires.
+
+Use the low-level session tools for multi-turn sessions, event inspection,
+manual permission handling, long-running asynchronous work, debugging, and
+advanced orchestration. `start_session` and `prompt` preserve session state;
+`get_events` exposes buffered updates on request; `cancel_prompt` sends ACP
+cancellation.
+
+ACP activity and event journals remain server-side unless a tool explicitly
+returns them (for example, `get_events`).
 
 Sessions and event journals are held in memory by the `acp-mcp` process. A
 server restart loses this bridge state. Loading an existing ACP session depends

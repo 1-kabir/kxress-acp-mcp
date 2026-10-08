@@ -25,6 +25,7 @@ export interface ManagedSession {
   droppedThrough: number;
   permissionPolicy: PermissionPolicy;
   pendingPermissions: Map<string, PendingPermission>;
+  permissionLease?: ReturnType<typeof setTimeout>;
 }
 
 export interface SessionEvent {
@@ -517,11 +518,15 @@ export class SessionManager {
     }
     pending.resolve({ outcome: { outcome: "selected", optionId } });
     session.pendingPermissions.delete(permissionId);
+    if (session.permissionLease) clearTimeout(session.permissionLease);
+    session.permissionLease = undefined;
     return { permissionId, optionId, resolved: true };
   }
 
   async close(id: string): Promise<void> {
     const session = this.get(id);
+    if (session.permissionLease) clearTimeout(session.permissionLease);
+    session.permissionLease = undefined;
     for (const pending of session.pendingPermissions.values()) {
       pending.resolve({ outcome: { outcome: "cancelled" } });
     }

@@ -69,6 +69,151 @@ export function createMcpServer(agents: AgentMap, manager: SessionManager) {
       return { isError: true, content: [{ type: "text", text: String(e) }] };
     }
   });
+  server.registerTool(
+    "delegate",
+    {
+      description:
+        "Run a one-shot ACP delegation and return only its final answer",
+      inputSchema: {
+        agentId: z.string(),
+        prompt: z.string(),
+        cwd: z.string().optional(),
+        config: z.record(z.string(), z.string()).optional(),
+        modeId: z.string().optional(),
+        permissionPolicy: z.enum([
+          "read_only",
+          "operator",
+          "allow_all",
+          "deny_all",
+        ]).optional(),
+        timeoutMs: z.number().int().min(1).max(600000).optional(),
+      },
+    },
+    async (
+      {
+        agentId,
+        prompt: text,
+        cwd,
+        config,
+        modeId,
+        permissionPolicy = "read_only",
+        timeoutMs = 120000,
+      },
+      extra,
+    ) => {
+      let sessionId: string | undefined;
+      let closed = false;
+      const close = async () => {
+        if (!sessionId || closed) return;
+        closed = true;
+        try {
+          await manager.close(sessionId);
+        } catch { /* already closed */ }
+      };
+      try {
+        const session = await manager.start(
+          agentId,
+          cwd,
+          config,
+          modeId,
+          permissionPolicy,
+        );
+        sessionId = session.id;
+        const promptRecord = manager.beginPrompt(session.id, text);
+        const deadline = Date.now() + timeoutMs;
+        while (promptRecord.state === "running") {
+          const signal = extra.mcpReq.signal;
+          if (signal?.aborted) {
+            await manager.cancelPrompt(session.id, promptRecord.id);
+            await close();
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ status: "failed" }),
+              }],
+            };
+          }
+          if (Date.now() >= deadline) {
+            await manager.cancelPrompt(session.id, promptRecord.id);
+            await close();
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ status: "timed_out" }),
+              }],
+            };
+          }
+          if (
+            permissionPolicy === "operator" && session.pendingPermissions.size
+          ) {
+            const pending = [...session.pendingPermissions.values()][0];
+            const call = pending.toolCall as Record<string, unknown> | null;
+            const action = call && typeof call === "object"
+              ? Object.fromEntries(
+                ["kind", "title", "name"].flatMap((key) =>
+                  typeof call[key] === "string" ? [[key, call[key]]] : []
+                ),
+              )
+              : {};
+            session.permissionLease = setTimeout(() => {
+              session.permissionLease = undefined;
+              void close();
+            }, timeoutMs);
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({
+                  status: "permission_required",
+                  sessionId,
+                  permissionId: pending.id,
+                  leaseTimeoutMs: timeoutMs,
+                  action,
+                  choices: pending.options,
+                }),
+              }],
+            };
+          }
+          await Promise.race([
+            promptRecord.done,
+            new Promise((resolve) => setTimeout(resolve, 20)),
+          ]);
+        }
+        if (promptRecord.state === "completed") {
+          if (!promptRecord.text.trim()) {
+            await close();
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ status: "failed" }),
+              }],
+            };
+          }
+          const result = {
+            status: "completed",
+            response: promptRecord.text,
+            stopReason: promptRecord.stopReason,
+          };
+          await close();
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        }
+        await close();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ status: "failed" }),
+          }],
+        };
+      } catch {
+        await close();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ status: "failed" }),
+          }],
+        };
+      }
+    },
+  );
   server.registerTool("load_session", {
     description:
       "Load an existing ACP session when the agent advertises session/load support",
