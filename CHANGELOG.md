@@ -18,6 +18,9 @@
 
 ### Added
 
+- Add an operator-run local release workflow that validates, builds,
+  smoke-tests, packages, checksums, and installs the native executable without
+  hosted release infrastructure.
 - Require explicitly selected config files to exist and report invalid known
   agent fields with actionable, secret-safe errors.
 - Bound ACP initialization, session creation, and startup configuration to 30

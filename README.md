@@ -6,18 +6,46 @@ Claude Agent ACP; JSON configuration can define or override local ACP commands.
 
 ## Install and run
 
-The product entrypoint is a self-contained native executable. Maintainers build
-it for the current OS with the repository-pinned Deno toolchain:
+The product entrypoint is a self-contained native executable. End users need no
+source checkout, Deno, or mise. Maintainers can prepare a validated local
+release with the repository-pinned Deno toolchain:
+
+```powershell
+mise exec -- deno task release
+```
+
+This runs the offline checks, builds and smoke-tests the native executable
+outside the checkout, then writes a versioned artifact, SHA-256 checksum, and
+JSON manifest under `dist/releases/`. The manifest records the product version,
+target, source commit, and artifact hash. SHA-256 lets you compare bytes with a
+known checksum; it does not establish publisher identity. Artifacts are local
+and are not published automatically.
+
+To install or update the validated Windows artifact, use:
+
+```powershell
+mise exec -- deno task install --release-dir dist/releases/acp-mcp-0.2.0-windows-x86_64
+```
+
+By default, installation targets `%LOCALAPPDATA%\Programs\acp-mcp\acp-mcp.exe`.
+Override the destination with `--destination C:\Tools\acp-mcp\acp-mcp.exe`. The
+installer verifies the manifest and checksum, then verifies the installed hash
+and version. It does not change user configuration, `PATH`, or MCP host
+registration. Close programs using the executable before updating it.
+
+Windows x86_64 is the currently validated release target. A target is supported
+only after a native build, outside-checkout smoke test, and packaging run on
+that target. Other platforms are not currently claimed as release targets.
+
+For development, maintainers can still build without packaging:
 
 ```powershell
 mise exec -- deno task build
 ```
 
-On Windows this creates `dist\acp-mcp.exe`. Copy that executable to a
-user-controlled directory on `PATH`, for example
-`%LOCALAPPDATA%\Programs\acp-mcp\acp-mcp.exe`. The executable bundles its
-runtime; end users do not need Deno or mise. Build on each target OS to produce
-its native executable.
+On Windows this creates `dist\acp-mcp.exe`; it is a checkout build artifact, not
+a stable installed location. To install a separately validated artifact, use the
+local install task above. The executable bundles its runtime.
 
 Running `acp-mcp` starts the MCP stdio server. Use `acp-mcp --help` for the
 small command-line interface or `acp-mcp --version` for its version. Run
