@@ -4,37 +4,58 @@ A stdio MCP server that starts one ACP agent process per managed session. The
 first slice supports OpenCode by default and arbitrary local ACP executables
 through JSON configuration.
 
-## Run
+## Install and run
 
-Install mise and run the repository-managed Deno 2.9.6 directly:
+The product entrypoint is a self-contained native executable. Maintainers build
+it for the current OS with the repository-pinned Deno toolchain:
 
 ```powershell
-mise exec -- deno task start
+mise exec -- deno task build
 ```
 
-The server is a stdio MCP process launched by its host, not a permanent OS
-daemon. MCP protocol traffic goes to stdout; diagnostics go to stderr. The
-server closes managed ACP sessions when its host closes stdin or sends SIGINT.
+On Windows this creates `dist\acp-mcp.exe`. Copy that executable to a
+user-controlled directory on `PATH`, for example
+`%LOCALAPPDATA%\Programs\acp-mcp\acp-mcp.exe`. The executable bundles its
+runtime; end users do not need Deno or mise. Build on each target OS to produce
+its native executable.
+
+Running `acp-mcp` starts the MCP stdio server. Use `acp-mcp --help` for the
+small command-line interface or `acp-mcp --version` for its version. MCP
+protocol traffic stays on stdout; startup errors go to stderr. The server closes
+managed ACP sessions when its host closes stdin or sends SIGINT.
+
+The default user configuration is `%APPDATA%\acp-mcp\config.json` on Windows and
+`$XDG_CONFIG_HOME/acp-mcp/config.json` or `~/.config/acp-mcp/config.json`
+elsewhere. An MCP host can launch the installed command directly:
 
 ### Codex registration
 
-Register the server with the Codex CLI, replacing the checkout path if needed:
+Register the executable with the Codex CLI:
 
 ```powershell
-codex mcp add acp_mcp -- mise exec -C D:\repos\acp-mcp -- deno task start
+codex mcp add acp_mcp -- acp-mcp
 ```
 
 This adds a global stdio entry to Codex's `config.toml` and leaves other MCP
-servers intact. The tested entry is equivalent to:
+servers intact. The entry is equivalent to:
 
 ```toml
 [mcp_servers.acp_mcp]
-command = "mise"
-args = ["exec", "-C", "D:\\repos\\acp-mcp", "--", "deno", "task", "start"]
+command = "acp-mcp"
+args = []
 ```
 
-Codex starts the server on demand. If `mise` is not on Codex's PATH, use its
-absolute executable path for `command`.
+Codex starts the server on demand. If the install directory is not on the host's
+PATH, set `command` to the absolute executable path. Pass `--config <path>` in
+`args` to use an explicit acp-mcp config file.
+
+### Repository development
+
+The Deno tasks are for maintainers working from a source checkout: `build`
+produces the standalone executable, `check` and `test` validate the source, and
+`compat <agent>` explicitly runs provider-backed live compatibility tests. The
+planning scripts under `scripts/` are source-checkout utilities, not installed
+product commands.
 
 The default profile launches `opencode acp`; authenticate separately with
 `opencode auth login`.

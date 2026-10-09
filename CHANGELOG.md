@@ -18,6 +18,9 @@
 
 ### Added
 
+- Establish a standalone `acp-mcp` executable as the product entrypoint. With no
+  CLI option it starts the MCP stdio server; help, version, and explicit config
+  selection are handled before server startup.
 - Add MCP tools to inspect stale disposable planning workspaces and explicitly
   delete eligible workspaces through the shared ownership- and age-checked
   cleanup implementation. The tools report workspace IDs rather than accepting

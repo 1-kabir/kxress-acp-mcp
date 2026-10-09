@@ -16,6 +16,7 @@ import {
 } from "../models/opencode_catalog.ts";
 import { SessionManager } from "../sessions/manager.ts";
 import { cleanupStaleWorkspaceSnapshots } from "../workspaces/stale_cleanup.ts";
+import { VERSION } from "../version.ts";
 
 type McpServerOptions = {
   loadOpenCodeCatalog?: (signal: AbortSignal) => Promise<OpenCodeCatalog>;
@@ -103,7 +104,7 @@ export function createMcpServer(
   manager: SessionManager,
   options: McpServerOptions = {},
 ) {
-  const server = new McpServer({ name: "acp-mcp", version: "0.2.0" });
+  const server = new McpServer({ name: "acp-mcp", version: VERSION });
   const loadOpenCodeCatalog = options.loadOpenCodeCatalog ??
     ((signal) => fetchOpenCodeCatalog(signal));
   const failureClassifiers = {
