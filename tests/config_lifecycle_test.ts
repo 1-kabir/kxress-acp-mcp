@@ -121,3 +121,36 @@ Deno.test("known config fields fail with safe actionable validation errors", asy
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("config validation never serializes an environment value", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-config-canary-" });
+  const path = `${dir}${Deno.build.os === "windows" ? "\\" : "/"}config.json`;
+  const canary = `ACP_MCP_CONFIG_CANARY_${crypto.randomUUID()}`;
+  try {
+    await Deno.writeTextFile(
+      path,
+      JSON.stringify({
+        agents: {
+          custom: {
+            command: "agent",
+            args: [],
+            env: { API_TOKEN: canary },
+            acpProtocol: "v3",
+          },
+        },
+      }),
+    );
+    let message = "";
+    try {
+      await loadAgents(path);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    if (
+      !message.includes("acpProtocol must be 'v1' or 'v2'") ||
+      message.includes(canary)
+    ) throw new Error("Config validation exposed an environment value");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

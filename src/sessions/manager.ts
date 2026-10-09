@@ -247,7 +247,7 @@ export class SessionManager {
       throw new Error(
         `Could not start ${agentId}: ${
           error instanceof Error ? error.message : String(error)
-        }; ${process.stderrTail()}`,
+        }`,
       );
     } finally {
       if (startupTimer !== undefined) clearTimeout(startupTimer);

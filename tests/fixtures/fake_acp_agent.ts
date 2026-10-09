@@ -16,6 +16,9 @@ app.onRequest(
     if (pidFile) {
       Deno.writeTextFile(pidFile.slice("--pid-file=".length), String(Deno.pid));
     }
+    if (Deno.args.includes("--stderr-env-canary")) {
+      console.error(Deno.env.get("ACP_MCP_TEST_SECRET") ?? "missing-canary");
+    }
     if (Deno.args.includes("--initialize-exit")) Deno.exit(12);
     if (Deno.args.includes("--initialize-hang")) {
       return new Promise(() => {});

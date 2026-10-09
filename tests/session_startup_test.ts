@@ -102,6 +102,42 @@ Deno.test("missing launch command does not create a managed session", async () =
   }
 });
 
+Deno.test("startup stderr is not returned to MCP callers", async () => {
+  const canary = `ACP_MCP_TEST_SECRET_${crypto.randomUUID()}`;
+  const definition = {
+    command: Deno.execPath(),
+    args: [
+      "run",
+      "--allow-env",
+      "--allow-read",
+      "--allow-write",
+      absoluteFixturePath,
+      "--stderr-env-canary",
+      "--initialize-exit",
+    ],
+    env: { ACP_MCP_TEST_SECRET: canary },
+  };
+  const agents = { fake: definition };
+  const manager = new SessionManager(agents, 100);
+  const server = createMcpServer(agents, manager);
+  const mcp = await connectMcp(server);
+  try {
+    const reply = await mcp.callTool("start_session", { agentId: "fake" })
+      .response;
+    const serialized = JSON.stringify(reply);
+    if (
+      serialized.includes(canary) ||
+      !serialized.includes("Could not start fake") || manager.sessions.size
+    ) {
+      throw new Error("Startup error leaked child stderr or kept a session");
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
 Deno.test("run_task reports bounded startup timeout at session_start", async () => {
   const manager = managerFor(["--initialize-hang"], 40);
   const agents = {
