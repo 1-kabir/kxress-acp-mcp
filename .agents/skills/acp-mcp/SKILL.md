@@ -60,6 +60,9 @@ closes its managed ACP session. Internal ACP updates are not returned by
 default. Do not call `get_events` or poll session state for ordinary one-shot
 work.
 
+The requested `cwd` is used for both the ACP session and the launched agent
+process. Agent profiles do not override it.
+
 `run_task.idleTimeoutMs` limits how long the task's own ACP session can remain
 silent (default: 10 minutes). Any inbound session update resets the timer,
 including unknown future update variants. Do not increase it merely because a
@@ -145,7 +148,8 @@ submodule contents. Creation failure prevents execution; cleanup failure is
 included in the JSON result with the remaining path. The compact result shows
 the selected model, attempted/skipped candidates, classifications, response, and
 cleanup warnings. Direct `run_task` remains useful when isolation is not needed;
-it always executes in exactly the supplied `cwd`.
+it uses exactly the supplied `cwd` for both the ACP session and launched
+process.
 
 If a disposable workspace remains after a crash or reported cleanup failure, use
 `mise exec -- deno task workspace-cleanup` to inspect stale managed workspaces;
@@ -160,7 +164,7 @@ absolute paths, other directories, credentials, processes, and the network.
 policy. A snapshot is also not a secret-scanning boundary; only use it when the
 files selected by the inclusion rules are appropriate to send to the configured
 model provider. `run_task` itself always uses exactly the `cwd` supplied by its
-caller.
+caller for both the ACP session and launched process.
 
 ## Select models and other settings
 

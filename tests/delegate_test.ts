@@ -3,7 +3,7 @@ import { SessionManager } from "../src/sessions/manager.ts";
 import type { AgentFailureClassifiers } from "../src/agents/failure_classifiers.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
-function managerFor(agentId: "raw" | "fake" = "fake", cwd = Deno.cwd()) {
+function managerFor(agentId: "raw" | "fake" = "fake") {
   const fixturePath = new URL(
     `./fixtures/${
       agentId === "raw" ? "raw_wire_acp_agent" : "fake_acp_agent"
@@ -23,7 +23,6 @@ function managerFor(agentId: "raw" | "fake" = "fake", cwd = Deno.cwd()) {
         "--allow-write",
         absoluteFixturePath,
       ],
-      cwd,
     },
   });
 }
@@ -32,9 +31,8 @@ async function harness(
   agentId: "raw" | "fake" = "fake",
   failureClassifier?: string,
   failureClassifiers?: AgentFailureClassifiers,
-  agentCwd?: string,
 ) {
-  const manager = managerFor(agentId, agentCwd);
+  const manager = managerFor(agentId);
   const closedChildren: Promise<Deno.CommandStatus>[] = [];
   const closedStderr: Array<() => string> = [];
   const originalClose = manager.close.bind(manager);
@@ -541,9 +539,6 @@ Deno.test("read_only cannot stop a fake agent's direct process write", async () 
   const dir = await Deno.makeTempDir();
   const { manager, server, mcp, closedChildren } = await harness(
     "fake",
-    undefined,
-    undefined,
-    dir,
   );
   let eventKinds: string[] = [];
   const close = manager.close.bind(manager);

@@ -252,7 +252,8 @@ absolute paths, other directories, credentials, subprocesses, or the network.
 Review the copied files before sending repository context to a model provider.
 For low-level workflows, `scripts/planning_workspace.ts` exposes explicit
 snapshot `create` and `cleanup` actions. `run_task` itself remains a one-model
-primitive and always uses exactly its supplied `cwd`.
+primitive and uses exactly its supplied `cwd` for both the ACP session and
+launched process.
 
 #### Stale workspace cleanup
 
@@ -277,6 +278,10 @@ request cancellation still cancels the task immediately. For
 `permission_required` handoffs, `permissionLeaseMs` (default 2 minutes) controls
 how long the session remains available for operator resolution; after the
 handoff, that lease owns the session lifecycle.
+
+The `cwd` supplied to `run_task`, `start_session`, or `load_session` is used
+both as the ACP session working directory and as the launched agent process's
+working directory. Agent profiles cannot silently override it.
 
 ACP updates for the active session and ACP permission requests count as task
 activity. The bridge does not use arbitrary subprocess stderr as a heartbeat.

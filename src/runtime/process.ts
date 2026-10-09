@@ -96,7 +96,7 @@ export async function startAgent(definition: AgentDefinition, cwd: string) {
     : definition.env;
   const child = new Deno.Command(command, {
     args,
-    cwd: definition.cwd ?? cwd,
+    cwd,
     env,
     stdin: "piped",
     stdout: "piped",

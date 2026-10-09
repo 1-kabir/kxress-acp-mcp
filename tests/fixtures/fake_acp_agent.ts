@@ -22,7 +22,7 @@ app.onRequest(
     return { protocolVersion: 1, agentCapabilities: { loadSession: true } };
   },
 );
-app.onRequest("session/new", () => {
+app.onRequest("session/new", ({ params }) => {
   const delayArgument = Deno.args.find((arg) =>
     arg.startsWith("--session-delay-ms=")
   );
@@ -76,6 +76,18 @@ app.onRequest("session/new", () => {
         },
       ]
       : [];
+  if (Deno.args.includes("--report-cwd")) {
+    configOptions.push({
+      id: "cwd-report",
+      name: "cwd report",
+      type: "select",
+      currentValue: JSON.stringify({
+        processCwd: Deno.cwd(),
+        sessionCwd: (params as { cwd: string }).cwd,
+      }),
+      options: [],
+    });
+  }
   if (Deno.args.includes("--advertise-bool")) {
     if (!booleanOptionsSupported) {
       throw new Error("Client did not advertise boolean config options");

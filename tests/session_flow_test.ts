@@ -1,5 +1,40 @@
 import { SessionManager } from "../src/sessions/manager.ts";
 
+function fakeFixturePath() {
+  const path =
+    new URL("./fixtures/fake_acp_agent.ts", import.meta.url).pathname;
+  return Deno.build.os === "windows"
+    ? decodeURIComponent(path.replace(/^\//, ""))
+    : path;
+}
+
+Deno.test("requested cwd is shared by the ACP session and child process", async () => {
+  const cwd = await Deno.makeTempDir({ prefix: "acp-mcp-requested-cwd-" });
+  const manager = new SessionManager({
+    fake: {
+      command: Deno.execPath(),
+      args: ["run", "--allow-read", fakeFixturePath(), "--report-cwd"],
+    },
+  });
+  try {
+    const session = await manager.start("fake", cwd);
+    const report = JSON.parse(
+      String(
+        session.configOptions.find((option) => option.id === "cwd-report")
+          ?.currentValue,
+      ),
+    ) as { processCwd: string; sessionCwd: string };
+    if (report.processCwd !== cwd || report.sessionCwd !== cwd) {
+      throw new Error(
+        `Requested cwd diverged: ${JSON.stringify(report)}`,
+      );
+    }
+  } finally {
+    await manager.closeAll();
+    await Deno.remove(cwd, { recursive: true });
+  }
+});
+
 function rawFixtureManager() {
   return new SessionManager({
     raw: {

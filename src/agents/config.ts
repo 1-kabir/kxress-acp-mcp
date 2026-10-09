@@ -3,7 +3,6 @@ export interface AgentDefinition {
   args: string[];
   displayName?: string;
   installHint?: string;
-  cwd?: string;
   env?: Record<string, string>;
   modelConfigId?: string;
   modelEnrichment?: "opencode_catalog";
