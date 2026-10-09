@@ -18,6 +18,8 @@
 
 ### Added
 
+- Require explicitly selected config files to exist and report invalid known
+  agent fields with actionable, secret-safe errors.
 - Bound ACP initialization, session creation, and startup configuration to 30
   seconds. Closing cancels active prompts and bounds the ACP close request
   before process cleanup continues.

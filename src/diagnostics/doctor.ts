@@ -244,7 +244,7 @@ export async function diagnose(
     !checks.some((check) => check.id === "config" && check.status === "error")
   ) {
     try {
-      const agents = await dependencies.loadAgents(configPath);
+      const agents = await dependencies.loadAgents(options.configPath);
       checks.push(...await agentChecks(agents, dependencies));
     } catch {
       // The config check already reports the load failure without exposing values.

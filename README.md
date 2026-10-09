@@ -1,8 +1,8 @@
 # acp-mcp
 
-A stdio MCP server that starts one ACP agent process per managed session. The
-first slice supports OpenCode by default and arbitrary local ACP executables
-through JSON configuration.
+A generic stdio MCP server that starts one configured ACP agent process per
+managed session. Built-in profiles cover OpenCode, Codex ACP, Antigravity, and
+Claude Agent ACP; JSON configuration can define or override local ACP commands.
 
 ## Install and run
 
@@ -229,7 +229,10 @@ signed by Google LLC.
 
 Pass `--config <path>` to load an explicit JSON config. On Windows the default
 is `%APPDATA%\acp-mcp\config.json`; elsewhere it is
-`$XDG_CONFIG_HOME/acp-mcp/config.json` or `~/.config/acp-mcp/config.json`.
+`$XDG_CONFIG_HOME/acp-mcp/config.json` or `~/.config/acp-mcp/config.json`. When
+the default file is absent, built-in profiles remain available. An explicit
+`--config` path must exist and be a valid config; acp-mcp reports an error
+instead of silently using built-in defaults.
 
 ```json
 {
@@ -251,6 +254,12 @@ provide OS-level isolation. By default, `read_only` allows requested
 agent-reported `read`, `search`, `fetch`, and `think` kinds and rejects other
 requested kinds. ACP agents may perform actions without requesting permission,
 so `read_only` does not guarantee that a task cannot modify files.
+
+For a built-in profile, configured `command` and `args` replace its launch
+values. Configured `env` entries override same-named inherited or profile
+values; other parent environment variables remain inherited. The built-in
+profile's protocol metadata is retained, and `acpProtocol` selects its protocol
+explicitly.
 
 The `run_task` tool may send its task and repository content read by the ACP
 agent to that agent's configured model provider. `read_only` does not keep

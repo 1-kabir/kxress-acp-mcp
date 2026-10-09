@@ -6,8 +6,10 @@ import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
 Deno.test("built-in profiles describe ACP launch routes without vendor behavior", async () => {
   const dir = await Deno.makeTempDir();
+  const configPath = `${dir}/config.json`;
   try {
-    const agents = await loadAgents(`${dir}/missing-config.json`);
+    await Deno.writeTextFile(configPath, JSON.stringify({ agents: {} }));
+    const agents = await loadAgents(configPath);
     if (
       agents.opencode.command !== "opencode" ||
       JSON.stringify(agents.opencode.args) !== JSON.stringify(["acp"])
@@ -108,7 +110,7 @@ Deno.test("ACP protocol config defaults to v1 and rejects invalid values", async
     try {
       await loadAgents(configPath);
     } catch (error) {
-      rejected = String(error).includes("Invalid ACP protocol");
+      rejected = String(error).includes("acpProtocol must be 'v1' or 'v2'");
     }
     if (!rejected) throw new Error("Invalid ACP protocol was accepted");
   } finally {
@@ -208,7 +210,9 @@ Deno.test("list_agents reports command presence without implying authentication"
 
 Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures", async () => {
   const dir = await Deno.makeTempDir();
-  const agents = await loadAgents(`${dir}/missing-config.json`);
+  const configPath = `${dir}/config.json`;
+  await Deno.writeTextFile(configPath, JSON.stringify({ agents: {} }));
+  const agents = await loadAgents(configPath);
   const fixtureArgs = [
     "run",
     "--allow-env",

@@ -19,6 +19,30 @@ Deno.test({
       ) {
         throw new Error("Native version command failed");
       }
+      const help = await new Deno.Command(executable, {
+        args: ["--help"],
+        cwd,
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      if (
+        !help.success ||
+        !new TextDecoder().decode(help.stdout).includes(
+          "acp-mcp doctor [--config <path>] [--json]",
+        ) || help.stderr.length
+      ) throw new Error("Native help output did not match the CLI");
+
+      const unknown = await new Deno.Command(executable, {
+        args: ["unknown-command"],
+        cwd,
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      if (
+        unknown.code !== 2 || unknown.stdout.length ||
+        !new TextDecoder().decode(unknown.stderr).includes("Unknown command")
+      ) throw new Error("Native unknown-command behavior was incorrect");
+
       const doctor = await new Deno.Command(executable, {
         args: ["doctor", "--json"],
         cwd,
@@ -27,6 +51,26 @@ Deno.test({
       }).output();
       if (!doctor.success) throw new Error("Native offline doctor failed");
       JSON.parse(new TextDecoder().decode(doctor.stdout));
+
+      const missingConfig = `${cwd}${
+        Deno.build.os === "windows" ? "\\" : "/"
+      }missing config.json`;
+      const startupFailure = await new Deno.Command(executable, {
+        args: ["--config", missingConfig],
+        cwd,
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      const startupStdout = new TextDecoder().decode(startupFailure.stdout);
+      const startupStderr = new TextDecoder().decode(startupFailure.stderr);
+      if (
+        startupFailure.success || startupStdout !== "" ||
+        !startupStderr.includes("Explicit config file does not exist")
+      ) {
+        throw new Error(
+          "Explicit missing config did not fail clearly on stderr only",
+        );
+      }
 
       const child = new Deno.Command(executable, {
         cwd,

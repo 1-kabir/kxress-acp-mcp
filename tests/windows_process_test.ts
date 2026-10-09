@@ -1,4 +1,5 @@
 import {
+  findExecutablePath,
   quoteCmdStaticArgument,
   startAgent,
   stopAgent,
@@ -30,8 +31,10 @@ Deno.test({
   name: "configured batch wrapper preserves quoted static arguments",
   ignore: Deno.build.os !== "windows",
   fn: async () => {
-    const dir = await Deno.makeTempDir();
-    const script = `${dir}\\fixture.cmd`;
+    const root = await Deno.makeTempDir();
+    const dir = `${root}\\ACP Test With Spaces`;
+    await Deno.mkdir(dir);
+    const script = `${dir}\\fixture.BAT`;
     try {
       await Deno.writeTextFile(
         script,
@@ -49,7 +52,29 @@ Deno.test({
         );
       }
     } finally {
-      await Deno.remove(dir, { recursive: true });
+      await Deno.remove(root, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: "Windows executable resolver handles absolute paths with spaces",
+  ignore: Deno.build.os !== "windows",
+  fn: async () => {
+    const root = await Deno.makeTempDir();
+    const dir = `${root}\\ACP Test With Spaces`;
+    await Deno.mkdir(dir);
+    const executable = `${dir}\\fixture.ExE`;
+    try {
+      await Deno.writeTextFile(executable, "fixture");
+      const resolved = await findExecutablePath(executable);
+      if (resolved?.toLowerCase() !== executable.toLowerCase()) {
+        throw new Error(
+          `Absolute mixed-case executable was not resolved: ${resolved}`,
+        );
+      }
+    } finally {
+      await Deno.remove(root, { recursive: true });
     }
   },
 });

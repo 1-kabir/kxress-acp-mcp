@@ -429,7 +429,9 @@ Deno.test("ACP v1 protocol mismatch fails without retrying v2", async () => {
 
 Deno.test("ACP v2 model discovery normalizes exact advertised config IDs", async () => {
   const dir = await Deno.makeTempDir({ prefix: "acp-mcp-v2-models-" });
-  const agents = await loadAgents(`${dir}/missing-config.json`);
+  const configPath = `${dir}/config.json`;
+  await Deno.writeTextFile(configPath, JSON.stringify({ agents: {} }));
+  const agents = await loadAgents(configPath);
   agents.fake = {
     command: Deno.execPath(),
     args: ["run", "--allow-env", "--allow-read", fixturePath()],
