@@ -1,3 +1,5 @@
+import { VERSION } from "../src/version.ts";
+
 const executable = Deno.env.get("ACPMCP_NATIVE_EXECUTABLE");
 
 Deno.test({
@@ -7,6 +9,10 @@ Deno.test({
     if (!executable) throw new Error("Native executable path is required");
     const cwd = await Deno.makeTempDir({ prefix: "acp-mcp-native-smoke-" });
     try {
+      const configPath = `${cwd}${
+        Deno.build.os === "windows" ? "\\" : "/"
+      }release smoke config.json`;
+      await Deno.writeTextFile(configPath, JSON.stringify({ agents: {} }));
       const version = await new Deno.Command(executable, {
         args: ["--version"],
         cwd,
@@ -15,7 +21,7 @@ Deno.test({
       }).output();
       if (
         !version.success ||
-        !new TextDecoder().decode(version.stdout).includes("acp-mcp 0.2.0")
+        new TextDecoder().decode(version.stdout).trim() !== `acp-mcp ${VERSION}`
       ) {
         throw new Error("Native version command failed");
       }
@@ -49,8 +55,16 @@ Deno.test({
         stdout: "piped",
         stderr: "piped",
       }).output();
-      if (!doctor.success) throw new Error("Native offline doctor failed");
-      JSON.parse(new TextDecoder().decode(doctor.stdout));
+      const doctorReport = JSON.parse(
+        new TextDecoder().decode(doctor.stdout),
+      ) as { version?: string; status?: string; checks?: unknown[] };
+      if (
+        doctor.code !== 0 && doctor.code !== 1 ||
+        doctorReport.version !== VERSION ||
+        !["healthy", "warnings", "errors"].includes(
+          doctorReport.status ?? "",
+        ) || !Array.isArray(doctorReport.checks)
+      ) throw new Error("Native offline doctor output was invalid");
 
       const missingConfig = `${cwd}${
         Deno.build.os === "windows" ? "\\" : "/"
@@ -73,6 +87,7 @@ Deno.test({
       }
 
       const child = new Deno.Command(executable, {
+        args: ["--config", configPath],
         cwd,
         stdin: "piped",
         stdout: "piped",
