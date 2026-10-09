@@ -2,6 +2,7 @@ import {
   artifactName,
   assertCleanTreeStatus,
   checksumText,
+  ensureReleaseOutputRoot,
   installRelease,
   sha256Hex,
   targetId,
@@ -32,6 +33,56 @@ Deno.test("release refuses dirty trees and formats stable checksums", () => {
     checksumText(hash, "acp-mcp-test.exe") !==
       `${hash}  acp-mcp-test.exe\n`
   ) throw new Error("Dirty-tree/checksum contract was incorrect");
+});
+
+Deno.test("release output root rejects a symlink or junction", async () => {
+  const root = await Deno.makeTempDir({ prefix: "acp-mcp-release-root-" });
+  const outside = await Deno.makeTempDir({
+    prefix: "acp-mcp-release-outside-",
+  });
+  const releases = `${root}${Deno.build.os === "windows" ? "\\" : "/"}dist${
+    Deno.build.os === "windows" ? "\\" : "/"
+  }releases`;
+  try {
+    await ensureReleaseOutputRoot(root);
+    await Deno.remove(releases);
+    if (Deno.build.os === "windows") {
+      const linked = await new Deno.Command("powershell.exe", {
+        args: [
+          "-NoProfile",
+          "-Command",
+          "New-Item -ItemType Junction -Path $env:ACP_RELEASE_LINK -Target $env:ACP_RELEASE_TARGET | Out-Null",
+        ],
+        env: { ACP_RELEASE_LINK: releases, ACP_RELEASE_TARGET: outside },
+        stdin: "null",
+        stdout: "null",
+        stderr: "piped",
+      }).output();
+      if (!linked.success) {
+        throw new Error("Could not create release-root junction fixture");
+      }
+    } else {
+      await Deno.symlink(outside, releases, { type: "dir" });
+    }
+    let rejected = false;
+    try {
+      await ensureReleaseOutputRoot(root);
+    } catch (error) {
+      rejected = String(error).includes("plain directory");
+    }
+    if (!rejected) {
+      throw new Error("A linked release output root was accepted");
+    }
+    if ((await Array.fromAsync(Deno.readDir(outside))).length !== 0) {
+      throw new Error("Release root validation touched the external target");
+    }
+  } finally {
+    try {
+      await Deno.remove(releases);
+    } catch { /* link may not have been created */ }
+    await Deno.remove(root, { recursive: true });
+    await Deno.remove(outside, { recursive: true });
+  }
 });
 
 Deno.test("install verifies artifact bytes before atomically replacing destination", async () => {

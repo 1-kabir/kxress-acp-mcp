@@ -7,7 +7,6 @@ const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const windows = Deno.build.os === "windows";
 const executableName = `acp-mcp${windows ? ".exe" : ""}`;
 const buildPath = join(projectRoot, "dist", executableName);
-const releaseRoot = join(projectRoot, "dist", "releases");
 const optInTestVariables = [
   "ACPMCP_OPENCODE_TEST",
   "ACPMCP_CODEX_TEST",
@@ -52,6 +51,34 @@ export function assertCleanTreeStatus(status: string): void {
       "Local release requires a clean working tree (including untracked files). Commit or remove changes before packaging.",
     );
   }
+}
+
+/** Ensures release output stays in ordinary dist/releases directories. */
+export async function ensureReleaseOutputRoot(
+  projectRoot: string,
+): Promise<string> {
+  const expectedDist = resolve(projectRoot, "dist");
+  const expectedReleaseRoot = resolve(expectedDist, "releases");
+  const ensurePlainDirectory = async (path: string): Promise<void> => {
+    try {
+      await Deno.mkdir(path);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
+    }
+    const info = await Deno.lstat(path);
+    if (!info.isDirectory || info.isSymlink) {
+      throw new Error(`Release output path must be a plain directory: ${path}`);
+    }
+    const real = resolve(await Deno.realPath(path));
+    const normalize = (value: string) =>
+      Deno.build.os === "windows" ? value.toLowerCase() : value;
+    if (normalize(real) !== normalize(resolve(path))) {
+      throw new Error(`Release output path resolves through a link: ${path}`);
+    }
+  };
+  await ensurePlainDirectory(expectedDist);
+  await ensurePlainDirectory(expectedReleaseRoot);
+  return expectedReleaseRoot;
 }
 
 function validateManifest(value: unknown): ReleaseManifest {
@@ -354,16 +381,16 @@ async function sameExistingRelease(
 }
 
 async function packageRelease(): Promise<void> {
+  const releaseRoot = await ensureReleaseOutputRoot(projectRoot);
   const commit = await validateSource();
   const target = targetId();
   const filename = artifactName(VERSION, target);
   const buildHash = await sha256File(buildPath);
-  const stageDirectory = join(
-    releaseRoot,
-    `.staging-${crypto.randomUUID()}`,
-  );
+  const stageDirectory = await Deno.makeTempDir({
+    dir: releaseRoot,
+    prefix: ".staging-",
+  });
   const finalDirectory = join(releaseRoot, `acp-mcp-${VERSION}-${target}`);
-  await Deno.mkdir(stageDirectory, { recursive: true });
   try {
     const stagedArtifact = join(stageDirectory, filename);
     await Deno.copyFile(buildPath, stagedArtifact);
@@ -402,7 +429,12 @@ async function packageRelease(): Promise<void> {
     ) throw new Error("Release package verification failed");
 
     try {
-      await Deno.stat(finalDirectory);
+      const finalInfo = await Deno.lstat(finalDirectory);
+      if (!finalInfo.isDirectory || finalInfo.isSymlink) {
+        throw new Error(
+          `Release output exists but is not a plain directory: ${finalDirectory}`,
+        );
+      }
       if (await sameExistingRelease(finalDirectory, manifest, filename)) {
         await Deno.remove(stageDirectory, { recursive: true });
         console.log("Local release already exists and matches this build.");
