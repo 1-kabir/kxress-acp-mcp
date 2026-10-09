@@ -65,6 +65,9 @@
 
 ### Changed
 
+- Clarify that normal model/config discovery uses the host-connected MCP
+  service; repository planning scripts are deliberate source-checkout workflows,
+  not substitutes when that connected service is unavailable.
 - Declare explicit read-only, destructive, idempotency, and open-world hints for
   every public MCP tool; these annotations describe behavior but do not enforce
   security policy.

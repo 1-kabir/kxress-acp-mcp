@@ -146,10 +146,14 @@ credentials or use quota/API billing. No target (or `--help`) prints usage and
 does not contact a provider. A missing executable or a real integration failure
 returns a nonzero exit status; see the relevant setup section above.
 
-For repository planning with Claude or another ACP agent, use the disposable
-planning workflow after live model discovery. It runs against a temporary
-snapshot, leaves the working tree out of reach for ordinary relative writes, and
-removes the snapshot after the attempt. This is not an OS sandbox.
+For repository planning with Claude or another ACP agent, discover models and
+configuration through the host-connected `acp-mcp` MCP tools, then use a
+disposable workspace when relative writes should not touch the checkout. The
+repository planning scripts documented below are a deliberate source-checkout
+workflow using a separate local bridge path; they do not represent or replace
+the host-connected service. If its MCP tools are unavailable, report that and
+skip optional delegated planning rather than launching another bridge. A
+disposable workspace is not an OS sandbox.
 
 ### Antigravity authentication
 
@@ -231,9 +235,14 @@ policies. See the
 [ACP permission request protocol](https://agentclientprotocol.com/protocol/v1/tool-calls#requesting-permission)
 for the agent's permission-request behavior.
 
-For repository planning or research where relative writes should not touch the
-real checkout, use the session-driven script from PowerShell. First discover the
-selected agent's live candidates with a required privacy and cost policy:
+For a deliberate source-checkout planning workflow, use the repository script
+from PowerShell. It creates its own local bridge path and is intended for
+maintainer orchestration/testing; its discovery results are not the catalog of
+an already-connected host MCP service. For normal agent workflows, use the
+connected `list_models` and config discovery tools instead. If they are
+unavailable, do not use this script as a substitute. When choosing the
+source-checkout workflow deliberately, first discover that local workflow's
+candidates with a required privacy and cost policy:
 
 ```powershell
 mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts models --agent <agentId> --privacy-policy allow_any --search <optional-text> --limit 30

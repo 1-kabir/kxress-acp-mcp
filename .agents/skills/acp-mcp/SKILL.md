@@ -8,6 +8,21 @@ description: Use configured ACP agents through acp-mcp for one-shot tasks, model
 Use this skill when a task benefits from a separate ACP-compatible agent or when
 the user asks to inspect available agents or models.
 
+## Connected MCP boundary
+
+For normal agent workflows, agent and current model/configuration discovery MUST
+use the host-connected `acp-mcp` MCP tools. If those tools are unavailable,
+report that the connected service is unavailable. Do not invoke repository
+scripts, start another `acp-mcp` process, or create an in-memory MCP server as a
+substitute. Do not infer the connected ACP catalog from `agy` or another CLI,
+provider catalog, or historical model list. If delegated ACP work is optional,
+skip it and continue with permitted direct repository inspection.
+
+Distinguish service availability from model availability: when connected
+`list_models` succeeds but a requested model is absent, use only an explicitly
+authorized fallback also advertised by that connected service. If the connected
+MCP service itself is unavailable, there is no delegated ACP planner fallback.
+
 ## Choose the tool
 
 - Use `list_agents` to see configured ACP agents.
@@ -72,13 +87,24 @@ waits. Caller cancellation remains immediate. There is no absolute run-time cap.
 `permissionLeaseMs` separately controls how long an operator handoff remains
 available (default: 2 minutes).
 
-## Plan or research from a disposable workspace
+## Deliberate source-checkout planning workflow
 
-For repository planning/research where relative writes should not touch the real
-checkout, choose an agent and model for this invocation. The session/user owns
-that choice; there is no workflow-default agent or model. First inspect
-configured agents with `list_agents`, then discover compact live choices for the
-selected agent:
+The repository planning scripts are source-checkout orchestration and testing
+helpers. They use a separate repository-local bridge path, which is not
+equivalent to the host-connected `acp-mcp` service. Use them only when
+deliberately choosing that source-checkout workflow; never use them to replace
+unavailable connected MCP tools or to claim what the host-connected ACP server
+advertises.
+
+In a normal host-connected workflow, first use connected `list_agents` and
+`list_models` for the selected agent. For repository planning/research where
+relative writes should not touch the real checkout, run the connected agent
+against a disposable workspace. Choose the agent and model for this invocation;
+the session/user owns that choice and there is no workflow-default agent or
+model.
+
+When deliberately running the source-checkout workflow below, inspect its own
+local candidates and configuration:
 
 ```powershell
 mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts models --agent <agentId> --privacy-policy allow_any --limit 30
@@ -117,12 +143,13 @@ config leaves the agent's current/default values in effect. Explicit user
 preferences win; if a requested model is not advertised, stop rather than
 substitute. Invocation-specific choices do not become future defaults.
 
-Fallbacks are explicit ordered `--fallback agentId:modelId` values supplied by
-the caller/session. Add `--allow-rate-limited-fallback` to authorize retry after
-an allowed `rate_limited` classification, including the OpenCode message
-heuristic. No candidate is inferred from the catalog. Timeouts, unclassified
-failures, generic `-32603`, and other failures stop. Fallbacks must satisfy the
-same live advertisement, privacy, and cost policies. Attempts are bounded.
+For the source-checkout workflow, fallbacks are explicit ordered
+`--fallback agentId:modelId` values supplied by the caller/session. Add
+`--allow-rate-limited-fallback` to authorize retry after an allowed
+`rate_limited` classification, including the OpenCode message heuristic. No
+candidate is inferred from the catalog. Timeouts, unclassified failures, generic
+`-32603`, and other failures stop. Fallbacks must satisfy the same live
+advertisement, privacy, and cost policies. Attempts are bounded.
 
 `--free-only` and `--no-subscription` are independent optional cost filters; use
 both when both constraints apply. With neither, no cost constraint is imposed.
