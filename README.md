@@ -255,20 +255,15 @@ snapshot `create` and `cleanup` actions. `run_task` itself remains a one-model
 primitive and uses exactly its supplied `cwd` for both the ACP session and
 launched process.
 
-#### Stale workspace cleanup
+#### Stale workspace recovery
 
-Normal planning attempts remove their snapshots immediately. A hard crash may
-leave one behind. Inspect only acp-mcp-owned workspaces under the configured
-temp root with a dry run (24-hour age threshold by default):
-
-```powershell
-mise exec -- deno task workspace-cleanup
-```
-
-To remove eligible stale workspaces, pass `--delete`; adjust the threshold with
-`--older-than 7d`. Recent workspaces, workspaces whose creator process is still
-running, and entries without a valid ownership manifest are preserved. This
-command does not scan or stop agent processes.
+Normal planning workflows remove their snapshots immediately. A hard crash may
+leave product-owned workspaces behind. Use `list_stale_workspaces` to inspect
+eligible candidates (24-hour age threshold by default), then call
+`cleanup_stale_workspaces` when you want to remove all currently eligible
+workspaces. Both tools accept an optional `olderThanMs` threshold. Recent or
+active workspaces and entries without a valid ownership manifest are preserved;
+the tools do not accept arbitrary paths or scan/stop agent processes.
 
 `run_task.idleTimeoutMs` defaults to 10 minutes and limits consecutive silence
 from the task's ACP session. Any inbound `session/update` for that session
@@ -286,14 +281,15 @@ working directory. Agent profiles cannot silently override it.
 ACP updates for the active session and ACP permission requests count as task
 activity. The bridge does not use arbitrary subprocess stderr as a heartbeat.
 
-Tools include `run_task`, `list_models`, `list_agents`, `start_session`,
-`load_session`, `get_session`, `prompt`, `get_events`, `cancel_prompt`,
-`resolve_permission`, `set_config_option`, `set_mode`, `list_sessions`, and
-`close_session`. Use `run_task` for one-shot work. Use explicit session tools
-for multi-turn conversations, manual permission handling, or event inspection. A
-prompt call accepts `wait` and `waitMs`; if it is still running at the wait
-limit, the response includes its prompt ID. Use `get_events` with the session ID
-and `afterSequence` cursor to read updates, or `cancel_prompt` to send ACP
+Tools include `run_task`, `list_models`, `list_agents`, `list_stale_workspaces`,
+`cleanup_stale_workspaces`, `start_session`, `load_session`, `get_session`,
+`prompt`, `get_events`, `cancel_prompt`, `resolve_permission`,
+`set_config_option`, `set_mode`, `list_sessions`, and `close_session`. Use
+`run_task` for one-shot work. Use explicit session tools for multi-turn
+conversations, manual permission handling, or event inspection. A prompt call
+accepts `wait` and `waitMs`; if it is still running at the wait limit, the
+response includes its prompt ID. Use `get_events` with the session ID and
+`afterSequence` cursor to read updates, or `cancel_prompt` to send ACP
 cancellation. Raw ACP payloads and thought events are omitted from polling
 results unless requested.
 
@@ -344,16 +340,17 @@ provider rate-limit failure.
 
 ### Implementation planning
 
-For repository planning, let the ACP agent inspect the checkout itself:
+For repository planning where relative writes should not affect the real
+checkout, use the disposable planning workflow described above. Direct
+`run_task` against a real checkout is also valid when the caller explicitly
+accepts that execution environment. In either case, use `list_models` when the
+exact model/config selection needs live validation and give the ACP agent a
+concise task rather than pasting repository contents unless you intend to send
+them to its configured provider.
 
-1. Use a known advertised model ID directly, or call `list_models` when you need
-   to validate available choices.
-2. Call `run_task` with the checkout as `cwd` and concise task instructions. Ask
-   the agent to inspect the repository; do not first read files in Codex and
-   paste their contents into the task unless you intend to share them.
-3. Review the host's approval prompt for the external ACP call and approve that
-   invocation if appropriate.
-4. Use the compact plan returned by `run_task` to guide implementation.
+Review the host's approval prompt for external ACP calls and approve the
+invocation if appropriate. The host's approval flow remains the boundary for
+starting the external agent.
 
 In Codex, a per-invocation prompt for this tool can be enabled with:
 

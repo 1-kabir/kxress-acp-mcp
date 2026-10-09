@@ -151,10 +151,10 @@ cleanup warnings. Direct `run_task` remains useful when isolation is not needed;
 it uses exactly the supplied `cwd` for both the ACP session and launched
 process.
 
-If a disposable workspace remains after a crash or reported cleanup failure, use
-`mise exec -- deno task workspace-cleanup` to inspect stale managed workspaces;
-the command is dry-run by default. Use its explicit `--delete` option only after
-reviewing the reported candidates. Do not recursively remove guessed temp paths.
+If a disposable workspace remains after a crash or reported cleanup failure,
+call `list_stale_workspaces` to inspect eligible managed workspaces. When
+cleanup is desired, call `cleanup_stale_workspaces`; it deletes only eligible
+managed workspaces. Do not recursively remove guessed temp paths.
 
 This workflow protects the original checkout from ordinary reads, writes,
 deletions, and file creation performed relative to the planner's snapshot cwd.

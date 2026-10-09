@@ -15,10 +15,12 @@ import {
   type OpenCodeCatalog,
 } from "../models/opencode_catalog.ts";
 import { SessionManager } from "../sessions/manager.ts";
+import { cleanupStaleWorkspaceSnapshots } from "../workspaces/stale_cleanup.ts";
 
 type McpServerOptions = {
   loadOpenCodeCatalog?: (signal: AbortSignal) => Promise<OpenCodeCatalog>;
   failureClassifiers?: AgentFailureClassifiers;
+  workspaceCleanupRemove?: typeof Deno.remove;
 };
 
 const defaultFailureClassifiers: AgentFailureClassifiers = {
@@ -60,6 +62,42 @@ function runTaskFailure(
   };
 }
 
+function workspaceId(path: string) {
+  return path.split(/[\\/]/).at(-1) ?? path;
+}
+
+function workspaceEntrySummaries(
+  entries: Array<{
+    path: string;
+    status: string;
+    ageMs?: number;
+    kind?: string;
+    reason?: string;
+  }>,
+) {
+  return entries.filter((entry) =>
+    /^plan-[a-z0-9]+$/i.test(workspaceId(entry.path))
+  )
+    .map((entry) => ({
+      workspaceId: workspaceId(entry.path),
+      status: entry.status,
+      ...(entry.ageMs === undefined ? {} : { ageMs: entry.ageMs }),
+      ...(entry.kind === undefined ? {} : { kind: entry.kind }),
+      ...(entry.reason === undefined
+        ? {}
+        : { reason: entry.reason.split(":", 1)[0] }),
+    }));
+}
+
+function reasonCounts(entries: Array<{ reason?: string }>) {
+  const counts: Record<string, number> = {};
+  for (const entry of entries) {
+    const reason = entry.reason?.split(":", 1)[0] ?? "unknown";
+    counts[reason] = (counts[reason] ?? 0) + 1;
+  }
+  return counts;
+}
+
 export function createMcpServer(
   agents: AgentMap,
   manager: SessionManager,
@@ -72,6 +110,114 @@ export function createMcpServer(
     ...defaultFailureClassifiers,
     ...options.failureClassifiers,
   };
+  server.registerTool("list_stale_workspaces", {
+    description:
+      "Inspect acp-mcp-owned disposable workspaces eligible for stale cleanup. This never deletes workspaces. The default age threshold is 24 hours.",
+    annotations: {
+      title: "List stale workspaces",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: z.strictObject({
+      olderThanMs: z.number().int().min(1).optional().describe(
+        "Minimum workspace age in milliseconds (defaults to 86400000)",
+      ),
+    }),
+  }, async ({ olderThanMs }) => {
+    try {
+      const result = await cleanupStaleWorkspaceSnapshots({ olderThanMs });
+      const candidates = result.entries.filter((entry) =>
+        entry.status === "eligible"
+      );
+      const skippedEntries = result.entries.filter((entry) =>
+        entry.status === "skipped"
+      );
+      const failedEntries = result.entries.filter((entry) =>
+        entry.status === "failed"
+      );
+      const summary = {
+        status: failedEntries.length ? "failed" : "completed",
+        root: result.root,
+        olderThanMs: result.olderThanMs,
+        candidates: workspaceEntrySummaries(candidates),
+        skipped: result.skipped,
+        skippedByReason: reasonCounts(skippedEntries),
+        failed: result.failed,
+        failures: workspaceEntrySummaries(failedEntries),
+      };
+      return {
+        ...(result.failed ? { isError: true } : {}),
+        content: [{ type: "text" as const, text: JSON.stringify(summary) }],
+      };
+    } catch {
+      return {
+        isError: true,
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({ status: "failed", stage: "workspace_list" }),
+        }],
+      };
+    }
+  });
+  server.registerTool("cleanup_stale_workspaces", {
+    description:
+      "Delete all eligible stale acp-mcp-owned disposable workspaces. Only valid managed workspaces older than the threshold are removed; recent, active, unknown, and invalid entries are preserved. The default age threshold is 24 hours.",
+    annotations: {
+      title: "Clean up stale workspaces",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: z.strictObject({
+      olderThanMs: z.number().int().min(1).optional().describe(
+        "Minimum workspace age in milliseconds (defaults to 86400000)",
+      ),
+    }),
+  }, async ({ olderThanMs }) => {
+    try {
+      const result = await cleanupStaleWorkspaceSnapshots({
+        olderThanMs,
+        delete: true,
+        ...(options.workspaceCleanupRemove
+          ? { remove: options.workspaceCleanupRemove }
+          : {}),
+      });
+      const failures = workspaceEntrySummaries(
+        result.entries.filter((entry) => entry.status === "failed"),
+      );
+      const summary = {
+        status: result.failed ? "failed" : "completed",
+        root: result.root,
+        olderThanMs: result.olderThanMs,
+        removed: result.removed,
+        skipped: result.skipped,
+        skippedByReason: reasonCounts(
+          result.entries.filter((entry) => entry.status === "skipped"),
+        ),
+        failed: result.failed,
+        failures,
+        entries: workspaceEntrySummaries(result.entries),
+      };
+      return {
+        ...(result.failed ? { isError: true } : {}),
+        content: [{ type: "text" as const, text: JSON.stringify(summary) }],
+      };
+    } catch {
+      return {
+        isError: true,
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            status: "failed",
+            stage: "workspace_cleanup",
+          }),
+        }],
+      };
+    }
+  });
   server.registerTool("list_agents", {
     description:
       "List configured ACP agents and whether their launch executable is present. commandFound does not verify authentication or provider access.",

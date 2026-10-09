@@ -18,8 +18,10 @@
 
 ### Added
 
-- Add explicit dry-run-first cleanup for stale disposable planning workspaces,
-  with ownership-manifest and age checks; deletion requires `--delete`.
+- Add MCP tools to inspect stale disposable planning workspaces and explicitly
+  delete eligible workspaces through the shared ownership- and age-checked
+  cleanup implementation. The tools report workspace IDs rather than accepting
+  arbitrary paths.
 - Add a concise live-validated agent compatibility matrix and an explicit
   PowerShell-friendly runner for the existing opt-in live compatibility tests.
   Document the current ACP protocol-version audit; no ACP v2 client support is

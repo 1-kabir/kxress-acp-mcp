@@ -6,8 +6,6 @@ import {
 import {
   cleanupStaleWorkspaceSnapshots,
   DEFAULT_STALE_WORKSPACE_AGE_MS,
-  parseWorkspaceAge,
-  parseWorkspaceCleanupArgs,
 } from "../src/workspaces/stale_cleanup.ts";
 
 async function command(cwd: string, args: string[]) {
@@ -661,54 +659,4 @@ Deno.test("stale cleanup removes a symlink entry without deleting its target", a
       await Deno.remove(external, { recursive: true });
     }
   });
-});
-
-Deno.test("workspace cleanup duration and option parsing are strict", () => {
-  if (
-    parseWorkspaceAge("30m") !== 30 * 60_000 ||
-    parseWorkspaceAge("6h") !== 6 * 3_600_000 ||
-    parseWorkspaceAge("7d") !== 7 * 86_400_000
-  ) {
-    throw new Error(
-      "Workspace age duration parser returned an incorrect value",
-    );
-  }
-  const defaults = parseWorkspaceCleanupArgs([]);
-  if (
-    defaults.delete || defaults.help ||
-    defaults.olderThanMs !== DEFAULT_STALE_WORKSPACE_AGE_MS
-  ) throw new Error("Cleanup must be dry run with a 24-hour default");
-  const deletion = parseWorkspaceCleanupArgs([
-    "--older-than",
-    "7d",
-    "--delete",
-  ]);
-  if (!deletion.delete || deletion.olderThanMs !== 7 * 86_400_000) {
-    throw new Error("Explicit cleanup flags were not parsed");
-  }
-  for (const value of ["0h", "-1d", "3x", "1.5h", "999999999999999999d"]) {
-    let refused = false;
-    try {
-      parseWorkspaceAge(value);
-    } catch {
-      refused = true;
-    }
-    if (!refused) {
-      throw new Error(`Invalid age duration was accepted: ${value}`);
-    }
-  }
-  for (const args of [["--unknown"], ["--older-than"], ["--delete", "extra"]]) {
-    let refused = false;
-    try {
-      parseWorkspaceCleanupArgs(args);
-    } catch {
-      refused = true;
-    }
-    if (!refused) {
-      throw new Error(`Invalid cleanup args were accepted: ${args}`);
-    }
-  }
-  if (!parseWorkspaceCleanupArgs(["--help"]).help) {
-    throw new Error("Cleanup help option was not recognized");
-  }
 });
