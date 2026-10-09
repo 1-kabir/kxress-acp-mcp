@@ -62,30 +62,61 @@ available (default: 2 minutes).
 ## Plan or research from a disposable workspace
 
 For repository planning/research where relative writes should not touch the real
-checkout, prefer the planning workflow script. From PowerShell, one command
-creates snapshots, checks live model discovery and privacy metadata, runs the
-selected planner, and cleans up:
+checkout, choose an agent and model for this invocation. The session/user owns
+that choice; there is no workflow-default agent or model. First inspect
+configured agents with `list_agents`, then discover compact live choices for the
+selected agent:
 
 ```powershell
-mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts --repo (Get-Location).Path --task "Inspect this repository and propose a plan" --privacy-policy allow_any
+mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts models --agent <agentId> --privacy-policy allow_any --limit 30
 ```
 
-The preferred candidate defaults to `opencode:opencode/nemotron-3-ultra-free`,
-but it is run only if live `list_models` advertises that exact model. The
-privacy policy is required: `allow_any` permits provider terms or unknown
-metadata and the output reports known privacy facts; `require_no_training`
-requires explicit no-training metadata; `require_no_training_and_zero_retention`
-requires both no-training and zero-retention metadata. Unknown metadata fails
-the two stricter policies.
+Use `--search`, `--offset`, and restrictive policies to explore large catalogs
+without dumping them into context. The summary preserves ACP order and shows
+exact IDs, names, ACP current selection, free/paid/unknown status, pricing
+status, subscription requirement, privacy facts, and economic tier where
+available. It does not rank or recommend. ACP advertisement means selectable,
+not healthy or currently accepting requests. `underlyingCostTier` is economic
+positioning, never a capability score.
 
-Fallbacks are opt-in and ordered. Specify each exact candidate yourself, for
-example `--fallback opencode:opencode/longcat-2.5-preview-free`. Add
-`--allow-rate-limited-fallback` to permit retry after an allowed `rate_limited`
-classification. That includes the OpenCode message heuristic, so this flag is an
-explicit approval of that evidence. The script never adds models from the
-catalog automatically, and defaults to at most two model attempts. Timeouts,
-unclassified failures, generic `-32603`, and other failures stop the workflow.
-Each candidate must be ACP-advertised and satisfy the same privacy policy.
+Choose candidates against the task's difficulty and reasoning needs, current
+quota/cost constraints, privacy/data-use requirements, live advertised configs,
+and the user's explicit preference. When several candidates have material
+privacy, paid-quota, latency, or reasoning-cost tradeoffs and no preference is
+clear, ask the user rather than ranking them automatically.
+
+After the session/user chooses an exact advertised model, inspect its advertised
+reasoning, mode, and other config values:
+
+```powershell
+mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts configs --agent <agentId> --model <exact-model-id> --repo (Get-Location).Path
+```
+
+Then run with the exact choice and explicit privacy and cost policies:
+
+```powershell
+mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts run --agent <agentId> --model <exact-model-id> --repo (Get-Location).Path --task "Inspect this repository and propose a plan" --privacy-policy allow_any
+```
+
+Pass selected config values as repeated `--config-option id=value` and a chosen
+advertised mode as `--mode`. The runner checks them before execution; omitted
+config leaves the agent's current/default values in effect. Explicit user
+preferences win; if a requested model is not advertised, stop rather than
+substitute. Invocation-specific choices do not become future defaults.
+
+Fallbacks are explicit ordered `--fallback agentId:modelId` values supplied by
+the caller/session. Add `--allow-rate-limited-fallback` to authorize retry after
+an allowed `rate_limited` classification, including the OpenCode message
+heuristic. No candidate is inferred from the catalog. Timeouts, unclassified
+failures, generic `-32603`, and other failures stop. Fallbacks must satisfy the
+same live advertisement, privacy, and cost policies. Attempts are bounded.
+
+`--free-only` and `--no-subscription` are independent optional cost filters; use
+both when both constraints apply. With neither, no cost constraint is imposed.
+`allow_any` permits unknown privacy metadata; `require_no_training` requires
+known no-training metadata; `require_no_training_and_zero_retention` requires
+both known properties. Choose policies from user constraints rather than
+assuming every task needs a free or paid model.
 
 The workflow captures one canonical snapshot of current tracked filesystem
 contents plus untracked non-ignored files, then makes a fresh independent clone
@@ -120,10 +151,12 @@ caller.
 
 ACP config IDs belong to the agent. Use the `config` map with the advertised
 config ID and option value; do not assume every agent uses the key `model`.
-`list_models` returns the config ID for each model choice. ACP category metadata
-can also identify model, mode, model-configuration, and thought-level options.
-Use explicit session inspection when you need to enumerate config options beyond
-model choices.
+`list_models` returns the config ID for each model choice. The planning
+workflow's `configs` command uses a disposable session with the selected model
+and summarizes non-model options. Apply a reasoning/thought level only when that
+exact value is advertised. If no level was requested, leave the agent's
+current/default value unless the tradeoff materially changes cost or quality;
+then ask the user when their preference is unclear.
 
 ## Permissions and disclosure
 
@@ -164,8 +197,9 @@ restartable work. An ambiguous failure must not be silently replayed.
 the caller owns the complete fallback decision; `run_task` always executes only
 the requested model. Use this bounded workflow:
 
-1. Keep an explicit ordered list of models allowed for this task. The first
-   preference wins; economic tier never overrides that order.
+1. Use the user/session-selected agent and exact model. If there is no clear
+   preference and the remaining choices have material tradeoffs, ask the user.
+   Economic tier never overrides that selection.
 2. If candidate metadata matters, call `list_models` with `enrich: true` and
    keep only models currently advertised by ACP. Advertisement means selectable,
    not healthy or currently accepting requests.
@@ -178,7 +212,7 @@ the requested model. Use this bounded workflow:
    from known source-model terms to weaker or unknown candidate terms unless the
    user or workflow explicitly permits that change. A no-training policy rejects
    candidates that may use prompts for improvement/training.
-4. Run the preferred model once. Consider the next explicitly allowed model only
+4. Run the selected model once. Consider the next explicitly allowed model only
    for a classification the workflow permits. The current OpenCode
    `rate_limited` result uses `source: "opencode"` and
    `evidence: "message_heuristic"`; accept that heuristic only when the workflow
@@ -192,7 +226,5 @@ the requested model. Use this bounded workflow:
 Replay is only for work the caller has explicitly judged restartable, such as
 planning or research. `read_only` does not guarantee idempotence or prevent
 external effects. Do not apply this workflow automatically to implementation
-tasks. For example, Fledge Alpha Free remains the preferred planning model when
-explicitly selected; its current free price is promotional and OpenCode
-documents that its free-period data may be used to improve the model. A fallback
-to it must respect that disclosure policy.
+tasks. Keep task-specific agent, model, and reasoning choices in the invocation.
+A choice for one run is not a recommendation or default for later runs.

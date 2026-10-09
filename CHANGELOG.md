@@ -11,6 +11,10 @@
 - Rename `run_task.timeoutMs` to `idleTimeoutMs`; it now limits consecutive
   silence rather than total task duration. `permissionLeaseMs` configures the
   separate operator handoff lease.
+- The disposable planning script no longer selects a default agent or model. Use
+  its live `models` and `configs` views, then pass exact `--agent` and `--model`
+  values to `run`; the privacy policy is required and optional cost filters are
+  session-selected.
 
 ### Added
 
@@ -20,6 +24,9 @@
   an OS sandbox. Add a planning CLI that checks live model/privacy metadata,
   uses fresh clones from one canonical snapshot for each explicitly selected
   candidate, and only retries an allowed rate-limit classification.
+- Add compact, filtered, paged live model summaries and selected-model config
+  inspection to the planning script. Candidate summaries preserve ACP order and
+  never rank or select a model.
 - OpenCode Zen and Go enrichment now covers provider-qualified advertised
   models, distinguishes current per-token price from subscription access and
   limited-time free status, adds the documented Jev paid-counterpart tier, and

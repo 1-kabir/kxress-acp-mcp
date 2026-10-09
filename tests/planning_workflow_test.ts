@@ -2,24 +2,28 @@ import {
   type PlannerCandidate,
   type PlanningModelList,
   type PlanningTaskResult,
+  type PlanningWorkflowOptions,
   type PlanningWorkflowServices,
   runPlanningWorkflow,
+  summarizeModelCandidates,
 } from "../src/workspaces/planning_workflow.ts";
 import type { WorkspaceSnapshot } from "../src/workspaces/snapshot.ts";
 
-const preferred = {
-  agentId: "opencode",
-  modelId: "opencode/nemotron-3-ultra-free",
+const chosen = {
+  agentId: "agent-a",
+  modelId: "provider/model-x",
 };
 const fallback = {
-  agentId: "opencode",
-  modelId: "opencode/longcat-2.5-preview-free",
+  agentId: "agent-a",
+  modelId: "provider/model-y",
 };
 
 function modelList(
   entries: Array<{
     id: string;
     privacy?: Record<string, unknown>;
+    free?: boolean;
+    subscriptionRequired?: boolean;
   }>,
 ): PlanningModelList {
   return {
@@ -28,7 +32,11 @@ function modelList(
       id: entry.id,
       configId: "engine",
       available: true,
-      ...(entry.privacy ? { metadata: { privacy: entry.privacy } } : {}),
+      metadata: {
+        free: entry.free ?? true,
+        subscriptionRequired: entry.subscriptionRequired ?? false,
+        ...(entry.privacy ? { privacy: entry.privacy } : {}),
+      },
     })),
   };
 }
@@ -37,6 +45,7 @@ function fakeServices(
   options: {
     models?: PlanningModelList;
     run?: PlanningWorkflowServices["runTask"];
+    configValidation?: { valid: boolean; reason?: string };
     cleanupFailsFor?: string;
   } = {},
 ) {
@@ -47,6 +56,7 @@ function fakeServices(
   const runCalls: Array<Parameters<PlanningWorkflowServices["runTask"]>[0]> =
     [];
   const discoveryCalls: string[] = [];
+  const configChecks: string[] = [];
   const make = (files: Map<string, string>) => {
     const cwd = `C:\\temp\\planning-test-${++next}`;
     timeline.push(`created:${cwd}`);
@@ -84,7 +94,7 @@ function fakeServices(
       return Promise.resolve(
         options.models ?? modelList([
           {
-            id: preferred.modelId,
+            id: chosen.modelId,
             privacy: {
               trainingUse: "not_used_for_training",
               retention: "zero",
@@ -100,6 +110,10 @@ function fakeServices(
         ]),
       );
     },
+    validateConfiguration(args) {
+      configChecks.push(`${args.agentId}:${args.modelId}`);
+      return Promise.resolve(options.configValidation ?? { valid: true });
+    },
     async runTask(args) {
       runCalls.push(args);
       timeline.push(`run:${args.cwd}`);
@@ -108,7 +122,15 @@ function fakeServices(
         : { status: "completed", response: "PROJECT=acp-mcp" };
     },
   };
-  return { services, snapshots, cleaned, timeline, runCalls, discoveryCalls };
+  return {
+    services,
+    snapshots,
+    cleaned,
+    timeline,
+    runCalls,
+    discoveryCalls,
+    configChecks,
+  };
 }
 
 function workflowOptions(
@@ -117,19 +139,25 @@ function workflowOptions(
   return {
     repository: "D:\\repo",
     task: "Identify the project name",
-    preferred,
+    selected: chosen,
     fallbacks: [fallback],
     privacyPolicy: "require_no_training_and_zero_retention" as const,
+    costPolicy: { freeOnly: false, noSubscription: false },
+    config: { effort: "low" },
+    modeId: "plan",
     ...overrides,
   };
 }
 
-Deno.test("planning workflow uses preferred model and cleans both snapshots", async () => {
+Deno.test("planning workflow executes the explicit model and cleans snapshots", async () => {
   const fake = fakeServices();
   const result = await runPlanningWorkflow(workflowOptions(), fake.services);
   if (
     result.status !== "completed" || result.response !== "PROJECT=acp-mcp" ||
-    result.selectedModel?.modelId !== preferred.modelId ||
+    result.selectedModel?.modelId !== chosen.modelId ||
+    fake.runCalls[0]?.config?.effort !== "low" ||
+    fake.runCalls[0]?.modeId !== "plan" ||
+    fake.configChecks[0] !== `${chosen.agentId}:${chosen.modelId}` ||
     fake.runCalls.length !== 1 || fake.cleaned.length !== 3 ||
     fake.snapshots.size !== 0
   ) {
@@ -232,11 +260,11 @@ Deno.test("cancellation before an attempt cleans the canonical snapshot", async 
   ) throw new Error(`Cancellation cleanup failed: ${JSON.stringify(result)}`);
 });
 
-Deno.test("privacy rejection skips a candidate and selects only an allowed fallback", async () => {
+Deno.test("privacy rejection never substitutes the caller's selected model", async () => {
   const fake = fakeServices({
     models: modelList([
       {
-        id: preferred.modelId,
+        id: chosen.modelId,
         privacy: { trainingUse: "may_be_used_for_improvement" },
       },
       {
@@ -247,16 +275,20 @@ Deno.test("privacy rejection skips a candidate and selects only an allowed fallb
   });
   const result = await runPlanningWorkflow(workflowOptions(), fake.services);
   if (
-    result.status !== "completed" ||
-    result.selectedModel?.modelId !== fallback.modelId ||
+    result.status !== "failed" ||
+    result.stopReason !== "privacy_policy_rejected" ||
     result.attempts[0]?.reason !== "privacy_policy_rejected" ||
-    fake.runCalls.length !== 1
-  ) throw new Error(`Privacy filtering failed: ${JSON.stringify(result)}`);
+    fake.runCalls.length !== 0
+  ) {
+    throw new Error(
+      `Privacy filtering substituted a candidate: ${JSON.stringify(result)}`,
+    );
+  }
 });
 
 Deno.test("unknown privacy is rejected by policies requiring known safe metadata", async () => {
   const fake = fakeServices({
-    models: modelList([{ id: preferred.modelId }]),
+    models: modelList([{ id: chosen.modelId }]),
   });
   const result = await runPlanningWorkflow(
     workflowOptions({
@@ -275,10 +307,10 @@ Deno.test("unknown privacy is rejected by policies requiring known safe metadata
   }
 });
 
-Deno.test("missing or unadvertised preferred model is never called blindly", async () => {
+Deno.test("missing or unadvertised explicit model is never called blindly", async () => {
   const fake = fakeServices({ models: modelList([{ id: fallback.modelId }]) });
   const result = await runPlanningWorkflow(
-    workflowOptions({ fallbacks: [] }),
+    workflowOptions({ fallbacks: [fallback] }),
     fake.services,
   );
   if (
@@ -300,7 +332,7 @@ Deno.test("attempt limit bounds rate-limit retries", async () => {
   const fake = fakeServices({
     models: modelList([
       {
-        id: preferred.modelId,
+        id: chosen.modelId,
         privacy: { trainingUse: "not_used_for_training", retention: "zero" },
       },
       {
@@ -378,5 +410,149 @@ Deno.test("fallback requires explicit authorization and an allowed classificatio
     if (fake.runCalls.length !== 1) {
       throw new Error("Unauthorized fallback ran");
     }
+  }
+});
+
+Deno.test("missing agent or model does not choose an ACP default", async () => {
+  const fake = fakeServices({
+    models: modelList([{ id: "opencode/nemotron-3-ultra-free" }]),
+  });
+  const missingModel = {
+    ...workflowOptions(),
+    selected: { agentId: chosen.agentId, modelId: "" },
+  } as PlanningWorkflowOptions;
+  const result = await runPlanningWorkflow(missingModel, fake.services);
+  if (
+    result.stopReason !== "invalid_workflow_options" || fake.runCalls.length ||
+    fake.snapshots.size
+  ) {
+    throw new Error(
+      `Missing selection was not rejected: ${JSON.stringify(result)}`,
+    );
+  }
+  const missingAgent = {
+    ...workflowOptions(),
+    selected: { agentId: "", modelId: chosen.modelId },
+  } as PlanningWorkflowOptions;
+  const missingAgentResult = await runPlanningWorkflow(
+    missingAgent,
+    fake.services,
+  );
+  if (
+    missingAgentResult.stopReason !== "invalid_workflow_options" ||
+    fake.runCalls.length || fake.snapshots.size
+  ) throw new Error("Missing agent was replaced with an implicit agent");
+});
+
+Deno.test("unadvertised config or reasoning values stop before execution", async () => {
+  const fake = fakeServices({
+    configValidation: { valid: false, reason: "config_value_not_advertised" },
+  });
+  const result = await runPlanningWorkflow(workflowOptions(), fake.services);
+  if (
+    result.stopReason !== "config_value_not_advertised" || fake.runCalls.length
+  ) {
+    throw new Error(
+      `Unadvertised config was applied: ${JSON.stringify(result)}`,
+    );
+  }
+});
+
+Deno.test("candidate summary filters without ranking or selecting", () => {
+  const listing = modelList([
+    {
+      id: "provider/paid",
+      free: false,
+      privacy: { trainingUse: "not_used_for_training", retention: "zero" },
+    },
+    {
+      id: "provider/free-a",
+      free: true,
+      privacy: { trainingUse: "not_used_for_training", retention: "zero" },
+    },
+    {
+      id: "provider/free-b",
+      free: true,
+      privacy: { trainingUse: "not_used_for_training", retention: "zero" },
+    },
+    {
+      id: "provider/free-subscription",
+      free: true,
+      subscriptionRequired: true,
+      privacy: { trainingUse: "not_used_for_training", retention: "zero" },
+    },
+  ]);
+  listing.models![2].selected = true;
+  delete listing.models![3].metadata!.subscriptionRequired;
+  const summary = summarizeModelCandidates(listing.models!, {
+    privacyPolicy: "require_no_training_and_zero_retention",
+    costPolicy: { freeOnly: true, noSubscription: false },
+    limit: 1,
+  });
+  if (
+    summary.totalEligible !== 3 || summary.candidates.length !== 1 ||
+    summary.candidates[0].id !== "provider/free-a" ||
+    summary.candidates[0].selected || !summary.truncated
+  ) {
+    throw new Error(
+      `Candidate filtering or paging ranked/selected: ${
+        JSON.stringify(summary)
+      }`,
+    );
+  }
+  const secondPage = summarizeModelCandidates(listing.models!, {
+    privacyPolicy: "require_no_training_and_zero_retention",
+    costPolicy: { freeOnly: true, noSubscription: false },
+    offset: 1,
+  });
+  if (
+    secondPage.candidates[0]?.id !== "provider/free-b" ||
+    !secondPage.candidates[0]?.selected
+  ) throw new Error("Candidate order or ACP selected metadata was lost");
+  const combined = summarizeModelCandidates(listing.models!, {
+    privacyPolicy: "require_no_training_and_zero_retention",
+    costPolicy: { freeOnly: true, noSubscription: true },
+  });
+  if (
+    combined.totalEligible !== 2 ||
+    combined.candidates.some((candidate) =>
+      candidate.subscriptionRequired !== false
+    )
+  ) {
+    throw new Error(
+      "Independent free/subscription filters were not both applied",
+    );
+  }
+});
+
+Deno.test("cost policy rejects a selected model without substituting", async () => {
+  const models = modelList([
+    {
+      id: chosen.modelId,
+      free: false,
+      privacy: { trainingUse: "not_used_for_training", retention: "zero" },
+    },
+    {
+      id: fallback.modelId,
+      free: true,
+      privacy: { trainingUse: "not_used_for_training", retention: "zero" },
+    },
+  ]);
+  const fake = fakeServices({ models });
+  const result = await runPlanningWorkflow(
+    workflowOptions({
+      fallbacks: [],
+      costPolicy: { freeOnly: true, noSubscription: false },
+    }),
+    fake.services,
+  );
+  if (
+    result.stopReason !== "cost_policy_rejected" ||
+    result.attempts[0]?.reason !== "cost_policy_rejected" ||
+    fake.runCalls.length
+  ) {
+    throw new Error(
+      `Cost filter substituted a model: ${JSON.stringify(result)}`,
+    );
   }
 });

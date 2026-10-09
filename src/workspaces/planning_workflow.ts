@@ -10,10 +10,17 @@ export type PlanningPrivacyPolicy =
   | "require_no_training"
   | "require_no_training_and_zero_retention";
 
+export interface PlanningCostPolicy {
+  freeOnly: boolean;
+  noSubscription: boolean;
+}
+
 export interface PlanningModel {
   id: string;
   configId: string;
   available: true;
+  name?: string;
+  selected?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -53,10 +60,20 @@ export interface PlanningWorkflowServices {
     cwd: string,
     signal?: AbortSignal,
   ): Promise<PlanningModelList>;
+  validateConfiguration?(args: {
+    agentId: string;
+    modelId: string;
+    configId: string;
+    config?: Record<string, string>;
+    modeId?: string;
+    canonicalSnapshotPath: string;
+  }): Promise<{ valid: boolean; reason?: string }>;
   runTask(args: {
     agentId: string;
     modelId: string;
     configId: string;
+    config?: Record<string, string>;
+    modeId?: string;
     task: string;
     cwd: string;
     signal?: AbortSignal;
@@ -66,9 +83,12 @@ export interface PlanningWorkflowServices {
 export interface PlanningWorkflowOptions {
   repository: string;
   task: string;
-  preferred: PlannerCandidate;
+  selected: PlannerCandidate;
   fallbacks?: PlannerCandidate[];
   privacyPolicy: PlanningPrivacyPolicy;
+  costPolicy: PlanningCostPolicy;
+  config?: Record<string, string>;
+  modeId?: string;
   allowRateLimitedFallback?: boolean;
   maxAttempts?: number;
   signal?: AbortSignal;
@@ -90,6 +110,7 @@ export interface PlanningWorkflowResult {
   stopReason: string;
   policy: {
     privacyPolicy: PlanningPrivacyPolicy;
+    costPolicy: PlanningCostPolicy;
     allowRateLimitedFallback: boolean;
     maxAttempts: number;
   };
@@ -117,6 +138,105 @@ function privacyAllowed(
   return policy === "require_no_training" || privacy.retention === "zero";
 }
 
+function costAllowed(model: PlanningModel, policy: PlanningCostPolicy) {
+  const metadata = model.metadata ?? {};
+  return (!policy.freeOnly || metadata.free === true) &&
+    (!policy.noSubscription || metadata.subscriptionRequired === false);
+}
+
+export interface CandidateSummaryOptions {
+  privacyPolicy: PlanningPrivacyPolicy;
+  costPolicy: PlanningCostPolicy;
+  search?: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface CandidateSummary {
+  id: string;
+  name: string;
+  configId: string;
+  selected: boolean | null;
+  costStatus: "free" | "paid" | "unknown";
+  pricingStatus: string | null;
+  underlyingCostTier: string | null;
+  subscriptionRequired: boolean | null;
+  trainingUse: string | null;
+  retention: string | null;
+}
+
+/** Projects live candidates without ranking or choosing among them. */
+export function summarizeModelCandidates(
+  models: PlanningModel[],
+  options: CandidateSummaryOptions,
+) {
+  const search = options.search?.toLocaleLowerCase();
+  const eligible = models.filter((model) => {
+    const privacy = modelPrivacy(model);
+    if (!privacyAllowed(privacy, options.privacyPolicy)) return false;
+    if (!costAllowed(model, options.costPolicy)) return false;
+    if (
+      search &&
+      !`${model.id} ${model.name ?? model.metadata?.name ?? ""}`
+        .toLocaleLowerCase().includes(
+          search,
+        )
+    ) return false;
+    return model.available;
+  });
+  const offset = Math.max(0, options.offset ?? 0);
+  const limit = Math.min(100, Math.max(1, options.limit ?? 30));
+  const candidates = eligible.slice(offset, offset + limit).map((model) => {
+    const metadata = model.metadata ?? {};
+    const privacy = modelPrivacy(model);
+    const pricing = metadata.pricing && typeof metadata.pricing === "object"
+      ? metadata.pricing as Record<string, unknown>
+      : undefined;
+    const hasPaidPrice = pricing && typeof pricing === "object" &&
+      ((typeof pricing.input === "number" && pricing.input > 0) ||
+        (typeof pricing.output === "number" && pricing.output > 0));
+    const costStatus = metadata.free === true
+      ? "free"
+      : metadata.free === false || hasPaidPrice
+      ? "paid"
+      : "unknown";
+    const tier = metadata.underlyingCostTier &&
+        typeof metadata.underlyingCostTier === "object"
+      ? metadata.underlyingCostTier as Record<string, unknown>
+      : undefined;
+    return {
+      id: model.id,
+      name: String(model.name ?? metadata.name ?? model.id),
+      configId: model.configId,
+      selected: typeof model.selected === "boolean" ? model.selected : null,
+      costStatus,
+      pricingStatus: typeof metadata.pricingStatus === "string"
+        ? metadata.pricingStatus
+        : null,
+      underlyingCostTier: tier && typeof tier === "object" &&
+          typeof tier.value === "string"
+        ? tier.value
+        : null,
+      subscriptionRequired: typeof metadata.subscriptionRequired === "boolean"
+        ? metadata.subscriptionRequired
+        : null,
+      trainingUse: typeof privacy?.trainingUse === "string"
+        ? privacy.trainingUse
+        : null,
+      retention: typeof privacy?.retention === "string"
+        ? privacy.retention
+        : null,
+    } satisfies CandidateSummary;
+  });
+  return {
+    totalEligible: eligible.length,
+    offset,
+    limit,
+    truncated: offset + candidates.length < eligible.length,
+    candidates,
+  };
+}
+
 function fallbackClassificationReason(
   classification?: PlannerFailureClassification,
 ) {
@@ -141,13 +261,14 @@ export async function runPlanningWorkflow(
   options: PlanningWorkflowOptions,
   services: PlanningWorkflowServices,
 ): Promise<PlanningWorkflowResult> {
-  const candidates = [options.preferred, ...(options.fallbacks ?? [])];
+  const candidates = [options.selected, ...(options.fallbacks ?? [])];
   const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const result: PlanningWorkflowResult = {
     status: "failed",
     stopReason: "not_started",
     policy: {
       privacyPolicy: options.privacyPolicy,
+      costPolicy: options.costPolicy,
       allowRateLimitedFallback: options.allowRateLimitedFallback ?? false,
       maxAttempts,
     },
@@ -155,7 +276,9 @@ export async function runPlanningWorkflow(
     cleanupWarnings: [],
   };
   if (
-    !options.repository || !options.task ||
+    !options.repository || !options.task || !options.selected?.agentId ||
+    !options.selected?.modelId || !options.privacyPolicy ||
+    !options.costPolicy ||
     candidates.length > MAX_CANDIDATES ||
     !Number.isInteger(maxAttempts) || maxAttempts < 1 ||
     maxAttempts > MAX_ATTEMPTS
@@ -254,17 +377,61 @@ export async function runPlanningWorkflow(
           status: "skipped",
           reason: "not_advertised",
         });
+        if (attemptedCount === 0) {
+          result.stopReason = "not_advertised";
+          return result;
+        }
         continue;
       }
       const privacy = modelPrivacy(model);
-      if (!privacyAllowed(privacy, options.privacyPolicy)) {
+      if (
+        !privacyAllowed(privacy, options.privacyPolicy) ||
+        !costAllowed(model, options.costPolicy)
+      ) {
         result.attempts.push({
           ...candidate,
           status: "skipped",
-          reason: "privacy_policy_rejected",
+          reason: !privacyAllowed(privacy, options.privacyPolicy)
+            ? "privacy_policy_rejected"
+            : "cost_policy_rejected",
           privacy,
         });
+        if (attemptedCount === 0) {
+          result.stopReason = !privacyAllowed(privacy, options.privacyPolicy)
+            ? "privacy_policy_rejected"
+            : "cost_policy_rejected";
+          return result;
+        }
         continue;
+      }
+      if (Object.keys(options.config ?? {}).length || options.modeId) {
+        let validation: { valid: boolean; reason?: string };
+        try {
+          validation = services.validateConfiguration
+            ? await services.validateConfiguration({
+              ...candidate,
+              configId: model.configId,
+              config: options.config,
+              modeId: options.modeId,
+              canonicalSnapshotPath: canonical.cwd,
+            })
+            : { valid: false, reason: "config_validation_unavailable" };
+        } catch {
+          validation = { valid: false, reason: "config_validation_failed" };
+        }
+        if (!validation.valid) {
+          result.attempts.push({
+            ...candidate,
+            status: "skipped",
+            reason: validation.reason ?? "config_not_advertised",
+            privacy,
+          });
+          if (attemptedCount === 0) {
+            result.stopReason = validation.reason ?? "config_not_advertised";
+            return result;
+          }
+          continue;
+        }
       }
       if (attemptedCount >= maxAttempts) {
         result.stopReason = "attempt_limit_reached";
@@ -290,6 +457,8 @@ export async function runPlanningWorkflow(
           agentId: candidate.agentId,
           modelId: candidate.modelId,
           configId: model.configId,
+          config: options.config,
+          modeId: options.modeId,
           task: planningPrompt(options.task),
           cwd: attemptWorkspace.cwd,
           signal: options.signal,

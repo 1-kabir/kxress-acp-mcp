@@ -141,22 +141,43 @@ policies. See the
 for the agent's permission-request behavior.
 
 For repository planning or research where relative writes should not touch the
-real checkout, use the orchestration script from PowerShell:
+real checkout, use the session-driven script from PowerShell. First discover the
+selected agent's live candidates with a required privacy and cost policy:
 
 ```powershell
-mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts --repo (Get-Location).Path --task "Inspect this repository and propose a plan" --privacy-policy allow_any
+mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts models --agent <agentId> --privacy-policy allow_any --search <optional-text> --limit 30
 ```
 
-It defaults to `opencode:opencode/nemotron-3-ultra-free`, verifies that live ACP
-discovery advertises it, and prints a compact JSON result with the selected
-model, attempts, response, and cleanup warnings. The privacy policy is explicit:
-`allow_any` permits provider terms or unknown metadata; `require_no_training`
-and `require_no_training_and_zero_retention` require matching known metadata.
-Fallback candidates are never automatic. Add explicit ordered
-`--fallback agentId:modelId` values and `--allow-rate-limited-fallback` to allow
-retry only after a recognized `rate_limited` classification. Timeouts and
-ambiguous failures stop without replay. No paid or OpenCode Go candidate is
-added by default.
+The result preserves ACP order, shows at most 30 compact candidates by default,
+and supports `--offset` for another page. It includes exact model IDs, ACP's
+currently selected value, current free/paid/unknown and privacy facts, known
+subscription requirement, and economic tier where available. Tier is an economic
+signal, not a capability score. Search and hard filters reduce large catalogs;
+no quality ranking or model recommendation is applied. Advertisement means
+selectable, not that the provider is healthy or accepting requests.
+
+After choosing an exact advertised ID, inspect its config separately:
+
+```powershell
+mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts configs --agent <agentId> --model <exact-model-id> --repo (Get-Location).Path
+```
+
+Then execute the exact choice:
+
+```powershell
+mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts run --agent <agentId> --model <exact-model-id> --repo (Get-Location).Path --task "Inspect this repository and propose a plan" --privacy-policy allow_any
+```
+
+No agent, model, or fallback is selected implicitly. `--free-only` requires
+known free status, while `--no-subscription` requires explicit metadata that no
+subscription is needed; use both to apply both constraints. With neither flag,
+the workflow imposes no cost constraint. `--fallback agentId:modelId` adds
+caller-approved candidates in order; `--allow-rate-limited-fallback` is also
+required to retry after an allowed `rate_limited` classification. Strict privacy
+policies require known metadata. Use `--config-option id=value` or `--mode` only
+with values shown by the selected model's live `configs` output; the run command
+checks them before execution. The calling session's explicit selection wins over
+price, tier, or ACP's current selection.
 
 The workflow captures one canonical snapshot and creates a fresh clone for each
 model attempt, so failed-attempt mutations cannot contaminate fallback input and
