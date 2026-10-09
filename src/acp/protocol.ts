@@ -10,6 +10,7 @@ export interface NormalizedAcpUpdate {
   raw: unknown;
   text?: { messageId?: string; text: string; replace: boolean };
   stopReason?: string;
+  error?: { code?: number; message?: string; data?: unknown };
 }
 
 export interface AcpPermissionRequest {
@@ -56,6 +57,7 @@ export interface ProtocolDriver {
     sessionId: string,
     modeId: string,
     configOptions: Array<Record<string, unknown>>,
+    modes?: Record<string, unknown>,
   ): Promise<Record<string, unknown> | undefined>;
   closeSession(sessionId: string): Promise<void>;
   closeConnection(error?: unknown): void;

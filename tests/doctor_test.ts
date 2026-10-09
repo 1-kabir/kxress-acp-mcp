@@ -170,11 +170,14 @@ Deno.test("doctor reports a too-old local runtime prerequisite", async () => {
         claude: {
           command: "agent",
           args: [],
+          acpProtocol: "v2",
         },
       }, { runVersionCommand: () => Promise.resolve("v20.15.0") }),
     );
     if (
       report.status !== "errors" ||
+      report.checks.find((check) => check.id === "agent.claude.protocol")
+          ?.summary !== "claude: ACP v2 selected" ||
       !report.checks.some((check) =>
         check.id === "runtime.claude.1" &&
         check.summary.includes("found v20.15.0")

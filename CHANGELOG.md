@@ -30,8 +30,11 @@
   arbitrary paths.
 - Add a concise live-validated agent compatibility matrix and an explicit
   PowerShell-friendly runner for the existing opt-in live compatibility tests.
-  Document the current ACP protocol-version audit; no ACP v2 client support is
-  included.
+  Add explicit ACP v2 compatibility invocations for Claude's experimental
+  adapter mode.
+- Add an ACP v2 protocol driver alongside ACP v1, with explicit per-agent
+  protocol selection and no automatic cross-version retry. ACP v2 remains a
+  draft; built-in agent support is reported only where confirmed.
 - Add an explicit helper for unique disposable planning snapshots. It copies
   tracked working-tree contents and non-ignored untracked files without Git
   metadata, and documents that the snapshot is mutation containment rather than

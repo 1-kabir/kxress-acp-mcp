@@ -21,6 +21,8 @@ Deno.test("built-in profiles describe ACP launch routes without vendor behavior"
       agents.claude.command !== "claude-agent-acp" ||
       agents.claude.args.length !== 0 ||
       agents.claude.displayName !== "Claude Agent ACP" || agents.claude.env ||
+      JSON.stringify(agents.claude.protocolEnv?.v2) !==
+        JSON.stringify({ CLAUDE_AGENT_ACP_EXPERIMENTAL_V2: "1" }) ||
       agents.claude.modelConfigId || agents.claude.modelEnrichment ||
       agents.claude.failureClassifier
     ) throw new Error("Claude profile is not a plain ACP adapter profile");
@@ -66,9 +68,49 @@ Deno.test("Claude profile accepts generic command, args, and env overrides", asy
       }),
     );
     const agents = await loadAgents(configPath);
-    if (JSON.stringify(agents.claude) !== JSON.stringify(override)) {
-      throw new Error("Generic Claude profile override was not applied");
+    if (
+      agents.claude.command !== override.command ||
+      JSON.stringify(agents.claude.args) !== JSON.stringify(override.args) ||
+      agents.claude.env?.ACPMCP_TEST_PROVIDER_ENDPOINT !==
+        override.env.ACPMCP_TEST_PROVIDER_ENDPOINT ||
+      agents.claude.protocolEnv?.v2?.CLAUDE_AGENT_ACP_EXPERIMENTAL_V2 !== "1"
+    ) {
+      throw new Error("Generic Claude override lost profile protocol metadata");
     }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("ACP protocol config defaults to v1 and rejects invalid values", async () => {
+  const dir = await Deno.makeTempDir();
+  const configPath = `${dir}/config.json`;
+  try {
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        agents: { custom: { command: "custom-agent", args: [] } },
+      }),
+    );
+    const defaulted = await loadAgents(configPath);
+    if (defaulted.custom.acpProtocol !== "v1") {
+      throw new Error("Omitted custom agent protocol did not default to v1");
+    }
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          custom: { command: "custom-agent", args: [], acpProtocol: "v3" },
+        },
+      }),
+    );
+    let rejected = false;
+    try {
+      await loadAgents(configPath);
+    } catch (error) {
+      rejected = String(error).includes("Invalid ACP protocol");
+    }
+    if (!rejected) throw new Error("Invalid ACP protocol was accepted");
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -146,6 +188,9 @@ Deno.test("list_agents reports command presence without implying authentication"
       const byId = new Map(rows.map((row) => [row.id, row]));
       if (byId.get("present")?.commandFound !== true) {
         throw new Error("Present executable was not reported");
+      }
+      if (byId.get("present")?.acpProtocol !== "v1") {
+        throw new Error("list_agents omitted the effective ACP protocol");
       }
       if (
         byId.get("missing")?.commandFound !== false ||

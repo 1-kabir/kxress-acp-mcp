@@ -126,7 +126,17 @@ export class V1Driver implements ProtocolDriver {
     sessionId: string,
     modeId: string,
     _configOptions: Array<Record<string, unknown>>,
+    modes?: Record<string, unknown>,
   ): Promise<Record<string, unknown> | undefined> {
+    const available = modes?.availableModes as
+      | Array<{ id?: unknown }>
+      | undefined;
+    if (!available?.length) {
+      throw new Error("Agent did not advertise session modes");
+    }
+    if (!available.some((mode) => mode.id === modeId)) {
+      throw new Error(`Unknown mode: ${modeId}`);
+    }
     const response = await this.connection.agent.request("session/set_mode", {
       sessionId,
       modeId,

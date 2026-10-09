@@ -48,13 +48,24 @@ Deno.test("compat runner requires an explicit live target", async () => {
 });
 
 Deno.test("compat runner accepts known targets and rejects unknown targets", async () => {
-  assertEquals(parseCompatAgent(["claude"]), "claude");
+  assertEquals(parseCompatAgent(["claude"]), {
+    agent: "claude",
+    protocol: "v1",
+  });
+  assertEquals(parseCompatAgent(["claude", "--protocol", "v2"]), {
+    agent: "claude",
+    protocol: "v2",
+  });
   await assertRejects(
     () => Promise.resolve(parseCompatAgent(["toString"])),
     Error,
   );
   await assertRejects(
     () => Promise.resolve(parseCompatAgent(["codex", "--all"])),
+    Error,
+  );
+  await assertRejects(
+    () => Promise.resolve(parseCompatAgent(["opencode", "--protocol", "v2"])),
     Error,
   );
 });
@@ -69,6 +80,12 @@ Deno.test("compat runner selects existing tests and isolates opt-in flags", () =
   assertEquals(invocation.env.ACPMCP_OPENCODE_TEST, "0");
   assertEquals(invocation.env.ACPMCP_CODEX_TEST, "0");
   assertEquals(invocation.env.ACPMCP_CLAUDE_TEST, "0");
+  assertEquals(invocation.protocol, "v1");
+  assertEquals(invocation.env.ACPMCP_COMPAT_PROTOCOL, "v1");
+  assertEquals(
+    createCompatInvocation("claude", "v2").env.ACPMCP_COMPAT_PROTOCOL,
+    "v2",
+  );
   assertEquals(createCompatInvocation("opencode").args.slice(-3), [
     "tests/opencode_integration_test.ts",
     "tests/opencode_idle_timeout_test.ts",
@@ -79,7 +96,7 @@ Deno.test("compat runner selects existing tests and isolates opt-in flags", () =
 Deno.test("compat runner propagates test process exit code", async () => {
   let passedArgs: string[] = [];
   let passedEnv: Record<string, string> = {};
-  const code = await runCompat(["claude"], (args, env) => {
+  const code = await runCompat(["claude", "--protocol", "v2"], (args, env) => {
     passedArgs = args;
     passedEnv = env;
     return Promise.resolve(7);
@@ -90,4 +107,5 @@ Deno.test("compat runner propagates test process exit code", async () => {
     "tests/agent_compatibility_integration_test.ts",
   );
   assertEquals(passedEnv.ACPMCP_CLAUDE_TEST, "1");
+  assertEquals(passedEnv.ACPMCP_COMPAT_PROTOCOL, "v2");
 });

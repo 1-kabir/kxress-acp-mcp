@@ -62,6 +62,15 @@ MCP service itself is unavailable, there is no delegated ACP planner fallback.
   event inspection, manual permission handling, debugging, or long-running
   asynchronous tasks.
 
+## ACP protocol generation
+
+Use the protocol configured for the selected agent. Omitted configuration means
+ACP v1; ACP v2 is an explicit per-agent opt-in and remains experimental. Do not
+guess an agent's protocol support or retry a failed v2 initialization through v1
+(or vice versa). Use connected `list_agents` and `list_models` for the
+host-connected service; model advertisement does not itself prove protocol
+compatibility.
+
 ## Run a one-shot task
 
 Call `run_task` with the configured `agentId`, a clear `task`, and `cwd` when

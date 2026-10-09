@@ -10,10 +10,20 @@ async function runIntegration(
   const missingConfig = `${Deno.cwd()}${
     Deno.build.os === "windows" ? "\\" : "/"
   }acp-mcp-nonexistent-${crypto.randomUUID()}.json`;
+  // Reuse user-local profile environment for agents whose configured launch
+  // route may carry provider settings. Never log those environment values.
   const configured = await loadAgents(
-    agentId === "antigravity" ? undefined : missingConfig,
+    agentId === "antigravity" || agentId === "claude"
+      ? undefined
+      : missingConfig,
   );
-  const definition = configured[agentId];
+  const protocol = agentId === "claude"
+    ? Deno.env.get("ACPMCP_COMPAT_PROTOCOL") ?? "v1"
+    : "v1";
+  const definition = {
+    ...configured[agentId],
+    acpProtocol: protocol as "v1" | "v2",
+  };
   const executable = await findExecutablePath(definition.command);
   if (!executable) {
     throw new Error(
@@ -96,10 +106,12 @@ async function runIntegration(
           : `${agentId} advertised no selected model`,
       );
     }
+    const runConfig: Record<string, string> = agentId === "claude" &&
+        requestedModel === undefined
+      ? {}
+      : { [selectedModel.configId]: selectedModel.id };
     const metadataSession = await manager.start(agentId);
-    const runConfig: Record<string, unknown> = {
-      [selectedModel.configId]: selectedModel.id,
-    };
+    let loadResult: Record<string, unknown> | undefined;
     const requestedEffort = agentId === "claude"
       ? Deno.env.get("ACPMCP_CLAUDE_EFFORT")
       : undefined;
@@ -139,7 +151,6 @@ async function runIntegration(
     let resultDurationMs = 0;
     let callerResultBytes = 0;
     let writeProbeMetrics: Record<string, unknown> | undefined;
-    let loadResult: Record<string, unknown> | undefined;
     try {
       result = parseToolResult(
         await mcp.callTool("run_task", {
@@ -154,14 +165,22 @@ async function runIntegration(
       ) as Record<string, unknown>;
       resultDurationMs = Date.now() - taskStartedAt;
       callerResultBytes = JSON.stringify(result).length;
+      if (result.status !== "completed" || result.response !== "OK") {
+        throw new Error(
+          `${agentId} ${protocol} harmless run_task failed: ${
+            JSON.stringify(result)
+          }`,
+        );
+      }
       if (agentId === "claude") {
         const sourceSession = closedSessions.at(-1);
-        if (
-          metadataSession.capabilities &&
-          (metadataSession.capabilities as { loadSession?: unknown })
-              .loadSession === true &&
-          sourceSession
-        ) {
+        const capabilities = metadataSession.capabilities as {
+          loadSession?: unknown;
+          session?: unknown;
+        } | undefined;
+        const resumeSupported = protocol === "v1" &&
+          capabilities?.loadSession === true;
+        if (resumeSupported && sourceSession) {
           const loaded = await manager.load(
             agentId,
             sourceSession.acpSessionId,
@@ -176,7 +195,12 @@ async function runIntegration(
             throw new Error("Claude ACP did not resume the saved session");
           }
         } else {
-          loadResult = { supported: false };
+          loadResult = protocol === "v2"
+            ? {
+              advertised: Boolean(capabilities?.session),
+              liveTested: false,
+            }
+            : { supported: false };
         }
         const writeProbeDir = await Deno.makeTempDir({
           prefix: "acp-mcp-claude-write-",
@@ -244,6 +268,7 @@ async function runIntegration(
             models.filter((model) => model.selected).map((model) => model.id),
           )
         }; ` +
+        `selected model=${selectedModel.id}; ` +
         `run config=${JSON.stringify(runConfig)}; ` +
         `read-only OK task completed; session events=${
           JSON.stringify(sessionMetrics)
@@ -255,7 +280,9 @@ async function runIntegration(
         (writeProbeMetrics
           ? `write probe=${JSON.stringify(writeProbeMetrics)}; `
           : "") +
-        (loadResult ? `session/load=${JSON.stringify(loadResult)}; ` : "") +
+        (loadResult
+          ? `session resume/load=${JSON.stringify(loadResult)}; `
+          : "") +
         `${statuses.length} ACP child processes exited with codes=${
           JSON.stringify(statuses.map((status) => status.code))
         }`,

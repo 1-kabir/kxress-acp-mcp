@@ -1,5 +1,5 @@
 import type { AgentMap } from "../agents/config.ts";
-import { V1Driver } from "../acp/v1_driver.ts";
+import { createProtocolDriver } from "../acp/driver_factory.ts";
 import type {
   AcpPermissionRequest,
   AcpProtocol,
@@ -42,6 +42,8 @@ export interface PromptRecord {
   id: string;
   state: "running" | "completed" | "cancelled" | "failed";
   text: string;
+  messageText: Map<string, string>;
+  messageOrder: string[];
   lastActivityAt: number;
   activityVersion: number;
   activityWaiters: Set<() => void>;
@@ -114,9 +116,19 @@ export class SessionManager {
     }
     const def = this.agents[agentId];
     if (!def) throw new Error(`Unknown agent: ${agentId}`);
-    const process = await startAgent(def, cwd);
+    const protocol = def.acpProtocol ?? "v1";
+    if (def.supportedProtocols && !def.supportedProtocols.includes(protocol)) {
+      throw new Error(
+        `Agent profile '${agentId}' does not confirm ACP ${protocol} support`,
+      );
+    }
+    const launchDefinition = {
+      ...def,
+      env: { ...def.protocolEnv?.[protocol], ...def.env },
+    };
+    const process = await startAgent(launchDefinition, cwd);
     const earlyUpdates: NormalizedAcpUpdate[] = [];
-    const driver = new V1Driver(def, process, {
+    const driver = createProtocolDriver(protocol, def, process, {
       update: (update) => {
         const managed = [...this.sessions.values()].find((item) =>
           item.acpSessionId === update.sessionId
@@ -134,7 +146,7 @@ export class SessionManager {
         : await driver.newSession(cwd);
       const acpId = sessionResponse.sessionId;
       let configOptions = [...sessionResponse.configOptions];
-      const modes = sessionResponse.modes;
+      let modes = sessionResponse.modes;
       const modelConfigIds = new Set(configOptions.flatMap((option) => {
         const id = typeof option.id === "string" ? option.id : undefined;
         if (
@@ -174,12 +186,8 @@ export class SessionManager {
         );
       }
       if (modeId) {
-        const available =
-          (modes?.availableModes as Array<{ id: string }> | undefined) ?? [];
-        if (!available.some((mode) => mode.id === modeId)) {
-          throw new Error(`Unknown mode: ${modeId}`);
-        }
-        await driver.setMode(acpId, modeId, configOptions);
+        modes = await driver.setMode(acpId, modeId, configOptions, modes) ??
+          modes;
       }
       const session: ManagedSession = {
         id: crypto.randomUUID(),
@@ -226,6 +234,8 @@ export class SessionManager {
       id: crypto.randomUUID(),
       state: "running",
       text: "",
+      messageText: new Map(),
+      messageOrder: [],
       lastActivityAt: performance.now(),
       activityVersion: 0,
       activityWaiters: new Set(),
@@ -337,7 +347,10 @@ export class SessionManager {
         session.pendingPermissions.delete(id);
       }
       await session.driver.cancel(session.acpSessionId);
-      await this.waitPrompt(sessionId, promptId, 5000);
+      await Promise.race([
+        prompt.done,
+        new Promise((resolve) => setTimeout(resolve, 5000)),
+      ]);
     }
     return prompt;
   }
@@ -395,15 +408,39 @@ export class SessionManager {
       updateEvent.raw,
     );
     if (session.prompt?.state === "running" && updateEvent.text) {
-      session.prompt.text = updateEvent.text.replace
-        ? updateEvent.text.text
-        : session.prompt.text + updateEvent.text.text;
+      const prompt = session.prompt;
+      const messageId = updateEvent.text.messageId;
+      if (!messageId) {
+        prompt.text += updateEvent.text.text;
+      } else {
+        if (!prompt.messageText.has(messageId)) {
+          prompt.messageOrder.push(messageId);
+        }
+        const previous = prompt.messageText.get(messageId) ?? "";
+        prompt.messageText.set(
+          messageId,
+          updateEvent.text.replace
+            ? updateEvent.text.text
+            : previous + updateEvent.text.text,
+        );
+        prompt.text = prompt.messageOrder.map((id) =>
+          prompt.messageText.get(id) ?? ""
+        ).join("");
+      }
     }
     if (updateEvent.stopReason && session.prompt?.state === "running") {
       session.prompt.stopReason = updateEvent.stopReason;
-      session.prompt.state = updateEvent.stopReason === "cancelled"
-        ? "cancelled"
-        : "completed";
+      if (updateEvent.stopReason === "cancelled") {
+        session.prompt.state = "cancelled";
+      } else if (updateEvent.error) {
+        session.prompt.state = "failed";
+        session.prompt.error = updateEvent.error?.message ??
+          "ACP prompt failed";
+        session.prompt.errorCode = updateEvent.error?.code;
+        session.prompt.errorData = updateEvent.error?.data;
+      } else {
+        session.prompt.state = "completed";
+      }
       session.promptActive = false;
     }
   }
@@ -456,17 +493,11 @@ export class SessionManager {
 
   async setMode(sessionId: string, modeId: string) {
     const session = this.get(sessionId);
-    const modes =
-      (session.modes?.availableModes as Array<{ id: string }> | undefined) ??
-        [];
-    if (!modes.length) throw new Error("Agent did not advertise session modes");
-    if (!modes.some((mode) => mode.id === modeId)) {
-      throw new Error(`Unknown mode: ${modeId}`);
-    }
     session.modes = await session.driver.setMode(
       session.acpSessionId,
       modeId,
       session.configOptions,
+      session.modes,
     );
     return session.modes;
   }

@@ -129,13 +129,26 @@ async function agentChecks(
       a.localeCompare(b)
     )
   ) {
+    const protocol = agent.acpProtocol ?? "v1";
+    checks.push({
+      id: `agent.${id}.protocol`,
+      status: agent.supportedProtocols &&
+          !agent.supportedProtocols.includes(protocol)
+        ? "warning"
+        : "ok",
+      summary: `${id}: ACP ${protocol} ${
+        agent.supportedProtocols && !agent.supportedProtocols.includes(protocol)
+          ? "is not confirmed for this built-in profile"
+          : "selected"
+      }`,
+    });
     const commandPath = await dependencies.resolveExecutable(agent.command);
     if (!commandPath) {
       checks.push({
         id: `agent.${id}`,
         status: "error",
         summary:
-          `${id}: command not found (${agent.command}); ${agent.args.length} configured argument(s)`,
+          `${id} (ACP ${protocol}): command not found (${agent.command}); ${agent.args.length} configured argument(s)`,
         ...(agent.installHint
           ? { detail: "See the agent installation instructions in README." }
           : {}),
@@ -146,7 +159,7 @@ async function agentChecks(
       id: `agent.${id}`,
       status: "ok",
       summary:
-        `${id}: ${commandPath}; ${agent.args.length} configured argument(s)`,
+        `${id} (ACP ${protocol}): ${commandPath}; ${agent.args.length} configured argument(s)`,
     });
 
     for (

@@ -235,6 +235,8 @@ export function createMcpServer(
       Object.entries(agents).map(async ([id, agent]) => ({
         id,
         displayName: agent.displayName ?? id,
+        acpProtocol: agent.acpProtocol ?? "v1",
+        supportedProtocols: agent.supportedProtocols,
         commandFound: !!await findExecutablePath(agent.command),
         installHint: agent.installHint,
       })),
@@ -288,6 +290,7 @@ export function createMcpServer(
               sessionId: session.id,
               acpSessionId: session.acpSessionId,
               agentId,
+              acpProtocol: session.acpProtocol,
               result,
             }),
           }],
@@ -712,6 +715,7 @@ export function createMcpServer(
             sessionId: session.id,
             acpSessionId: session.acpSessionId,
             agentId,
+            acpProtocol: session.acpProtocol,
             configOptions: session.configOptions,
             modes: session.modes,
           }),
@@ -850,8 +854,8 @@ export function createMcpServer(
         type: "text",
         text: JSON.stringify(
           [...manager.sessions.values()].map((
-            { id, agentId, cwd, acpSessionId, promptActive },
-          ) => ({ id, agentId, cwd, acpSessionId, promptActive })),
+            { id, agentId, cwd, acpSessionId, acpProtocol, promptActive },
+          ) => ({ id, agentId, cwd, acpSessionId, acpProtocol, promptActive })),
         ),
       }],
     }));
@@ -876,6 +880,7 @@ export function createMcpServer(
             agentId: s.agentId,
             cwd: s.cwd,
             acpSessionId: s.acpSessionId,
+            acpProtocol: s.acpProtocol,
             capabilities: s.capabilities,
             authMethods: s.authMethods,
             configOptions: s.configOptions,
