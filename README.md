@@ -74,6 +74,46 @@ cleanup flow. Custom ACP stdio commands continue to work without a built-in
 profile. `list_agents` includes `commandFound` to report whether the configured
 executable is present; it does not check authentication or provider access.
 
+### Compatibility status
+
+The profiles below have each completed live ACP initialization and task
+validation at least once. This records demonstrated compatibility, not current
+installation or provider availability; check `list_agents` for local command
+availability and rerun the live test for current status. Arbitrary configured
+ACP agents remain supported by the generic launch/session path, but are not
+implied to be live validated here.
+
+| Agent                                                                                    | Built-in profile | Live compatibility demonstrated                                                                                                                                    | ACP protocol                                   |
+| ---------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| [OpenCode](https://opencode.ai/docs/cli/acp/)                                            | Yes              | Model/config selection, `run_task`, permissions, and disposable planning; direct writes without ACP permission were observed                                       | v1; v2 not confirmed                           |
+| [Codex ACP](https://github.com/agentclientprotocol/codex-acp)                            | Yes              | Model/config selection, `run_task`, cleanup, and adapter permission/sandbox configuration                                                                          | v1; v2 not confirmed                           |
+| [Antigravity](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp) | Yes              | Model/config selection, `run_task`, permission denial, persisted ACP auth, and process cleanup                                                                     | v1; v2 not confirmed                           |
+| [Claude Agent ACP](https://github.com/agentclientprotocol/claude-agent-acp)              | Yes              | Model/effort selection, `run_task`, permission requests, session load, cleanup, and disposable planning; tested through one externally configured OpenRouter route | v1 by default; experimental v2 opt-in upstream |
+
+ACP protocol versions are the `protocolVersion` negotiated during `initialize`;
+they are unrelated to an agent or package's software version. The bridge pins
+`@agentclientprotocol/sdk` 1.7.0 and currently uses its stable v1 API. The
+[ACP v2 draft](https://agentclientprotocol.com/protocol/v2) is still changing;
+adding client support is a separate future task. The Claude adapter's upstream
+experimental v2 surface is opt-in and is not used by this bridge.
+
+### Live compatibility tests
+
+`deno task test` runs offline/deterministic tests and does not start real
+agents. To explicitly run an opt-in live test, use the PowerShell-friendly
+runner:
+
+```powershell
+mise exec -- deno task compat antigravity
+mise exec -- deno task compat claude
+```
+
+Targets are `opencode`, `codex`, `antigravity`, and `claude`. Invoke one target
+at a time. These tests launch the selected local agent and may require provider
+credentials or use quota/API billing. No target (or `--help`) prints usage and
+does not contact a provider. A missing executable or a real integration failure
+returns a nonzero exit status; see the relevant setup section above.
+
 For repository planning with Claude or another ACP agent, use the disposable
 planning workflow after live model discovery. It runs against a temporary
 snapshot, leaves the working tree out of reach for ordinary relative writes, and

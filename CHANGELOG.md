@@ -18,6 +18,10 @@
 
 ### Added
 
+- Add a concise live-validated agent compatibility matrix and an explicit
+  PowerShell-friendly runner for the existing opt-in live compatibility tests.
+  Document the current ACP protocol-version audit; no ACP v2 client support is
+  included.
 - Add an explicit helper for unique disposable planning snapshots. It copies
   tracked working-tree contents and non-ignored untracked files without Git
   metadata, and documents that the snapshot is mutation containment rather than

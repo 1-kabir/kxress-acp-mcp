@@ -17,6 +17,10 @@ the user asks to inspect available agents or models.
   server. The generic bridge uses the same ACP runtime after each command
   starts. `list_agents.commandFound` reports executable presence only; it does
   not verify credentials or provider access.
+- Live compatibility tests are opt-in and may use provider quota or API billing.
+  Run one explicitly with `mise exec -- deno task compat <agentId>`; no target
+  prints help and does not start an agent. Normal `deno task test` remains
+  deterministic and offline.
 - Claude Agent ACP is a launch profile, not a provider or subscription choice.
   Provider authentication, endpoint, and model come from user configuration and
   the adapter's advertised ACP options. Use `list_models` for the current
