@@ -58,12 +58,16 @@ export function parseCompatAgent(
 export function createCompatInvocation(
   agent: CompatAgent,
   protocol: "v1" | "v2" = "v1",
+  inheritedEnv: Record<string, string> = Deno.env.toObject(),
 ): CompatInvocation {
-  const env = Object.fromEntries(
+  const testControlEnv = Object.fromEntries(
     Object.values(OPT_IN_ENV).map((name) => [name, "0"]),
   );
-  env[OPT_IN_ENV[agent]] = "1";
-  env.ACPMCP_COMPAT_PROTOCOL = protocol;
+  testControlEnv[OPT_IN_ENV[agent]] = "1";
+  testControlEnv.ACPMCP_COMPAT_PROTOCOL = protocol;
+  // Keep the caller's runtime environment (including agent/provider setup)
+  // and override only this runner's explicit test-control variables.
+  const env = { ...inheritedEnv, ...testControlEnv };
   return {
     agent,
     protocol,

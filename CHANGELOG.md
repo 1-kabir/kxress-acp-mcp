@@ -35,6 +35,8 @@
 - Add an ACP v2 protocol driver alongside ACP v1, with explicit per-agent
   protocol selection and no automatic cross-version retry. ACP v2 remains a
   draft; built-in agent support is reported only where confirmed.
+- Validate Claude Agent ACP v2 prompt completion, permission denial, and session
+  replay/resume through the existing user-configured provider route.
 - Add an explicit helper for unique disposable planning snapshots. It copies
   tracked working-tree contents and non-ignored untracked files without Git
   metadata, and documents that the snapshot is mutation containment rather than

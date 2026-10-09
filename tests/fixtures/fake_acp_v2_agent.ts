@@ -16,6 +16,16 @@ if (
 ) {
   throw new Error("Claude v2 profile activation environment was not applied");
 }
+if (
+  Deno.args.includes("--expect-composed-launch-env") && (
+    Deno.env.get("ACPMCP_FIXTURE_PARENT_VALUE") !== "parent-runtime" ||
+    Deno.env.get("ACPMCP_FIXTURE_USER_VALUE") !== "user-config" ||
+    Deno.env.get("OPENROUTER_API_KEY") !== "FAKE_SECRET_VALUE" ||
+    Deno.env.get("CLAUDE_AGENT_ACP_EXPERIMENTAL_V2") !== "user-override"
+  )
+) {
+  throw new Error("Expected launch environment was not composed");
+}
 
 function write(value: unknown): Promise<void> {
   const bytes = encoder.encode(`${JSON.stringify(value)}\n`);
@@ -53,7 +63,19 @@ function requestClient(method: string, params: unknown): Promise<unknown> {
 
 async function promptWork(sessionId: string, text: string) {
   await update(sessionId, { sessionUpdate: "state_update", state: "running" });
-  if (text === "permission") {
+  if (text === "delayed-completion") {
+    await update(sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      messageId: "delayed-answer",
+      content: { type: "text", text: "still working" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await update(sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      messageId: "delayed-answer",
+      content: { type: "text", text: " then done" },
+    });
+  } else if (text === "permission") {
     const response = await requestClient("session/request_permission", {
       sessionId,
       title: "Run a command",
@@ -216,8 +238,11 @@ async function handle(message: Record<string, unknown>) {
       const sessionId = String(params.sessionId);
       const blocks = params.prompt as Array<{ text?: string }>;
       const text = blocks.map((block) => block.text ?? "").join("");
-      void promptWork(sessionId, text);
       result = { messageId: crypto.randomUUID() };
+      await write({ jsonrpc: "2.0", id, result });
+      // ACP v2 acknowledges insertion before foreground work completes.
+      void promptWork(sessionId, text);
+      return;
     } else if (method === "session/close") {
       result = {};
     } else {

@@ -71,7 +71,12 @@ Deno.test("compat runner accepts known targets and rejects unknown targets", asy
 });
 
 Deno.test("compat runner selects existing tests and isolates opt-in flags", () => {
-  const invocation = createCompatInvocation("antigravity");
+  const invocation = createCompatInvocation("antigravity", "v1", {
+    PATH: "fixture-path",
+    ANTHROPIC_BASE_URL: "https://provider.invalid",
+    OPENROUTER_API_KEY: "FAKE_SECRET_VALUE",
+    ACPMCP_CLAUDE_TEST: "1",
+  });
   assertEquals(
     invocation.args.at(-1),
     "tests/agent_compatibility_integration_test.ts",
@@ -80,6 +85,12 @@ Deno.test("compat runner selects existing tests and isolates opt-in flags", () =
   assertEquals(invocation.env.ACPMCP_OPENCODE_TEST, "0");
   assertEquals(invocation.env.ACPMCP_CODEX_TEST, "0");
   assertEquals(invocation.env.ACPMCP_CLAUDE_TEST, "0");
+  assertEquals(invocation.env.PATH, "fixture-path");
+  assertEquals(
+    invocation.env.ANTHROPIC_BASE_URL,
+    "https://provider.invalid",
+  );
+  assertEquals(invocation.env.OPENROUTER_API_KEY, "FAKE_SECRET_VALUE");
   assertEquals(invocation.protocol, "v1");
   assertEquals(invocation.env.ACPMCP_COMPAT_PROTOCOL, "v1");
   assertEquals(

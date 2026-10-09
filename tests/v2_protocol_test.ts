@@ -83,6 +83,50 @@ Deno.test("ACP v2 normalizes config, mode, streaming, snapshots, and unknown upd
   }
 });
 
+Deno.test("ACP v2 prompt acknowledgement is not turn completion", async () => {
+  const manager = managerFor();
+  try {
+    const session = await manager.start("fake", Deno.cwd());
+    const prompt = manager.beginPrompt(session.id, "delayed-completion");
+    let sawStreamedOutput = false;
+    for (let i = 0; i < 100; i++) {
+      const events = manager.getEvents(session.id).events;
+      sawStreamedOutput = events.some((event) =>
+        event.kind === "agent_message_chunk"
+      );
+      if (sawStreamedOutput) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!sawStreamedOutput) {
+      throw new Error("V2 streamed output did not arrive after prompt ack");
+    }
+    if (prompt.state !== "running") {
+      throw new Error(
+        `V2 prompt completed before idle state: ${prompt.state}`,
+      );
+    }
+    await prompt.done;
+    const events = manager.getEvents(session.id).events;
+    if (
+      String(prompt.state) !== "completed" ||
+      prompt.stopReason !== "end_turn" ||
+      prompt.text !== "still working then done" ||
+      events.filter((event) => event.kind === "state_update").length < 2
+    ) {
+      throw new Error(`V2 idle completion was not observed: ${
+        JSON.stringify({
+          state: prompt.state,
+          stopReason: prompt.stopReason,
+          text: prompt.text,
+          events,
+        })
+      }`);
+    }
+  } finally {
+    await manager.closeAll();
+  }
+});
+
 Deno.test("ACP v2 permission requests use the generic permission policy", async () => {
   const manager = managerFor();
   try {
@@ -246,6 +290,50 @@ Deno.test("Claude built-in v2 selection applies profile launch metadata", async 
     }
   } finally {
     await manager.closeAll();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("agent launch composes inherited, user, and protocol environment", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-env-compose-" });
+  const configPath = `${dir}/config.json`;
+  const parentKey = "ACPMCP_FIXTURE_PARENT_VALUE";
+  const previousParentValue = Deno.env.get(parentKey);
+  Deno.env.set(parentKey, "parent-runtime");
+  await Deno.writeTextFile(
+    configPath,
+    JSON.stringify({
+      agents: {
+        claude: {
+          command: Deno.execPath(),
+          args: [
+            "run",
+            "--allow-env",
+            "--allow-read",
+            fixturePath(),
+            "--expect-composed-launch-env",
+          ],
+          acpProtocol: "v2",
+          env: {
+            ACPMCP_FIXTURE_USER_VALUE: "user-config",
+            OPENROUTER_API_KEY: "FAKE_SECRET_VALUE",
+            CLAUDE_AGENT_ACP_EXPERIMENTAL_V2: "user-override",
+          },
+        },
+      },
+    }),
+  );
+  const agents = await loadAgents(configPath);
+  const manager = new SessionManager(agents);
+  try {
+    const session = await manager.start("claude");
+    if (session.acpProtocol !== "v2") {
+      throw new Error("Configured protocol was not retained");
+    }
+  } finally {
+    await manager.closeAll();
+    if (previousParentValue === undefined) Deno.env.delete(parentKey);
+    else Deno.env.set(parentKey, previousParentValue);
     await Deno.remove(dir, { recursive: true });
   }
 });

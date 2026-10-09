@@ -115,21 +115,22 @@ availability and rerun the live test for current status. Arbitrary configured
 ACP agents remain supported by the generic launch/session path, but are not
 implied to be live validated here.
 
-| Agent                                                                                    | Built-in profile | Live compatibility demonstrated                                                                                                                                    | Protocol evidence for this agent     |
-| ---------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
-| [OpenCode](https://opencode.ai/docs/cli/acp/)                                            | Yes              | Model/config selection, `run_task`, permissions, and disposable planning; direct writes without ACP permission were observed                                       | v1 live; v2 not confirmed            |
-| [Codex ACP](https://github.com/agentclientprotocol/codex-acp)                            | Yes              | Model/config selection, `run_task`, cleanup, and adapter permission/sandbox configuration                                                                          | v1 live; v2 not confirmed            |
-| [Antigravity](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp) | Yes              | Model/config selection, `run_task`, permission denial, persisted ACP auth, and process cleanup                                                                     | v1 live; v2 not confirmed            |
-| [Claude Agent ACP](https://github.com/agentclientprotocol/claude-agent-acp)              | Yes              | Model/effort selection, `run_task`, permission requests, session load, cleanup, and disposable planning; tested through one externally configured OpenRouter route | v1 live; upstream v2 is experimental |
+| Agent                                                                                    | Built-in profile | Live compatibility demonstrated                                                                                                                                              | Protocol evidence for this agent     |
+| ---------------------------------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| [OpenCode](https://opencode.ai/docs/cli/acp/)                                            | Yes              | Model/config selection, `run_task`, permissions, and disposable planning; direct writes without ACP permission were observed                                                 | v1 live; v2 not confirmed            |
+| [Codex ACP](https://github.com/agentclientprotocol/codex-acp)                            | Yes              | Model/config selection, `run_task`, cleanup, and adapter permission/sandbox configuration                                                                                    | v1 live; v2 not confirmed            |
+| [Antigravity](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp) | Yes              | Model/config selection, `run_task`, permission denial, persisted ACP auth, and process cleanup                                                                               | v1 live; v2 not confirmed            |
+| [Claude Agent ACP](https://github.com/agentclientprotocol/claude-agent-acp)              | Yes              | Model/effort selection, v1/v2 `run_task`, permission denial, v1 load, v2 replay/resume and follow-up, and cleanup; tested through one externally configured OpenRouter route | v1 live; experimental v2 live-tested |
 
 ACP protocol versions are the `protocolVersion` selected during `initialize`;
 they are unrelated to an agent or package's software version. The bridge
 supports ACP v1 and the experimental ACP v2 draft through separate protocol
 drivers. ACP v2 and the SDK's v2 entrypoint may change incompatibly. The table
-records agent evidence, not just bridge capability: v2 has not been live
-validated against any built-in agent. The Claude adapter exposes an upstream
-experimental v2 mode; the bridge enables it only when Claude is explicitly
-configured for v2.
+records agent evidence, not just bridge capability: Claude v2 was exercised end
+to end against one externally configured provider route. This does not establish
+compatibility with other provider/model combinations. The Claude adapter exposes
+an upstream experimental v2 mode; the bridge enables it only when Claude is
+explicitly configured for v2. ACP v2 remains a draft.
 
 Protocol selection is per agent in `%APPDATA%\acp-mcp\config.json` on Windows
 (the normal user config path on other platforms). Omitted `acpProtocol` means

@@ -178,29 +178,56 @@ async function runIntegration(
           loadSession?: unknown;
           session?: unknown;
         } | undefined;
-        const resumeSupported = protocol === "v1" &&
-          capabilities?.loadSession === true;
+        const resumeSupported = protocol === "v1"
+          ? capabilities?.loadSession === true
+          : Boolean(capabilities?.session);
         if (resumeSupported && sourceSession) {
           const loaded = await manager.load(
             agentId,
             sourceSession.acpSessionId,
             taskWorkspace,
           );
-          loadResult = {
-            supported: true,
-            loaded: loaded.acpSessionId === sourceSession.acpSessionId,
-          };
-          await manager.close(loaded.id);
-          if (loadResult.loaded !== true) {
-            throw new Error("Claude ACP did not resume the saved session");
+          try {
+            const sameSession =
+              loaded.acpSessionId === sourceSession.acpSessionId;
+            if (!sameSession) {
+              throw new Error("Claude ACP did not resume the saved session");
+            }
+            if (protocol === "v2") {
+              const replay = manager.getEvents(loaded.id).events;
+              const replayedResponse = replay.some((event) =>
+                (event.kind === "agent_message" ||
+                  event.kind === "agent_message_chunk") &&
+                updateContainsText(event.update, "OK")
+              );
+              if (!replayedResponse) {
+                throw new Error(
+                  "Claude ACP v2 resumed without replaying the completed response",
+                );
+              }
+              const followup = await manager.prompt(
+                loaded.id,
+                "Reply with exactly RESUMED and no punctuation. Do not use tools.",
+              );
+              if (followup.text !== "RESUMED") {
+                throw new Error(
+                  `Claude ACP v2 resumed but follow-up failed: ${followup.text}`,
+                );
+              }
+              loadResult = {
+                supported: true,
+                loaded: true,
+                replayedResponse,
+                followup: followup.text,
+              };
+            } else {
+              loadResult = { supported: true, loaded: true };
+            }
+          } finally {
+            await manager.close(loaded.id);
           }
         } else {
-          loadResult = protocol === "v2"
-            ? {
-              advertised: Boolean(capabilities?.session),
-              liveTested: false,
-            }
-            : { supported: false };
+          loadResult = { supported: false };
         }
         const writeProbeDir = await Deno.makeTempDir({
           prefix: "acp-mcp-claude-write-",
@@ -292,6 +319,25 @@ async function runIntegration(
     await manager.closeAll();
     await server.close();
   }
+}
+
+function updateContainsText(update: unknown, expected: string): boolean {
+  if (!update || typeof update !== "object") return false;
+  const content = (update as { content?: unknown }).content;
+  if (Array.isArray(content)) {
+    return content.some((block) =>
+      Boolean(
+        block && typeof block === "object" &&
+          typeof (block as { text?: unknown }).text === "string" &&
+          (block as { text: string }).text.includes(expected),
+      )
+    );
+  }
+  return Boolean(
+    content && typeof content === "object" &&
+      typeof (content as { text?: unknown }).text === "string" &&
+      (content as { text: string }).text.includes(expected),
+  );
 }
 
 Deno.test({
