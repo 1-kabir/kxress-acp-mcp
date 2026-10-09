@@ -147,6 +147,11 @@ the selected model, attempted/skipped candidates, classifications, response, and
 cleanup warnings. Direct `run_task` remains useful when isolation is not needed;
 it always executes in exactly the supplied `cwd`.
 
+If a disposable workspace remains after a crash or reported cleanup failure, use
+`mise exec -- deno task workspace-cleanup` to inspect stale managed workspaces;
+the command is dry-run by default. Use its explicit `--delete` option only after
+reviewing the reported candidates. Do not recursively remove guessed temp paths.
+
 This workflow protects the original checkout from ordinary reads, writes,
 deletions, and file creation performed relative to the planner's snapshot cwd.
 It is not an OS sandbox: an agent process still has the user's normal access to

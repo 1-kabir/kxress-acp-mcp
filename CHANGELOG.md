@@ -18,6 +18,8 @@
 
 ### Added
 
+- Add explicit dry-run-first cleanup for stale disposable planning workspaces,
+  with ownership-manifest and age checks; deletion requires `--delete`.
 - Add a concise live-validated agent compatibility matrix and an explicit
   PowerShell-friendly runner for the existing opt-in live compatibility tests.
   Document the current ACP protocol-version audit; no ACP v2 client support is

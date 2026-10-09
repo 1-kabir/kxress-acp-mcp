@@ -254,6 +254,21 @@ For low-level workflows, `scripts/planning_workspace.ts` exposes explicit
 snapshot `create` and `cleanup` actions. `run_task` itself remains a one-model
 primitive and always uses exactly its supplied `cwd`.
 
+#### Stale workspace cleanup
+
+Normal planning attempts remove their snapshots immediately. A hard crash may
+leave one behind. Inspect only acp-mcp-owned workspaces under the configured
+temp root with a dry run (24-hour age threshold by default):
+
+```powershell
+mise exec -- deno task workspace-cleanup
+```
+
+To remove eligible stale workspaces, pass `--delete`; adjust the threshold with
+`--older-than 7d`. Recent workspaces, workspaces whose creator process is still
+running, and entries without a valid ownership manifest are preserved. This
+command does not scan or stop agent processes.
+
 `run_task.idleTimeoutMs` defaults to 10 minutes and limits consecutive silence
 from the task's ACP session. Any inbound `session/update` for that session
 resets it, including update variants this bridge does not recognize. Active

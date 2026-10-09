@@ -3,6 +3,12 @@ import {
   cloneWorkspaceSnapshot,
   createWorkspaceSnapshot,
 } from "../src/workspaces/snapshot.ts";
+import {
+  cleanupStaleWorkspaceSnapshots,
+  DEFAULT_STALE_WORKSPACE_AGE_MS,
+  parseWorkspaceAge,
+  parseWorkspaceCleanupArgs,
+} from "../src/workspaces/stale_cleanup.ts";
 
 async function command(cwd: string, args: string[]) {
   const result = await new Deno.Command("git", {
@@ -33,6 +39,44 @@ async function repository() {
   await Deno.writeTextFile(`${path}/ignored-cache/cache.bin`, "ignored");
   await Deno.writeTextFile(`${path}/ignored.txt`, "ignored");
   return path;
+}
+
+async function withIsolatedWorkspaceRoot<T>(
+  fn: (root: string) => Promise<T>,
+): Promise<T> {
+  const tempRoot = await Deno.makeTempDir({ prefix: "acp-mcp-cleaner-test-" });
+  const names = ["TEMP", "TMP", "TMPDIR"];
+  const previous = new Map(names.map((name) => [name, Deno.env.get(name)]));
+  for (const name of names) Deno.env.set(name, tempRoot);
+  try {
+    return await fn(tempRoot);
+  } finally {
+    for (const name of names) {
+      const value = previous.get(name);
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+    await Deno.remove(tempRoot, { recursive: true });
+  }
+}
+
+async function markStale(
+  path: string,
+  ownerPid: number | undefined = 2_147_483_647,
+) {
+  const manifestPath = `${path}.json`;
+  const manifest = JSON.parse(await Deno.readTextFile(manifestPath)) as Record<
+    string,
+    unknown
+  >;
+  manifest.createdAt = Date.now() - 48 * 60 * 60 * 1000;
+  if (ownerPid === undefined) delete manifest.ownerPid;
+  else manifest.ownerPid = ownerPid;
+  await Deno.writeTextFile(manifestPath, JSON.stringify(manifest));
+}
+
+async function exists(path: string) {
+  return await Deno.lstat(path).then(() => true).catch(() => false);
 }
 
 Deno.test("snapshot copies current tracked and non-ignored untracked files", async () => {
@@ -342,5 +386,329 @@ Deno.test("cleanup removes planner-created junctions without deleting targets", 
     await snapshot?.cleanup();
     await Deno.remove(source, { recursive: true });
     await Deno.remove(external, { recursive: true });
+  }
+});
+
+Deno.test("stale cleanup on an empty root is a no-op", async () => {
+  await withIsolatedWorkspaceRoot(async (tempRoot) => {
+    const result = await cleanupStaleWorkspaceSnapshots();
+    if (
+      result.dryRun !== true || result.eligible !== 0 || result.removed !== 0 ||
+      result.skipped !== 0 || result.failed !== 0 ||
+      await exists(`${tempRoot}/acp-mcp-workspaces`)
+    ) throw new Error("Empty cleanup should not create or mutate the root");
+  });
+});
+
+Deno.test("stale cleanup defaults to dry run and preserves recent workspaces", async () => {
+  await withIsolatedWorkspaceRoot(async () => {
+    const source = await repository();
+    const snapshot = await createWorkspaceSnapshot(source);
+    try {
+      const result = await cleanupStaleWorkspaceSnapshots();
+      if (
+        result.dryRun !== true || result.olderThanMs !==
+          DEFAULT_STALE_WORKSPACE_AGE_MS ||
+        result.eligible !== 0 ||
+        result.skipped !== 1 || !await exists(snapshot.cwd)
+      ) throw new Error("Recent workspace was not safely skipped");
+    } finally {
+      await snapshot.cleanup();
+      await Deno.remove(source, { recursive: true });
+    }
+  });
+});
+
+Deno.test("stale cleanup reports dry-run candidates and deletes only on request", async () => {
+  await withIsolatedWorkspaceRoot(async () => {
+    const source = await repository();
+    const snapshot = await createWorkspaceSnapshot(source);
+    try {
+      await markStale(snapshot.cwd);
+      const dryRun = await cleanupStaleWorkspaceSnapshots({
+        olderThanMs: 24 * 60 * 60 * 1000,
+        isProcessAlive: () => false,
+      });
+      if (
+        !dryRun.dryRun || dryRun.eligible !== 1 || dryRun.removed !== 0 ||
+        dryRun.entries[0]?.status !== "eligible" || !await exists(snapshot.cwd)
+      ) {
+        throw new Error(
+          "Dry run did not preserve and report the stale workspace",
+        );
+      }
+
+      const deleted = await cleanupStaleWorkspaceSnapshots({
+        delete: true,
+        olderThanMs: 24 * 60 * 60 * 1000,
+        isProcessAlive: () => false,
+      });
+      if (
+        deleted.removed !== 1 || deleted.failed !== 0 ||
+        await exists(snapshot.cwd) || await exists(`${snapshot.cwd}.json`)
+      ) throw new Error("Explicit stale cleanup did not remove the workspace");
+    } finally {
+      await snapshot.cleanup().catch(() => {});
+      await Deno.remove(source, { recursive: true });
+    }
+  });
+});
+
+Deno.test("stale cleanup preserves unmarked and outside-root entries", async () => {
+  await withIsolatedWorkspaceRoot(async (tempRoot) => {
+    const source = await repository();
+    const snapshot = await createWorkspaceSnapshot(source);
+    const unknown = `${tempRoot}/acp-mcp-workspaces/plan-unmarked`;
+    const prefixCollision = `${tempRoot}/acp-mcp-workspaces-evil`;
+    const outside = await Deno.makeTempDir({ prefix: "acp-mcp-outside-" });
+    try {
+      await markStale(snapshot.cwd);
+      await Deno.mkdir(unknown);
+      await Deno.mkdir(prefixCollision);
+      await Deno.writeTextFile(`${prefixCollision}/keep.txt`, "outside");
+      const result = await cleanupStaleWorkspaceSnapshots({
+        delete: true,
+        isProcessAlive: () => false,
+      });
+      if (
+        result.removed !== 1 || !await exists(unknown) ||
+        !await exists(`${prefixCollision}/keep.txt`)
+      ) throw new Error("Unknown or prefix-collision directories were removed");
+      let refused = false;
+      try {
+        await cleanupWorkspaceSnapshot(outside);
+      } catch {
+        refused = true;
+      }
+      if (!refused || !await exists(outside)) {
+        throw new Error(
+          "Explicit cleanup accepted a path outside the workspace root",
+        );
+      }
+    } finally {
+      await snapshot.cleanup().catch(() => {});
+      await Deno.remove(source, { recursive: true });
+      await Deno.remove(outside, { recursive: true });
+    }
+  });
+});
+
+Deno.test("stale cleanup protects a live creator process", async () => {
+  await withIsolatedWorkspaceRoot(async () => {
+    const source = await repository();
+    const snapshot = await createWorkspaceSnapshot(source);
+    try {
+      await markStale(snapshot.cwd, Deno.pid);
+      const result = await cleanupStaleWorkspaceSnapshots({ delete: true });
+      if (
+        result.skipped !== 1 || result.removed !== 0 ||
+        result.entries[0]?.reason !== "creator_process_is_alive" ||
+        !await exists(snapshot.cwd)
+      ) throw new Error("Stale cleanup did not protect the live owner");
+    } finally {
+      await snapshot.cleanup();
+      await Deno.remove(source, { recursive: true });
+    }
+  });
+});
+
+Deno.test("legacy manifests use their file timestamp and remain eligible", async () => {
+  await withIsolatedWorkspaceRoot(async () => {
+    const source = await repository();
+    const snapshot = await createWorkspaceSnapshot(source);
+    try {
+      await markStale(snapshot.cwd, undefined);
+      const manifestPath = `${snapshot.cwd}.json`;
+      const legacy = JSON.parse(
+        await Deno.readTextFile(manifestPath),
+      ) as Record<
+        string,
+        unknown
+      >;
+      delete legacy.createdAt;
+      delete legacy.kind;
+      await Deno.writeTextFile(manifestPath, JSON.stringify(legacy));
+      const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      await Deno.utime(manifestPath, old, old);
+      const result = await cleanupStaleWorkspaceSnapshots({
+        olderThanMs: 24 * 60 * 60 * 1000,
+      });
+      if (
+        result.eligible !== 1 || result.entries[0]?.kind !== "legacy" ||
+        !await exists(snapshot.cwd)
+      ) throw new Error("Legacy owned workspace was not reported safely");
+    } finally {
+      await snapshot.cleanup();
+      await Deno.remove(source, { recursive: true });
+    }
+  });
+});
+
+Deno.test("stale cleanup continues after a deletion failure", async () => {
+  await withIsolatedWorkspaceRoot(async () => {
+    const source = await repository();
+    const first = await createWorkspaceSnapshot(source);
+    const second = await createWorkspaceSnapshot(source);
+    try {
+      await markStale(first.cwd);
+      await markStale(second.cwd);
+      let failedOnce = false;
+      const result = await cleanupStaleWorkspaceSnapshots({
+        delete: true,
+        isProcessAlive: () => false,
+        remove: async (path, options) => {
+          if (!failedOnce && options?.recursive === true) {
+            failedOnce = true;
+            throw new Error("simulated delete failure");
+          }
+          await Deno.remove(path, options);
+        },
+      });
+      if (
+        result.failed !== 1 || result.removed !== 1 ||
+        (await exists(first.cwd)) === (await exists(second.cwd))
+      ) throw new Error("A failed deletion prevented later cleanup");
+    } finally {
+      await first.cleanup().catch(() => {});
+      await second.cleanup().catch(() => {});
+      await Deno.remove(source, { recursive: true });
+    }
+  });
+});
+
+Deno.test("stale cleanup removes a junction entry without deleting its target", async () => {
+  if (Deno.build.os !== "windows") return;
+  await withIsolatedWorkspaceRoot(async () => {
+    const source = await repository();
+    const external = await Deno.makeTempDir({
+      prefix: "acp-mcp-stale-junction-",
+    });
+    const snapshot = await createWorkspaceSnapshot(source);
+    try {
+      await Deno.writeTextFile(`${external}\\keep.txt`, "external data");
+      const junction = `${snapshot.cwd}\\external-junction`;
+      const linked = await new Deno.Command("powershell.exe", {
+        args: [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "New-Item -ItemType Junction -Path $env:ACP_LINK -Target $env:ACP_TARGET | Out-Null",
+        ],
+        env: { ACP_LINK: junction, ACP_TARGET: external },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      if (!linked.success) {
+        throw new Error("Could not create the test junction");
+      }
+      await markStale(snapshot.cwd);
+      const result = await cleanupStaleWorkspaceSnapshots({
+        delete: true,
+        isProcessAlive: () => false,
+      });
+      if (
+        result.removed !== 1 || await exists(snapshot.cwd) ||
+        await Deno.readTextFile(`${external}\\keep.txt`) !== "external data"
+      ) throw new Error("Stale cleanup followed the junction target");
+    } finally {
+      await snapshot.cleanup().catch(() => {});
+      await Deno.remove(source, { recursive: true });
+      await Deno.remove(external, { recursive: true });
+    }
+  });
+});
+
+Deno.test("stale cleanup removes a symlink entry without deleting its target", async () => {
+  await withIsolatedWorkspaceRoot(async () => {
+    const source = await repository();
+    const external = await Deno.makeTempDir({
+      prefix: "acp-mcp-stale-symlink-",
+    });
+    const snapshot = await createWorkspaceSnapshot(source);
+    let linked = false;
+    try {
+      const externalFile = `${external}/keep.txt`;
+      const symlink = `${snapshot.cwd}/external-link`;
+      await Deno.writeTextFile(externalFile, "external data");
+      try {
+        await Deno.symlink(external, symlink, { type: "dir" });
+        linked = true;
+      } catch (error) {
+        if (
+          !(error instanceof Deno.errors.NotCapable) &&
+          !(error instanceof Deno.errors.PermissionDenied)
+        ) throw error;
+        console.log(
+          "Symlink cleanup probe skipped: symlink creation is unavailable",
+        );
+        return;
+      }
+      await markStale(snapshot.cwd);
+      const result = await cleanupStaleWorkspaceSnapshots({
+        delete: true,
+        isProcessAlive: () => false,
+      });
+      if (
+        result.removed !== 1 || await exists(snapshot.cwd) ||
+        await Deno.readTextFile(externalFile) !== "external data"
+      ) throw new Error("Stale cleanup followed the symlink target");
+    } finally {
+      await snapshot.cleanup().catch(() => {});
+      if (linked && await exists(`${snapshot.cwd}/external-link`)) {
+        await Deno.remove(`${snapshot.cwd}/external-link`);
+      }
+      await Deno.remove(source, { recursive: true });
+      await Deno.remove(external, { recursive: true });
+    }
+  });
+});
+
+Deno.test("workspace cleanup duration and option parsing are strict", () => {
+  if (
+    parseWorkspaceAge("30m") !== 30 * 60_000 ||
+    parseWorkspaceAge("6h") !== 6 * 3_600_000 ||
+    parseWorkspaceAge("7d") !== 7 * 86_400_000
+  ) {
+    throw new Error(
+      "Workspace age duration parser returned an incorrect value",
+    );
+  }
+  const defaults = parseWorkspaceCleanupArgs([]);
+  if (
+    defaults.delete || defaults.help ||
+    defaults.olderThanMs !== DEFAULT_STALE_WORKSPACE_AGE_MS
+  ) throw new Error("Cleanup must be dry run with a 24-hour default");
+  const deletion = parseWorkspaceCleanupArgs([
+    "--older-than",
+    "7d",
+    "--delete",
+  ]);
+  if (!deletion.delete || deletion.olderThanMs !== 7 * 86_400_000) {
+    throw new Error("Explicit cleanup flags were not parsed");
+  }
+  for (const value of ["0h", "-1d", "3x", "1.5h", "999999999999999999d"]) {
+    let refused = false;
+    try {
+      parseWorkspaceAge(value);
+    } catch {
+      refused = true;
+    }
+    if (!refused) {
+      throw new Error(`Invalid age duration was accepted: ${value}`);
+    }
+  }
+  for (const args of [["--unknown"], ["--older-than"], ["--delete", "extra"]]) {
+    let refused = false;
+    try {
+      parseWorkspaceCleanupArgs(args);
+    } catch {
+      refused = true;
+    }
+    if (!refused) {
+      throw new Error(`Invalid cleanup args were accepted: ${args}`);
+    }
+  }
+  if (!parseWorkspaceCleanupArgs(["--help"]).help) {
+    throw new Error("Cleanup help option was not recognized");
   }
 });
