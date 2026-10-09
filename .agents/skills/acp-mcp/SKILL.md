@@ -154,7 +154,10 @@ process.
 If a disposable workspace remains after a crash or reported cleanup failure,
 call `list_stale_workspaces` to inspect eligible managed workspaces. When
 cleanup is desired, call `cleanup_stale_workspaces`; it deletes only eligible
-managed workspaces. Do not recursively remove guessed temp paths.
+managed workspaces. Do not recursively remove guessed temp paths. If the
+installed bridge cannot start or a configured agent executable is missing, run
+`acp-mcp doctor` outside MCP. Doctor checks local setup only; it does not verify
+provider authentication or service health.
 
 This workflow protects the original checkout from ordinary reads, writes,
 deletions, and file creation performed relative to the planner's snapshot cwd.

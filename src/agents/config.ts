@@ -9,6 +9,14 @@ export interface AgentDefinition {
   failureClassifier?: string;
 }
 
+/** Trusted local runtime requirements for maintained built-in adapters. */
+export const BUILTIN_RUNTIME_PREREQUISITES: Record<
+  string,
+  Array<{ command: string; minimumVersion?: string }>
+> = {
+  claude: [{ command: "node", minimumVersion: "22.0.0" }],
+};
+
 export type AgentMap = Record<string, AgentDefinition>;
 
 export function defaultConfigPath(): string {

@@ -20,9 +20,20 @@ runtime; end users do not need Deno or mise. Build on each target OS to produce
 its native executable.
 
 Running `acp-mcp` starts the MCP stdio server. Use `acp-mcp --help` for the
-small command-line interface or `acp-mcp --version` for its version. MCP
-protocol traffic stays on stdout; startup errors go to stderr. The server closes
-managed ACP sessions when its host closes stdin or sends SIGINT.
+small command-line interface or `acp-mcp --version` for its version. Run
+`acp-mcp doctor` for offline checks of local config, agent executables, runtime
+prerequisites, and disposable workspace state; `acp-mcp doctor --json` emits a
+machine-readable report. Doctor does not start ACP agents, contact providers,
+consume quota, or verify provider authentication. Its stale-workspace summary
+does not inspect creator processes; it reports age-qualified workspaces with
+unknown creator status separately. MCP protocol traffic stays on stdout; startup
+errors go to stderr. The server closes managed ACP sessions when its host closes
+stdin or sends SIGINT.
+
+Doctor returns exit code `0` when there are no errors (warnings are allowed),
+`1` when local diagnostic errors are found, and `2` for invalid CLI usage. It
+does not delete stale workspaces. Use the MCP tools `list_stale_workspaces` and
+`cleanup_stale_workspaces` to inspect and explicitly remove eligible leftovers.
 
 The default user configuration is `%APPDATA%\acp-mcp\config.json` on Windows and
 `$XDG_CONFIG_HOME/acp-mcp/config.json` or `~/.config/acp-mcp/config.json`

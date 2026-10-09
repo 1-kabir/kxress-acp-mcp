@@ -18,6 +18,9 @@
 
 ### Added
 
+- Add offline `acp-mcp doctor` diagnostics for local configuration, agent
+  executable availability, declared runtime prerequisites, and stale disposable
+  workspace state. It does not start agents or verify provider authentication.
 - Establish a standalone `acp-mcp` executable as the product entrypoint. With no
   CLI option it starts the MCP stdio server; help, version, and explicit config
   selection are handled before server startup.

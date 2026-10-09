@@ -38,6 +38,8 @@ export interface StaleWorkspaceCleanupOptions {
   /** Internal deterministic-test seams; CLI callers cannot set these. */
   now?: number;
   isProcessAlive?: (pid: number) => boolean | Promise<boolean>;
+  /** Skip creator PID checks for read-only summaries that must not inspect processes. */
+  checkCreatorProcess?: boolean;
   remove?: typeof Deno.remove;
 }
 
@@ -220,6 +222,17 @@ export async function cleanupStaleWorkspaceSnapshots(
         ageMs,
         kind,
         reason: "younger_than_threshold",
+      });
+      continue;
+    }
+    if (manifest.ownerPid !== null && options.checkCreatorProcess === false) {
+      result.skipped++;
+      result.entries.push({
+        path,
+        status: "skipped",
+        ageMs,
+        kind,
+        reason: "creator_process_status_not_checked",
       });
       continue;
     }

@@ -510,6 +510,36 @@ Deno.test("stale cleanup protects a live creator process", async () => {
   });
 });
 
+Deno.test("read-only stale inspection can avoid checking creator processes", async () => {
+  await withIsolatedWorkspaceRoot(async () => {
+    const source = await repository();
+    const snapshot = await createWorkspaceSnapshot(source);
+    let processCheckCalled = false;
+    try {
+      await markStale(snapshot.cwd, Deno.pid);
+      const result = await cleanupStaleWorkspaceSnapshots({
+        checkCreatorProcess: false,
+        isProcessAlive: () => {
+          processCheckCalled = true;
+          return true;
+        },
+      });
+      if (
+        processCheckCalled || result.skipped !== 1 || result.eligible !== 0 ||
+        result.entries[0]?.reason !== "creator_process_status_not_checked" ||
+        !await exists(snapshot.cwd)
+      ) {
+        throw new Error(
+          "Read-only inspection probed or misclassified the creator process",
+        );
+      }
+    } finally {
+      await snapshot.cleanup();
+      await Deno.remove(source, { recursive: true });
+    }
+  });
+});
+
 Deno.test("legacy manifests use their file timestamp and remain eligible", async () => {
   await withIsolatedWorkspaceRoot(async () => {
     const source = await repository();

@@ -8,7 +8,7 @@
   "tasks": {
     "build": "deno run --allow-run --allow-write scripts/build.ts",
     "compat": "deno run --allow-env --allow-run scripts/compat.ts",
-    "check": "deno check src/main.ts src/cli.ts src/server.ts scripts/build.ts scripts/compat.ts scripts/planning_workspace.ts scripts/planning_workflow.ts src/workspaces/stale_cleanup.ts tests/cli_test.ts tests/compat_runner_test.ts tests/fixtures/fake_acp_agent.ts tests/fixtures/raw_wire_acp_agent.ts tests/mcp_annotations_test.ts tests/planning_workflow_test.ts tests/workspace_tools_test.ts tests/workspaces_test.ts",
+    "check": "deno check src/main.ts src/cli.ts src/server.ts src/diagnostics/doctor.ts scripts/build.ts scripts/compat.ts scripts/planning_workspace.ts scripts/planning_workflow.ts src/workspaces/stale_cleanup.ts tests/cli_test.ts tests/doctor_test.ts tests/compat_runner_test.ts tests/fixtures/fake_acp_agent.ts tests/fixtures/raw_wire_acp_agent.ts tests/mcp_annotations_test.ts tests/planning_workflow_test.ts tests/workspace_tools_test.ts tests/workspaces_test.ts",
     "test": "deno test --allow-env --allow-read --allow-run --allow-write --allow-net=opencode.ai"
   }
 }
