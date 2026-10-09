@@ -293,6 +293,11 @@ response includes its prompt ID. Use `get_events` with the session ID and
 cancellation. Raw ACP payloads and thought events are omitted from polling
 results unless requested.
 
+Each MCP tool advertises effect and open-world annotations to help hosts decide
+how to present or gate calls. These are behavioral hints, not security controls
+or a sandbox; host approval policies and the tool implementation remain
+authoritative.
+
 Inbound `session/update` notifications are intercepted at the public SDK stream
 boundary before SDK notification validation. The bridge journals their original
 params, including metadata and unknown update tags, while all other ACP traffic

@@ -59,6 +59,9 @@
 
 ### Changed
 
+- Declare explicit read-only, destructive, idempotency, and open-world hints for
+  every public MCP tool; these annotations describe behavior but do not enforce
+  security policy.
 - Clarify that `read_only` governs only ACP permission requests and is not a
   filesystem sandbox; deterministic coverage demonstrates that a fake ACP
   process can write directly without requesting permission.

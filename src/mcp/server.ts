@@ -221,6 +221,13 @@ export function createMcpServer(
   server.registerTool("list_agents", {
     description:
       "List configured ACP agents and whether their launch executable is present. commandFound does not verify authentication or provider access.",
+    annotations: {
+      title: "List ACP agents",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     inputSchema: z.object({}),
   }, async (): Promise<CallToolResult> => {
     const listedAgents = await Promise.all(
@@ -240,6 +247,13 @@ export function createMcpServer(
   });
   server.registerTool("start_session", {
     description: "Start an ACP session and optionally send an initial prompt",
+    annotations: {
+      title: "Start ACP session",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       agentId: z.string(),
       cwd: z.string().optional(),
@@ -525,6 +539,13 @@ export function createMcpServer(
     {
       description:
         "List model choices advertised by a live ACP session, with optional OpenCode metadata",
+      annotations: {
+        title: "List ACP models",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
       inputSchema: {
         agentId: z.string(),
         cwd: z.string().optional(),
@@ -657,6 +678,13 @@ export function createMcpServer(
   server.registerTool("load_session", {
     description:
       "Load an existing ACP session when the agent advertises session/load support",
+    annotations: {
+      title: "Load ACP session",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       agentId: z.string(),
       acpSessionId: z.string(),
@@ -695,6 +723,13 @@ export function createMcpServer(
   server.registerTool("prompt", {
     description:
       "Send a prompt to an active ACP session; wait=false returns a prompt ID for polling",
+    annotations: {
+      title: "Prompt ACP session",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       sessionId: z.string(),
       text: z.string(),
@@ -725,6 +760,13 @@ export function createMcpServer(
     "get_events",
     {
       description: "Read buffered ACP session updates after a sequence cursor",
+      annotations: {
+        title: "Get ACP events",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         sessionId: z.string(),
         afterSequence: z.number().int().min(0).optional(),
@@ -766,6 +808,13 @@ export function createMcpServer(
   );
   server.registerTool("cancel_prompt", {
     description: "Cancel a running prompt using ACP session/cancel",
+    annotations: {
+      title: "Cancel ACP prompt",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: { sessionId: z.string(), promptId: z.string() },
   }, async ({ sessionId, promptId }) => {
     try {
@@ -786,6 +835,13 @@ export function createMcpServer(
   });
   server.registerTool("list_sessions", {
     description: "List managed ACP sessions",
+    annotations: {
+      title: "List ACP sessions",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     inputSchema: z.object({}),
   }, (): Promise<CallToolResult> =>
     Promise.resolve({
@@ -800,6 +856,13 @@ export function createMcpServer(
     }));
   server.registerTool("get_session", {
     description: "Get capabilities and live configuration metadata",
+    annotations: {
+      title: "Get ACP session",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     inputSchema: { sessionId: z.string() },
   }, ({ sessionId }) => {
     try {
@@ -838,6 +901,13 @@ export function createMcpServer(
   });
   server.registerTool("set_config_option", {
     description: "Set an advertised ACP session configuration option",
+    annotations: {
+      title: "Set ACP config option",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       sessionId: z.string(),
       configId: z.string(),
@@ -863,6 +933,13 @@ export function createMcpServer(
   });
   server.registerTool("set_mode", {
     description: "Set an advertised ACP session mode",
+    annotations: {
+      title: "Set ACP session mode",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: { sessionId: z.string(), modeId: z.string() },
   }, async ({ sessionId, modeId }) => {
     try {
@@ -881,6 +958,13 @@ export function createMcpServer(
   server.registerTool("resolve_permission", {
     description:
       "Resolve an operator permission request using one of its advertised option IDs",
+    annotations: {
+      title: "Resolve ACP permission",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       sessionId: z.string(),
       permissionId: z.string(),
@@ -902,6 +986,13 @@ export function createMcpServer(
   });
   server.registerTool("close_session", {
     description: "Close an ACP session",
+    annotations: {
+      title: "Close ACP session",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: { sessionId: z.string() },
   }, async ({ sessionId }) => {
     try {
