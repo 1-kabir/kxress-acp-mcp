@@ -60,6 +60,9 @@ export type PermissionPolicy =
   | "allow_all"
   | "deny_all";
 
+export const DEFAULT_SESSION_START_TIMEOUT_MS = 30_000;
+export const DEFAULT_SESSION_CLOSE_TIMEOUT_MS = 5_000;
+
 export interface PendingPermission {
   id: string;
   toolCall: unknown;
@@ -75,7 +78,11 @@ export interface PendingPermission {
 
 export class SessionManager {
   readonly sessions = new Map<string, ManagedSession>();
-  constructor(private agents: AgentMap) {}
+  constructor(
+    private agents: AgentMap,
+    private readonly startupTimeoutMs = DEFAULT_SESSION_START_TIMEOUT_MS,
+    private readonly closeRequestTimeoutMs = DEFAULT_SESSION_CLOSE_TIMEOUT_MS,
+  ) {}
 
   start(
     agentId: string,
@@ -139,56 +146,77 @@ export class SessionManager {
       permission: (request) =>
         this.requestPermission(request, permissionPolicy),
     });
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const initialized = await driver.initialize();
-      const sessionResponse = loadSessionId
-        ? await driver.resumeSession(loadSessionId, cwd)
-        : await driver.newSession(cwd);
-      const acpId = sessionResponse.sessionId;
-      let configOptions = [...sessionResponse.configOptions];
-      let modes = sessionResponse.modes;
-      const modelConfigIds = new Set(configOptions.flatMap((option) => {
-        const id = typeof option.id === "string" ? option.id : undefined;
-        if (
-          id &&
-          (option.category === "model" ||
-            ((option.category === undefined || option.category === null) &&
-              id === def.modelConfigId))
-        ) return [id];
-        return [];
-      }));
-      const desired = Object.entries(config).sort(([a], [b]) =>
-        Number(modelConfigIds.has(b)) - Number(modelConfigIds.has(a))
-      );
-      for (const [configId, value] of desired) {
-        const option = configOptions.find((item) => item.id === configId);
-        if (!option && configOptions.length) {
-          throw new Error(`Unknown config option: ${configId}`);
-        }
-        if (option?.type === "select" && Array.isArray(option.options)) {
-          const values = (option.options as Array<Record<string, unknown>>)
-            .flatMap((entry) =>
-              Array.isArray(entry.options)
-                ? entry.options as Array<Record<string, unknown>>
-                : [entry]
-            );
-          if (values.length && !values.some((entry) => entry.value === value)) {
-            throw new Error(
-              `Invalid value '${value}' for config option '${configId}'`,
-            );
-          }
-        }
-        configOptions = await driver.setConfigOption(
-          acpId,
-          configId,
-          value,
-          option,
+      const startup = async () => {
+        const initialized = await driver.initialize();
+        const sessionResponse = loadSessionId
+          ? await driver.resumeSession(loadSessionId, cwd)
+          : await driver.newSession(cwd);
+        const acpId = sessionResponse.sessionId;
+        let configOptions = [...sessionResponse.configOptions];
+        let modes = sessionResponse.modes;
+        const modelConfigIds = new Set(configOptions.flatMap((option) => {
+          const id = typeof option.id === "string" ? option.id : undefined;
+          if (
+            id &&
+            (option.category === "model" ||
+              ((option.category === undefined || option.category === null) &&
+                id === def.modelConfigId))
+          ) return [id];
+          return [];
+        }));
+        const desired = Object.entries(config).sort(([a], [b]) =>
+          Number(modelConfigIds.has(b)) - Number(modelConfigIds.has(a))
         );
-      }
-      if (modeId) {
-        modes = await driver.setMode(acpId, modeId, configOptions, modes) ??
-          modes;
-      }
+        for (const [configId, value] of desired) {
+          const option = configOptions.find((item) => item.id === configId);
+          if (!option && configOptions.length) {
+            throw new Error(`Unknown config option: ${configId}`);
+          }
+          if (option?.type === "select" && Array.isArray(option.options)) {
+            const values = (option.options as Array<Record<string, unknown>>)
+              .flatMap((entry) =>
+                Array.isArray(entry.options)
+                  ? entry.options as Array<Record<string, unknown>>
+                  : [entry]
+              );
+            if (
+              values.length && !values.some((entry) => entry.value === value)
+            ) {
+              throw new Error(
+                `Invalid value '${value}' for config option '${configId}'`,
+              );
+            }
+          }
+          configOptions = await driver.setConfigOption(
+            acpId,
+            configId,
+            value,
+            option,
+          );
+        }
+        if (modeId) {
+          modes = await driver.setMode(acpId, modeId, configOptions, modes) ??
+            modes;
+        }
+        return { initialized, sessionResponse, configOptions, modes };
+      };
+      const timedOut = new Promise<never>((_, reject) => {
+        startupTimer = setTimeout(() => {
+          const error = new Error(
+            `ACP session startup timed out after ${this.startupTimeoutMs}ms`,
+          );
+          driver.closeConnection(error);
+          reject(error);
+        }, this.startupTimeoutMs);
+      });
+      const { initialized, sessionResponse, configOptions, modes } =
+        await Promise.race([
+          startup(),
+          timedOut,
+        ]);
+      const acpId = sessionResponse.sessionId;
       const session: ManagedSession = {
         id: crypto.randomUUID(),
         agentId,
@@ -221,6 +249,8 @@ export class SessionManager {
           error instanceof Error ? error.message : String(error)
         }; ${process.stderrTail()}`,
       );
+    } finally {
+      if (startupTimer !== undefined) clearTimeout(startupTimer);
     }
   }
 
@@ -297,14 +327,16 @@ export class SessionManager {
           : "completed";
       }
     } catch (error) {
-      record.state = "failed";
-      record.error = error instanceof Error ? error.message : String(error);
-      if (
-        error && typeof error === "object" &&
-        "code" in error && typeof error.code === "number"
-      ) record.errorCode = error.code;
-      if (error && typeof error === "object" && "data" in error) {
-        record.errorData = error.data;
+      if (record.state === "running") {
+        record.state = "failed";
+        record.error = error instanceof Error ? error.message : String(error);
+        if (
+          error && typeof error === "object" &&
+          "code" in error && typeof error.code === "number"
+        ) record.errorCode = error.code;
+        if (error && typeof error === "object" && "data" in error) {
+          record.errorData = error.data;
+        }
       }
     } finally {
       session.promptActive = false;
@@ -570,6 +602,11 @@ export class SessionManager {
 
   async close(id: string): Promise<void> {
     const session = this.get(id);
+    if (session.prompt?.state === "running") {
+      try {
+        await this.cancelPrompt(id, session.prompt.id);
+      } catch { /* Closing the connection remains authoritative. */ }
+    }
     if (session.permissionLease) clearTimeout(session.permissionLease);
     session.permissionLease = undefined;
     for (const pending of session.pendingPermissions.values()) {
@@ -577,9 +614,18 @@ export class SessionManager {
     }
     session.pendingPermissions.clear();
     this.sessions.delete(id);
-    try {
-      await session.driver.closeSession(session.acpSessionId);
-    } catch { /* Process shutdown remains authoritative. */ }
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    const closeRequest = session.driver.closeSession(session.acpSessionId)
+      .catch(
+        () => undefined,
+      );
+    await Promise.race([
+      closeRequest,
+      new Promise<void>((resolve) => {
+        closeTimer = setTimeout(resolve, this.closeRequestTimeoutMs);
+      }),
+    ]);
+    if (closeTimer !== undefined) clearTimeout(closeTimer);
     session.driver.closeConnection();
     await stopAgent(session.process.child, 5000);
   }

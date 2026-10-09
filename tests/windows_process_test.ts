@@ -1,4 +1,30 @@
-import { quoteCmdStaticArgument, startAgent } from "../src/runtime/process.ts";
+import {
+  quoteCmdStaticArgument,
+  startAgent,
+  stopAgent,
+} from "../src/runtime/process.ts";
+
+Deno.test("stopAgent forcefully bounds cleanup when a child ignores stdin EOF", async () => {
+  const fixture = new URL("./fixtures/ignore_shutdown.ts", import.meta.url)
+    .pathname;
+  const path = Deno.build.os === "windows"
+    ? decodeURIComponent(fixture.replace(/^\//, ""))
+    : fixture;
+  const child = await startAgent({
+    command: Deno.execPath(),
+    args: ["run", path],
+  }, Deno.cwd());
+  const started = performance.now();
+  try {
+    await stopAgent(child.child, 50);
+    const status = await child.child.status;
+    if (status.success || performance.now() - started > 3_000) {
+      throw new Error("An uncooperative child was not forcefully stopped");
+    }
+  } finally {
+    await child.stderrDone;
+  }
+});
 
 Deno.test({
   name: "configured batch wrapper preserves quoted static arguments",

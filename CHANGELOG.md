@@ -18,6 +18,9 @@
 
 ### Added
 
+- Bound ACP initialization, session creation, and startup configuration to 30
+  seconds. Closing cancels active prompts and bounds the ACP close request
+  before process cleanup continues.
 - Add offline `acp-mcp doctor` diagnostics for local configuration, agent
   executable availability, declared runtime prerequisites, and stale disposable
   workspace state. It does not start agents or verify provider authentication.

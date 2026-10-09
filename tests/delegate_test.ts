@@ -782,6 +782,38 @@ Deno.test("run_task idle timeout resets on known and unknown ACP updates", async
   }
 });
 
+Deno.test("stderr output alone does not reset the run_task idle timeout", async () => {
+  const { manager, server, mcp, closedChildren, closedStderr } =
+    await harness();
+  try {
+    const result = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "stderr only",
+        idleTimeoutMs: 60,
+      }).response,
+    );
+    if (
+      result.status !== "timed_out" ||
+      (result.error as Record<string, unknown>)?.stage !== "prompt" ||
+      manager.sessions.size !== 0
+    ) {
+      throw new Error(`stderr kept the task alive: ${JSON.stringify(result)}`);
+    }
+    await Promise.all(closedChildren);
+    if (
+      closedChildren.length !== 1 ||
+      !closedStderr[0]().includes("stderr heartbeat")
+    ) {
+      throw new Error("The stderr-only fixture did not exercise cleanup");
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
 Deno.test("activity in another session does not reset a silent task", async () => {
   const { manager, server, mcp } = await harness();
   try {

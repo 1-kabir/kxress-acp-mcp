@@ -340,6 +340,13 @@ request cancellation still cancels the task immediately. For
 how long the session remains available for operator resolution; after the
 handoff, that lease owns the session lifecycle.
 
+ACP initialization, session creation/resume, and startup configuration have a
+separate 30-second bound before a managed session is created. `close_session`
+cancels an active prompt before closing the agent session; the close RPC is
+bounded at 5 seconds before process cleanup continues. A graceful MCP stdio
+disconnect closes managed sessions. Forced server termination is not a
+cross-platform child-cleanup guarantee.
+
 The `cwd` supplied to `run_task`, `start_session`, or `load_session` is used
 both as the ACP session working directory and as the launched agent process's
 working directory. Agent profiles cannot silently override it.

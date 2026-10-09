@@ -186,6 +186,180 @@ Deno.test("polls and cancels an asynchronous prompt", async () => {
   }
 });
 
+Deno.test("cancellation remains authoritative if the prompt then errors", async () => {
+  const manager = new SessionManager({
+    fake: {
+      command: Deno.execPath(),
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-read",
+        fakeFixturePath(),
+      ],
+    },
+  });
+  try {
+    const session = await manager.start("fake", Deno.cwd());
+    const prompt = manager.beginPrompt(session.id, "cancel then fail");
+    const cancelled = await manager.cancelPrompt(session.id, prompt.id);
+    await prompt.done;
+    if (cancelled.state !== "cancelled" || prompt.state !== "cancelled") {
+      throw new Error(
+        `Prompt failure overwrote cancellation: ${prompt.state}`,
+      );
+    }
+  } finally {
+    await manager.closeAll();
+  }
+});
+
+Deno.test("late ACP output after cancellation is journaled but cannot complete the prompt", async () => {
+  const manager = new SessionManager({
+    fake: {
+      command: Deno.execPath(),
+      args: ["run", "--allow-env", "--allow-read", fakeFixturePath()],
+    },
+  });
+  try {
+    const session = await manager.start("fake", Deno.cwd());
+    const prompt = manager.beginPrompt(session.id, "cancel then late update");
+    await manager.cancelPrompt(session.id, prompt.id);
+    await prompt.done;
+    const journal = manager.getEvents(session.id);
+    if (
+      prompt.state !== "cancelled" || prompt.text ||
+      !journal.events.some((event) => event.kind === "agent_message_chunk")
+    ) {
+      throw new Error(
+        `Late output changed cancelled state: ${
+          JSON.stringify({
+            state: prompt.state,
+            text: prompt.text,
+            events: journal.events.map((event) => event.kind),
+          })
+        }`,
+      );
+    }
+  } finally {
+    await manager.closeAll();
+  }
+});
+
+Deno.test("closing an active session cancels its prompt before cleanup", async () => {
+  const manager = new SessionManager({
+    fake: {
+      command: Deno.execPath(),
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-read",
+        fakeFixturePath(),
+      ],
+    },
+  });
+  try {
+    const session = await manager.start("fake", Deno.cwd());
+    const prompt = manager.beginPrompt(session.id, "wait");
+    await manager.close(session.id);
+    await prompt.done;
+    if (prompt.state !== "cancelled" || manager.sessions.size !== 0) {
+      throw new Error(
+        `Active close did not cancel/remove the session: ${prompt.state}`,
+      );
+    }
+  } finally {
+    await manager.closeAll();
+  }
+});
+
+Deno.test("cancelling after completed prompt preserves completion", async () => {
+  const manager = new SessionManager({
+    fake: {
+      command: Deno.execPath(),
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-read",
+        fakeFixturePath(),
+      ],
+    },
+  });
+  try {
+    const session = await manager.start("fake", Deno.cwd());
+    const prompt = manager.beginPrompt(session.id, "hello");
+    await prompt.done;
+    const result = await manager.cancelPrompt(session.id, prompt.id);
+    if (result.state !== "completed" || result.stopReason !== "end_turn") {
+      throw new Error(`Late cancellation rewrote completion: ${result.state}`);
+    }
+  } finally {
+    await manager.closeAll();
+  }
+});
+
+Deno.test("closed sessions release capacity while active sessions are retained", async () => {
+  const manager = new SessionManager({
+    fake: {
+      command: Deno.execPath(),
+      args: ["run", "--allow-env", "--allow-read", fakeFixturePath()],
+    },
+  });
+  try {
+    const sessions = [];
+    for (let i = 0; i < 8; i++) {
+      sessions.push(await manager.start("fake", Deno.cwd()));
+    }
+    let rejected = false;
+    try {
+      await manager.start("fake", Deno.cwd());
+    } catch (error) {
+      rejected = String(error).includes("Active session limit (8) reached");
+    }
+    if (!rejected || manager.sessions.size !== 8) {
+      throw new Error("The active-session capacity was not enforced");
+    }
+    await manager.close(sessions[0].id);
+    const replacement = await manager.start("fake", Deno.cwd());
+    if (manager.sessions.size !== 8) {
+      throw new Error("A closed session continued to consume capacity");
+    }
+    await manager.close(replacement.id);
+  } finally {
+    await manager.closeAll();
+  }
+});
+
+Deno.test("a hung ACP session/close cannot block child cleanup", async () => {
+  const manager = new SessionManager(
+    {
+      fake: {
+        command: Deno.execPath(),
+        args: [
+          "run",
+          "--allow-env",
+          "--allow-read",
+          fakeFixturePath(),
+          "--session-close-hang",
+        ],
+      },
+    },
+    100,
+    40,
+  );
+  try {
+    const session = await manager.start("fake", Deno.cwd());
+    const startedAt = performance.now();
+    await manager.close(session.id);
+    if (
+      performance.now() - startedAt > 1_000 || manager.sessions.size !== 0
+    ) {
+      throw new Error("Hung session/close blocked cleanup or retained state");
+    }
+  } finally {
+    await manager.closeAll();
+  }
+});
+
 Deno.test("holds operator permission until an advertised choice is resolved", async () => {
   const manager = new SessionManager({
     fake: {

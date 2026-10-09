@@ -12,6 +12,17 @@ let activeConfigOptions: SessionConfigOption[] = [];
 app.onRequest(
   "initialize",
   ({ params }) => {
+    const pidFile = Deno.args.find((arg) => arg.startsWith("--pid-file="));
+    if (pidFile) {
+      Deno.writeTextFile(pidFile.slice("--pid-file=".length), String(Deno.pid));
+    }
+    if (Deno.args.includes("--initialize-exit")) Deno.exit(12);
+    if (Deno.args.includes("--initialize-hang")) {
+      return new Promise(() => {});
+    }
+    if (Deno.args.includes("--initialize-fail")) {
+      throw new Error("fixture initialize failed");
+    }
     const capabilities = (params as {
       clientCapabilities?: {
         session?: { configOptions?: { boolean?: unknown } };
@@ -23,6 +34,8 @@ app.onRequest(
   },
 );
 app.onRequest("session/new", ({ params }) => {
+  if (Deno.args.includes("--session-exit")) Deno.exit(13);
+  if (Deno.args.includes("--session-hang")) return new Promise(() => {});
   const delayArgument = Deno.args.find((arg) =>
     arg.startsWith("--session-delay-ms=")
   );
@@ -104,9 +117,24 @@ app.onRequest("session/new", ({ params }) => {
   return { sessionId: crypto.randomUUID(), configOptions };
 });
 app.onRequest("session/load", () => ({}));
-app.onRequest("session/close", () => {
+app.onRequest("session/close", async () => {
+  const closeMarker = Deno.args.find((arg) =>
+    arg.startsWith("--close-marker=")
+  );
+  if (closeMarker) {
+    await Deno.writeTextFile(
+      closeMarker.slice("--close-marker=".length),
+      "closed",
+    );
+  }
+  if (Deno.args.includes("--session-close-hang")) {
+    await new Promise(() => {});
+  }
   if (exitNonzeroAfterClose) {
     setTimeout(() => Deno.exit(23), 25);
+  }
+  if (Deno.args.includes("--exit-on-close")) {
+    setTimeout(() => Deno.exit(0), 25);
   }
   return {};
 });
@@ -166,6 +194,15 @@ app.onRequest("session/prompt", async ({ params, client }) => {
   }
   if (promptText === "empty response") return { stopReason: "end_turn" };
   if (promptText === "permission" || promptText === "operator delegate") {
+    const permissionMarker = Deno.args.find((arg) =>
+      arg.startsWith("--permission-marker=")
+    );
+    if (permissionMarker) {
+      await Deno.writeTextFile(
+        permissionMarker.slice("--permission-marker=".length),
+        "requested",
+      );
+    }
     const answer = await client.request("session/request_permission", {
       sessionId,
       toolCall: { toolCallId: "fake-call", kind: "execute" },
@@ -194,6 +231,25 @@ app.onRequest("session/prompt", async ({ params, client }) => {
     }
     return { stopReason: "cancelled" };
   }
+  if (promptText === "cancel then fail") {
+    while (!cancelled.has(sessionId)) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("fixture failed after cancellation");
+  }
+  if (promptText === "cancel then late update") {
+    while (!cancelled.has(sessionId)) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await client.notify("session/update", {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "late after cancellation" },
+      },
+    });
+    return { stopReason: "end_turn" };
+  }
   if (promptText === "active stream") {
     let index = 0;
     while (!cancelled.has(sessionId)) {
@@ -205,6 +261,13 @@ app.onRequest("session/prompt", async ({ params, client }) => {
         },
       });
       await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return { stopReason: "cancelled" };
+  }
+  if (promptText === "stderr only") {
+    while (!cancelled.has(sessionId)) {
+      await Deno.stderr.write(new TextEncoder().encode("stderr heartbeat\n"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
     return { stopReason: "cancelled" };
   }
@@ -256,3 +319,4 @@ app.onNotification("session/cancel", ({ params }) => {
   void Deno.stderr.write(new TextEncoder().encode("ACP_CANCEL_RECEIVED\n"));
 });
 app.connect(ndJsonStream(Deno.stdout.writable, Deno.stdin.readable));
+if (Deno.args.includes("--ignore-eof")) setInterval(() => {}, 1000);
