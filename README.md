@@ -48,6 +48,20 @@ Built-in agent IDs use their canonical ACP launch paths:
   `args: ["-y", "@agentclientprotocol/codex-acp"]`; this may download the
   package when first run. The adapter bundles a compatible Codex CLI by default
   and supports `CODEX_PATH` when you want to select another executable.
+- `claude` starts the
+  [maintained Claude Agent ACP adapter](https://github.com/agentclientprotocol/claude-agent-acp),
+  powered by the official Claude Agent SDK. Install Node.js 22 or later and
+  install the upstream adapter with
+  `npm install -g @agentclientprotocol/claude-agent-acp`. The built-in profile
+  launches `claude-agent-acp`; generic `agents.claude.command`, `args`, and
+  `env` overrides support user-local installations and external provider
+  configuration. Provider authentication, endpoint, and model remain user
+  configuration. The profile does not choose billing or require an Anthropic
+  subscription; the adapter still needs a supported provider configuration. Use
+  `list_models` before selecting an exact model; there is no preferred Claude
+  model in `acp-mcp`. The adapter can use providers compatible with the Claude
+  Agent SDK, but this does not establish compatibility with every provider/model
+  combination. Live validation used a user-configured OpenRouter route.
 - `antigravity` starts Google's separate first-party ACP server. Install it from
   the
   [ACP Registry](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp);
@@ -59,6 +73,11 @@ session, configuration, activity-based idle timeout, permission, event, and
 cleanup flow. Custom ACP stdio commands continue to work without a built-in
 profile. `list_agents` includes `commandFound` to report whether the configured
 executable is present; it does not check authentication or provider access.
+
+For repository planning with Claude or another ACP agent, use the disposable
+planning workflow after live model discovery. It runs against a temporary
+snapshot, leaves the working tree out of reach for ordinary relative writes, and
+removes the snapshot after the attempt. This is not an OS sandbox.
 
 ### Antigravity authentication
 

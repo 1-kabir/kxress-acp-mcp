@@ -45,6 +45,13 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
       installHint:
         "Install globally with npm install -g @agentclientprotocol/codex-acp, or explicitly configure npx -y @agentclientprotocol/codex-acp. CODEX_PATH can select another Codex executable.",
     },
+    claude: {
+      command: "claude-agent-acp",
+      args: [],
+      displayName: "Claude Agent ACP",
+      installHint:
+        "Install Node.js 22 or later, then install the official adapter with npm install -g @agentclientprotocol/claude-agent-acp. Configure command, args, or env in the acp-mcp agent config for a user-local installation or provider setup.",
+    },
     antigravity: {
       command: antigravityCommand,
       args: Deno.build.os === "linux" ? ["--uid="] : [],

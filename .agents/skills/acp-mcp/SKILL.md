@@ -11,11 +11,17 @@ the user asks to inspect available agents or models.
 ## Choose the tool
 
 - Use `list_agents` to see configured ACP agents.
-- Built-in IDs are `opencode`, `codex`, and `antigravity`. They launch through
-  OpenCode's native ACP mode, the maintained Codex ACP adapter, and Google's
-  first-party Antigravity ACP server, respectively. The generic bridge uses the
-  same ACP runtime after each command starts. `list_agents.commandFound` reports
-  executable presence only; it does not verify credentials.
+- Built-in IDs are `opencode`, `codex`, `claude`, and `antigravity`. They launch
+  through OpenCode's native ACP mode, the maintained Codex ACP adapter, the
+  maintained Claude Agent ACP adapter, and Google's first-party Antigravity ACP
+  server. The generic bridge uses the same ACP runtime after each command
+  starts. `list_agents.commandFound` reports executable presence only; it does
+  not verify credentials or provider access.
+- Claude Agent ACP is a launch profile, not a provider or subscription choice.
+  Provider authentication, endpoint, and model come from user configuration and
+  the adapter's advertised ACP options. Use `list_models` for the current
+  session, then select an exact advertised model and any advertised reasoning
+  value. Do not assume a particular Claude model or provider.
 - For Antigravity, a `session_start_failed` result reporting authentication
   required can mean its separate ACP profile lacks an auth selector even when
   the normal `agy` CLI is authenticated. Check

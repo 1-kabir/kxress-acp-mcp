@@ -34,6 +34,9 @@
   remains in the ACP usage skill; `run_task` never routes or retries.
 - Built-in Codex ACP adapter and first-party Antigravity ACP server profiles.
   `list_agents` now reports whether each profile's executable is present.
+- Add the built-in Claude Agent ACP profile for the maintained adapter. The
+  launch profile stays provider-neutral; live validation uses a user-configured
+  OpenRouter route and does not establish a default model.
 - Live validation confirmed Antigravity reuses its persisted ACP authentication
   across fresh server processes. Documentation covers the separate ACP auth
   selector and a stable user-local executable configured by absolute path. The

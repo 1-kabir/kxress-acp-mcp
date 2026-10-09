@@ -17,6 +17,13 @@ Deno.test("built-in profiles describe ACP launch routes without vendor behavior"
       agents.codex.env || agents.codex.modelConfigId ||
       agents.codex.modelEnrichment || agents.codex.failureClassifier
     ) throw new Error("Codex profile is not a plain ACP adapter profile");
+    if (
+      agents.claude.command !== "claude-agent-acp" ||
+      agents.claude.args.length !== 0 ||
+      agents.claude.displayName !== "Claude Agent ACP" || agents.claude.env ||
+      agents.claude.modelConfigId || agents.claude.modelEnrichment ||
+      agents.claude.failureClassifier
+    ) throw new Error("Claude profile is not a plain ACP adapter profile");
     const expectedAntigravityCommand = Deno.build.os === "windows"
       ? "agy_acp_server"
       : "agy_acp_server.par";
@@ -31,10 +38,37 @@ Deno.test("built-in profiles describe ACP launch routes without vendor behavior"
     ) throw new Error("Antigravity profile has unexpected special behavior");
     if (
       !agents.codex.installHint?.includes("@agentclientprotocol/codex-acp") ||
+      !agents.claude.installHint?.includes(
+        "@agentclientprotocol/claude-agent-acp",
+      ) || !agents.claude.installHint?.includes("Node.js 22") ||
       !agents.antigravity.installHint?.includes(
         "Agent Client Protocol Registry",
       ) || !agents.antigravity.installHint?.includes("absolute path")
     ) throw new Error("Built-in profiles lack canonical install hints");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("Claude profile accepts generic command, args, and env overrides", async () => {
+  const dir = await Deno.makeTempDir();
+  const configPath = `${dir}/config.json`;
+  const override = {
+    command: `${dir}/claude-agent.cmd`,
+    args: ["--stdio"],
+    env: { ACPMCP_TEST_PROVIDER_ENDPOINT: "https://provider.invalid/v1" },
+  };
+  try {
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        agents: { claude: override },
+      }),
+    );
+    const agents = await loadAgents(configPath);
+    if (JSON.stringify(agents.claude) !== JSON.stringify(override)) {
+      throw new Error("Generic Claude profile override was not applied");
+    }
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -127,7 +161,7 @@ Deno.test("list_agents reports command presence without implying authentication"
   }
 });
 
-Deno.test("Codex and Antigravity profiles use generic ACP discovery and failures", async () => {
+Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures", async () => {
   const dir = await Deno.makeTempDir();
   const agents = await loadAgents(`${dir}/missing-config.json`);
   const fixtureArgs = [
@@ -138,7 +172,7 @@ Deno.test("Codex and Antigravity profiles use generic ACP discovery and failures
     "tests/fixtures/fake_acp_agent.ts",
     "--advertise-models",
   ];
-  for (const id of ["codex", "antigravity"]) {
+  for (const id of ["codex", "claude", "antigravity"]) {
     agents[id] = {
       ...agents[id],
       command: Deno.execPath(),
@@ -149,7 +183,7 @@ Deno.test("Codex and Antigravity profiles use generic ACP discovery and failures
   const server = createMcpServer(agents, manager);
   const mcp = await connectMcp(server);
   try {
-    for (const agentId of ["codex", "antigravity"]) {
+    for (const agentId of ["codex", "claude", "antigravity"]) {
       const discovery = parseToolResult(
         await mcp.callTool("list_models", {
           agentId,
