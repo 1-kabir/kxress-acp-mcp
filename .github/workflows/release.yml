@@ -1,0 +1,82 @@
+name: Native releases
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x86_64
+            os: windows-latest
+          - target: linux-x86_64
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: denoland/setup-deno@v2.0.5
+        with:
+          deno-version: 2.9.6
+
+      - name: Verify tag matches source version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: deno run --allow-read --allow-env=GITHUB_REF_NAME scripts/github_release_assets.ts check-tag
+
+      - name: Build, validate, and smoke-test native release bundle
+        run: deno task release
+
+      - name: Stage uniquely named release assets
+        run: deno run --allow-read --allow-write scripts/github_release_assets.ts stage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/github-release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create release without replacing an existing tag release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "::error::A GitHub Release already exists for $RELEASE_TAG; refusing to replace its assets."
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --repo "$GH_REPO" \
+            --verify-tag \
+            --generate-notes \
+            --title "acp-mcp $version"
