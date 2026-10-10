@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.1 (unreleased)
+
+### Added
+
+- Allow trusted configuration to register arbitrary stdio ACP agents through the
+  existing generic runtime.
+- Normalize thinking-effort requests across the ordered `off` through `ultra`
+  scale using live advertised choices.
+
+## 0.2.0
 
 ### Breaking changes
 
