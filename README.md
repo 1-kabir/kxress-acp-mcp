@@ -136,7 +136,8 @@ Built-in agent IDs use their canonical ACP launch paths:
   the
   [ACP Registry](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp);
   on Windows the binary is `agy_acp_server.exe`. Put it on `PATH` or configure
-  its absolute path. This remains the default Antigravity implementation.
+  its absolute path. This remains the default Antigravity implementation and the
+  official ACP baseline.
 - The same profile can explicitly select the independent refined wrapper with
   `"implementation": "refined"`; `list_agents` and doctor identify the chosen
   implementation. Install Node.js 22+ and the wrapper with
@@ -149,6 +150,28 @@ Built-in agent IDs use their canonical ACP launch paths:
   ACP-advertised models/config are passed through without acp-mcp additions. It
   does not make Opus available unless it advertises it.
 
+- The `"implementation": "agy"` selection uses the pinned
+  [shubzkothekar/antigravity-acp](https://github.com/shubzkothekar/antigravity-acp)
+  Windows x64 v1.2.0 adapter (revision
+  `d10aa13c932236ef241863f2c8b3afdda2a2be12`), which drives the existing `agy`
+  CLI. Run the explicit provisioning task below to verify the upstream release
+  SHA-256 and install the adapter under
+  `%LOCALAPPDATA%\acp-mcp\agents\antigravity-agy\1.2.0\`. It does not install or
+  change `agy` or its authentication. Set `env.AGY_BIN` to the absolute path of
+  an existing `agy.exe`; config values do not expand environment-variable
+  placeholders. The adapter is v1-only in this profile. It dynamically discovers
+  and advertises models. In the tested account and adapter version, ACP
+  advertised 18 choices including `claude-opus-5-5-high`; availability depends
+  on the installed CLI, account, and entitlement. acp-mcp does not add models.
+  The adapter invokes `agy` with `--dangerously-skip-permissions`, so its
+  actions are not mediated by ACP permission requests and `permissionPolicy`
+  cannot gate those actions. The adapter's upstream README warns that
+  third-party tools accessing Antigravity with personal OAuth may violate
+  Google's terms and could lead to account suspension or termination; review the
+  [current Antigravity terms](https://antigravity.google/terms) before choosing
+  this implementation. It is an explicit community-adapter trust and account-
+  risk choice, not official Google software.
+
 Select refined explicitly in `%APPDATA%\acp-mcp\config.json` (replace the
 placeholder with the actual absolute executable path; config paths do not expand
 environment variables):
@@ -160,6 +183,22 @@ environment variables):
       "implementation": "refined",
       "env": {
         "REFINED_AGY_ACP_BIN": "C:\\Tools\\Antigravity ACP\\agy_acp_server.exe"
+      }
+    }
+  }
+}
+```
+
+Select the agy-backed implementation explicitly (replace the `AGY_BIN`
+placeholder with the absolute path to the existing CLI executable):
+
+```json
+{
+  "agents": {
+    "antigravity": {
+      "implementation": "agy",
+      "env": {
+        "AGY_BIN": "C:\\Tools\\Antigravity CLI\\agy.exe"
       }
     }
   }
@@ -182,13 +221,14 @@ check `list_agents` for local command availability. Arbitrary configured ACP
 agents remain supported by the generic launch/session path, but are not implied
 to be live validated here.
 
-| Agent                                                                                             | Built-in profile                | Live evidence                                                                                                                                                                                                                                                   | Protocol evidence                                                                                |
-| ------------------------------------------------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [OpenCode](https://opencode.ai/docs/cli/acp/)                                                     | Yes                             | OpenCode 2.0.18, v1: `run_task`, advanced sessions, config, load/resume, cleanup. A controlled write occurred without an ACP permission request.                                                                                                                | v1 currently live validated; v2 unconfirmed                                                      |
-| [Codex ACP](https://github.com/agentclientprotocol/codex-acp)                                     | Yes                             | Adapter 2.1.1, v1: `run_task`, advanced sessions, cancellation, cross-session isolation, load/resume, cleanup. Legacy `set_mode` changed state without `current_mode_update`; mode config was observable.                                                       | v1 currently live validated; v2 unconfirmed                                                      |
-| [Antigravity official](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp) | Yes (`antigravity`, default)    | ACP 1.3.0, v1: `run_task`, advanced sessions, permission denial, load/resume, cleanup. Tested `oauth-personal` ACP auth path advertised 11 Gemini choices; `agy` CLI 1.3.2 showed a broader 18-choice catalog. Version/auth sensitive.                          | v1 currently live validated; v2 unconfirmed                                                      |
-| [Antigravity refined](https://github.com/simonepri/refined-antigravity-acp)                       | Yes (`implementation: refined`) | Wrapper 1.4.2 / source `7590d40d170b18dbd66338514e42e08e63bae072`; it wraps Google ACP and transforms some advertised model/config choices. Live acp-mcp validation: **not yet performed**.                                                                     | v1 profile; capabilities depend on wrapper/backend advertisement                                 |
-| [Claude Agent ACP](https://github.com/agentclientprotocol/claude-agent-acp)                       | Yes                             | Adapter 0.88.0: direct installed runs validated v1 and experimental v2 through one external provider route. In one host-launched setup discovery worked but session creation did not; the route was ineffective and the failing process hop was not observable. | v1 direct-process live validated; v2 experimental/route-specific; host-launched route unresolved |
+| Agent                                                                                             | Built-in profile                | Live evidence                                                                                                                                                                                                                                                                                                                                           | Protocol evidence                                                                                |
+| ------------------------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [OpenCode](https://opencode.ai/docs/cli/acp/)                                                     | Yes                             | OpenCode 2.0.18, v1: `run_task`, advanced sessions, config, load/resume, cleanup. A controlled write occurred without an ACP permission request.                                                                                                                                                                                                        | v1 currently live validated; v2 unconfirmed                                                      |
+| [Codex ACP](https://github.com/agentclientprotocol/codex-acp)                                     | Yes                             | Adapter 2.1.1, v1: `run_task`, advanced sessions, cancellation, cross-session isolation, load/resume, cleanup. Legacy `set_mode` changed state without `current_mode_update`; mode config was observable.                                                                                                                                               | v1 currently live validated; v2 unconfirmed                                                      |
+| [Antigravity official](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp) | Yes (`antigravity`, default)    | ACP 1.3.0, v1: `run_task`, advanced sessions, permission denial, load/resume, cleanup. Tested `oauth-personal` ACP auth path advertised 11 Gemini choices; `agy` CLI 1.3.2 showed a broader 18-choice catalog. Version/auth sensitive.                                                                                                                  | v1 currently live validated; v2 unconfirmed                                                      |
+| [Antigravity refined](https://github.com/simonepri/refined-antigravity-acp)                       | Yes (`implementation: refined`) | Wrapper 1.4.2 / source `7590d40d170b18dbd66338514e42e08e63bae072`; raw ACP and installed acp-mcp v1 validation passed. Four Gemini choices; no Opus in the tested catalog.                                                                                                                                                                              | v1 currently live validated; capabilities depend on wrapper/backend advertisement                |
+| [Antigravity agy](https://github.com/shubzkothekar/antigravity-acp)                               | Yes (`implementation: agy`)     | Adapter 1.2.0 / source `d10aa13c932236ef241863f2c8b3afdda2a2be12`; v1 live validated. Tested ACP advertised 18 choices including Opus; `run_task`, multi-turn continuity, model switch, resume, cancellation, and cleanup passed. Adapter uses `--dangerously-skip-permissions`; personal OAuth use carries the upstream-documented account/terms risk. | v1 currently live validated; cancellation observed; ACP permission mediation is bypassed         |
+| [Claude Agent ACP](https://github.com/agentclientprotocol/claude-agent-acp)                       | Yes                             | Adapter 0.88.0: direct installed runs validated v1 and experimental v2 through one external provider route. In one host-launched setup discovery worked but session creation did not; the route was ineffective and the failing process hop was not observable.                                                                                         | v1 direct-process live validated; v2 experimental/route-specific; host-launched route unresolved |
 
 ACP protocol versions are the `protocolVersion` selected during `initialize`;
 they are unrelated to an agent or package's software version. The bridge
@@ -270,7 +310,17 @@ reuse the ACP server's persisted authentication state. It manages its own
 runtime files in this profile; do not copy token files or credentials from the
 CLI profile.
 
-### Stable Antigravity ACP installation on Windows
+### Antigravity ACP installation on Windows
+
+#### Provision the agy-backed community adapter
+
+Run:
+
+```powershell
+mise exec -- deno task provision:antigravity-agy
+```
+
+#### Install the official Google ACP server
 
 Download the Windows archive listed by the official
 [ACP Registry entry](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json)
@@ -309,6 +359,20 @@ ACP authentication, permission, session, and cancellation traffic to the
 official server and adds fixes around that ACP stream. Upstream currently
 documents Windows support and Node.js 22+; use live ACP discovery for models,
 config, modes, and resume support.
+
+For the `agy` implementation, run the explicit Windows x64 provisioning task
+above, keep the official Google server installation untouched, and configure
+`agents.antigravity.implementation` as `"agy"` with `env.AGY_BIN` pointing to
+the existing `agy.exe`. The community adapter is pinned to v1.2.0 and is not
+downloaded during normal MCP startup. It supports ACP v1 and advertises its
+dynamic catalog after session startup. In live testing, `session/cancel`
+canceled an active prompt and stopped its `agy` child; behavior may change with
+future adapter versions. The adapter does not relay `agy` approvals as ACP
+permission requests. Its upstream project warns that third-party Antigravity
+OAuth use may violate Google's terms and risk account suspension or termination.
+This is a community integration, not an official Google implementation. The
+explicit selector values are `official` (default), `refined`, and `agy`; acp-mcp
+does not switch implementations automatically or merge their model catalogs.
 
 ## Agent configuration
 

@@ -55,13 +55,17 @@ asks about configured agents and models.
   The Codex host running this MCP service is distinct from the downstream Codex
   ACP agent.
 - Antigravity's CLI catalog is not its ACP catalog. Use only values advertised
-  by the connected ACP session; do not synthesize CLI models or reasoning
-  controls.
-- The `antigravity` profile defaults to Google's official ACP server. The
-  `implementation: "refined"` config option explicitly selects the independent
-  refined wrapper; `list_agents` reports the effective implementation. There is
-  no automatic fallback between them. Use the selected implementation's live ACP
-  model/config advertisement.
+  by the selected connected ACP implementation; do not synthesize CLI models or
+  reasoning controls.
+- The `antigravity` profile defaults to Google's official ACP server.
+  `implementation: "refined"` selects the refined wrapper, and
+  `implementation: "agy"` selects the pinned community adapter backed by the
+  `agy` CLI. `list_agents` and doctor identify the effective choice. These are
+  explicit selections with no automatic fallback or catalog merging. Follow each
+  selected server's live models/config/capabilities. The agy adapter bypasses
+  ACP permission requests with `--dangerously-skip-permissions`, so
+  `permissionPolicy` cannot mediate its actions; personal Antigravity OAuth use
+  also carries the upstream-documented terms/account risk. Keep it opt-in.
 
 ## Trust and privacy
 
