@@ -138,11 +138,19 @@ Deno.test("Antigravity implementation selection is explicit and profile-driven",
 Deno.test("agy Antigravity profile preserves overrides and validates AGY_BIN paths with spaces", async () => {
   const dir = await Deno.makeTempDir({ prefix: "acp agy profile " });
   const configPath = `${dir}/config.json`;
-  const executable = `${dir}/fake agy.exe`;
-  const adapter = `${dir}/fake agy adapter.exe`;
+  const executable = `${dir}/fake agy${
+    Deno.build.os === "windows" ? ".exe" : ""
+  }`;
+  const adapter = `${dir}/fake agy adapter${
+    Deno.build.os === "windows" ? ".exe" : ""
+  }`;
   try {
-    await Deno.writeTextFile(executable, "fake executable");
+    await Deno.copyFile(Deno.execPath(), executable);
     await Deno.copyFile(Deno.execPath(), adapter);
+    if (Deno.build.os !== "windows") {
+      await Deno.chmod(executable, 0o755);
+      await Deno.chmod(adapter, 0o755);
+    }
     await Deno.writeTextFile(
       configPath,
       JSON.stringify({

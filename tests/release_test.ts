@@ -2,6 +2,7 @@ import {
   artifactName,
   assertCleanTreeStatus,
   checksumText,
+  defaultInstallDestination,
   ensureReleaseOutputRoot,
   installRelease,
   sha256Hex,
@@ -17,6 +18,33 @@ Deno.test("release target and artifact names encode native platform/version", ()
     artifactName("0.2.0", "linux-x86_64", "linux") !==
       "acp-mcp-0.2.0-linux-x86_64"
   ) throw new Error("Release naming did not match the native target");
+  let unsupportedRejected = false;
+  try {
+    targetId("darwin", "x86_64");
+  } catch (error) {
+    unsupportedRejected = String(error).includes("supported targets");
+  }
+  if (!unsupportedRejected) {
+    throw new Error("An unsupported native target was accepted");
+  }
+});
+
+Deno.test("default install locations are user-local on both native targets", () => {
+  if (Deno.build.os === "windows") {
+    const windows = defaultInstallDestination("windows", {
+      LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local",
+    });
+    if (
+      windows.toLowerCase() !==
+        "c:\\users\\fixture\\appdata\\local\\programs\\acp-mcp\\acp-mcp.exe"
+    ) throw new Error(`Unexpected Windows install destination: ${windows}`);
+  }
+  if (Deno.build.os === "linux") {
+    const linux = defaultInstallDestination("linux", { HOME: "/home/fixture" });
+    if (linux !== "/home/fixture/.local/bin/acp-mcp") {
+      throw new Error(`Unexpected Linux install destination: ${linux}`);
+    }
+  }
 });
 
 Deno.test("release refuses dirty trees and formats stable checksums", () => {
@@ -140,6 +168,43 @@ Deno.test("install verifies artifact bytes before atomically replacing destinati
         "native executable fixture" ||
       await Deno.readTextFile(configPath) !== "user config stays unchanged"
     ) throw new Error("Install did not verify/replace only the executable");
+
+    if (Deno.build.os !== "windows") {
+      const mode = (await Deno.stat(destination)).mode;
+      if (mode === null || (mode & 0o111) === 0) {
+        throw new Error("Installed Linux executable is not executable");
+      }
+    }
+
+    // GitHub Releases publishes a target-specific manifest filename. The same
+    // installer should accept the three downloaded assets as a release folder.
+    await Deno.remove(
+      `${releaseDirectory}${
+        Deno.build.os === "windows" ? "\\" : "/"
+      }manifest.json`,
+    );
+    const manifest = {
+      product: "acp-mcp",
+      version: VERSION,
+      target,
+      commit: "a".repeat(40),
+      sha256: hash,
+    };
+    const manifestStem = `acp-mcp-${VERSION}-${target}`;
+    await Deno.writeTextFile(
+      `${releaseDirectory}${
+        Deno.build.os === "windows" ? "\\" : "/"
+      }${manifestStem}.manifest.json`,
+      JSON.stringify(manifest),
+    );
+    const githubAssetInstall = await installRelease(
+      releaseDirectory,
+      destination,
+      () => Promise.resolve(`acp-mcp ${VERSION}`),
+    );
+    if (githubAssetInstall.hash !== hash) {
+      throw new Error("Installer did not accept the GitHub manifest naming");
+    }
 
     await Deno.writeTextFile(destination, "old executable remains");
     await Deno.writeFile(

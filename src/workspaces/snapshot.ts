@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+
 export interface WorkspaceSnapshot {
   cwd: string;
   sourceRoot: string;
@@ -98,11 +100,10 @@ async function removePartialWorkspace(cwd: string, originalError: unknown) {
   }
 }
 
-function configuredTempRoot() {
-  const tempRoot = Deno.env.get("TEMP") ?? Deno.env.get("TMP") ??
-    Deno.env.get("TMPDIR");
-  if (!tempRoot) throw new Error("No temporary directory is configured");
-  return tempRoot;
+export function configuredTempRoot(
+  env: Record<string, string> = Deno.env.toObject(),
+): string {
+  return env.TEMP ?? env.TMP ?? env.TMPDIR ?? tmpdir();
 }
 
 /** Returns the canonical acp-mcp workspace root under the configured temp root. */

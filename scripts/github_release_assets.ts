@@ -129,6 +129,12 @@ if (import.meta.main) {
   } else if (command === "stage") {
     const target = `${Deno.build.os}-${Deno.build.arch}`;
     if (args.length !== 0) throw new Error("stage takes no arguments");
+    const expectedTarget = Deno.env.get("ACPMCP_EXPECTED_RELEASE_TARGET");
+    if (expectedTarget && expectedTarget !== target) {
+      throw new Error(
+        `Native target '${target}' does not match expected release target '${expectedTarget}'`,
+      );
+    }
     const directory = join(
       projectRoot,
       "dist",

@@ -1,8 +1,10 @@
 import {
   cleanupWorkspaceSnapshot,
   cloneWorkspaceSnapshot,
+  configuredTempRoot,
   createWorkspaceSnapshot,
 } from "../src/workspaces/snapshot.ts";
+import { tmpdir } from "node:os";
 import {
   cleanupStaleWorkspaceSnapshots,
   DEFAULT_STALE_WORKSPACE_AGE_MS,
@@ -76,6 +78,21 @@ async function markStale(
 async function exists(path: string) {
   return await Deno.lstat(path).then(() => true).catch(() => false);
 }
+
+Deno.test("workspace temp root falls back to the native OS temp directory", () => {
+  if (
+    configuredTempRoot({
+        TEMP: "C:/temp",
+        TMP: "/tmp/second",
+        TMPDIR: "/tmp/third",
+      }) !== "C:/temp" ||
+    configuredTempRoot({ TMP: "/tmp/second", TMPDIR: "/tmp/third" }) !==
+      "/tmp/second" ||
+    configuredTempRoot({ TMPDIR: "/tmp/third" }) !==
+      "/tmp/third" ||
+    configuredTempRoot({}) !== tmpdir()
+  ) throw new Error("Workspace temp-root selection was not platform-neutral");
+});
 
 Deno.test("snapshot copies current tracked and non-ignored untracked files", async () => {
   const source = await repository();

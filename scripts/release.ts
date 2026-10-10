@@ -5,7 +5,10 @@ import { VERSION } from "../src/version.ts";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const windows = Deno.build.os === "windows";
-const executableName = `acp-mcp${windows ? ".exe" : ""}`;
+const target = targetId();
+const executableName = target.startsWith("windows-")
+  ? "acp-mcp.exe"
+  : "acp-mcp";
 const buildPath = join(projectRoot, "dist", executableName);
 const optInTestVariables = [
   "ACPMCP_OPENCODE_TEST",
@@ -23,6 +26,11 @@ export interface ReleaseManifest {
 }
 
 export function targetId(os = Deno.build.os, arch = Deno.build.arch): string {
+  if ((os !== "windows" && os !== "linux") || arch !== "x86_64") {
+    throw new Error(
+      `Unsupported native release platform '${os}-${arch}'; supported targets are windows-x86_64 and linux-x86_64`,
+    );
+  }
   return `${os}-${arch}`;
 }
 
@@ -384,6 +392,12 @@ async function packageRelease(): Promise<void> {
   const releaseRoot = await ensureReleaseOutputRoot(projectRoot);
   const commit = await validateSource();
   const target = targetId();
+  const expectedTarget = Deno.env.get("ACPMCP_EXPECTED_RELEASE_TARGET");
+  if (expectedTarget && expectedTarget !== target) {
+    throw new Error(
+      `Native target '${target}' does not match expected release target '${expectedTarget}'`,
+    );
+  }
   const filename = artifactName(VERSION, target);
   const buildHash = await sha256File(buildPath);
   const stageDirectory = await Deno.makeTempDir({
@@ -469,15 +483,49 @@ function printReleaseSummary(
   console.log(`SHA-256: ${manifest.sha256}`);
 }
 
-function defaultInstallDestination(): string {
-  if (Deno.build.os === "windows") {
-    const localAppData = Deno.env.get("LOCALAPPDATA");
+export function defaultInstallDestination(
+  os = Deno.build.os,
+  env: Record<string, string | undefined> = Deno.env.toObject(),
+): string {
+  if (os === "windows") {
+    const localAppData = env.LOCALAPPDATA;
     if (!localAppData) {
       throw new Error("LOCALAPPDATA is not set; pass --destination <path>");
     }
-    return join(localAppData, "Programs", "acp-mcp", executableName);
+    return join(localAppData, "Programs", "acp-mcp", "acp-mcp.exe");
   }
-  throw new Error("Pass --destination <path> for local installation");
+  if (os === "linux") {
+    const home = env.HOME;
+    if (!home) throw new Error("HOME is not set; pass --destination <path>");
+    return join(home, ".local", "bin", "acp-mcp");
+  }
+  throw new Error(
+    `Unsupported install platform '${os}'; supported targets are windows-x86_64 and linux-x86_64`,
+  );
+}
+
+async function readInstallManifest(directory: string): Promise<unknown> {
+  try {
+    return JSON.parse(
+      await Deno.readTextFile(join(directory, "manifest.json")),
+    );
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+  const suffix = `-${targetId()}.manifest.json`;
+  const matches: string[] = [];
+  for await (const entry of Deno.readDir(directory)) {
+    if (
+      entry.isFile && entry.name.startsWith("acp-mcp-") &&
+      entry.name.endsWith(suffix)
+    ) matches.push(entry.name);
+  }
+  if (matches.length !== 1) {
+    throw new Error(
+      `Release directory must contain manifest.json or exactly one ${targetId()} manifest`,
+    );
+  }
+  return JSON.parse(await Deno.readTextFile(join(directory, matches[0])));
 }
 
 async function validateReleaseDirectory(
@@ -488,9 +536,7 @@ async function validateReleaseDirectory(
   hash: string;
   manifest: ReleaseManifest;
 }> {
-  const manifest = validateManifest(
-    JSON.parse(await Deno.readTextFile(join(directory, "manifest.json"))),
-  );
+  const manifest = validateManifest(await readInstallManifest(directory));
   const target = targetId();
   if (manifest.target !== target) {
     throw new Error(
@@ -597,6 +643,19 @@ export async function installRelease(
   }
 }
 
+function warnIfInstallDirectoryNotOnPath(destination: string): void {
+  if (Deno.build.os !== "linux") return;
+  const installDirectory = resolve(dirname(destination));
+  const pathEntries = (Deno.env.get("PATH") ?? "").split(":")
+    .filter((entry) => entry.length > 0)
+    .map((entry) => resolve(entry));
+  if (!pathEntries.includes(installDirectory)) {
+    console.error(
+      `Install directory '${installDirectory}' is not on PATH. Add it to your shell PATH to run acp-mcp by name.`,
+    );
+  }
+}
+
 function parseOptions(args: string[]): Map<string, string> {
   const values = new Map<string, string>();
   for (let index = 0; index < args.length; index++) {
@@ -621,8 +680,8 @@ async function main(args: string[]): Promise<void> {
       "  deno task release",
       "  deno task install --release-dir <path> [--destination <executable-path>]",
       "",
-      "release validates a clean checkout, builds and smoke-tests the native",
-      "executable, then packages a versioned artifact with SHA-256 and provenance.",
+      "release builds and validates the native Windows or Linux x86_64 executable,",
+      "then packages it with SHA-256 and a deterministic manifest.",
     ].join("\n"));
     return;
   }
@@ -650,6 +709,7 @@ async function main(args: string[]): Promise<void> {
     console.log(`Install destination: ${installed.destination}`);
     console.log(`Installed SHA-256: ${installed.hash}`);
     console.log(`Installed version: ${installed.version}`);
+    warnIfInstallDirectoryNotOnPath(installed.destination);
     return;
   }
   throw new Error(`Unknown release command: ${command}`);
