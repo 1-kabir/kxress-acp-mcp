@@ -19,7 +19,8 @@ outside the checkout, then writes a versioned artifact, SHA-256 checksum, and
 JSON manifest under `dist/releases/`. The manifest records the product version,
 target, source commit, and artifact hash. SHA-256 lets you compare bytes with a
 known checksum; it does not establish publisher identity. Artifacts are local
-and are not published automatically.
+and are not published automatically. The project does not currently provide code
+signing or another publisher-authentication mechanism.
 
 To install or update the validated Windows artifact, use:
 
@@ -51,12 +52,12 @@ Running `acp-mcp` starts the MCP stdio server. Use `acp-mcp --help` for the
 small command-line interface or `acp-mcp --version` for its version. Run
 `acp-mcp doctor` for offline checks of local config, agent executables, runtime
 prerequisites, and disposable workspace state; `acp-mcp doctor --json` emits a
-machine-readable report. Doctor does not start ACP agents, contact providers,
-consume quota, or verify provider authentication. Its stale-workspace summary
-does not inspect creator processes; it reports age-qualified workspaces with
-unknown creator status separately. MCP protocol traffic stays on stdout; startup
-errors go to stderr. The server closes managed ACP sessions when its host closes
-stdin or sends SIGINT.
+machine-readable, secret-safe report. Doctor does not start ACP agents, contact
+providers, consume quota, or verify provider authentication. Its stale-workspace
+summary does not inspect creator processes; it reports age-qualified workspaces
+with unknown creator status separately. MCP protocol traffic stays on stdout;
+startup errors go to stderr. The server closes managed ACP sessions when its
+host closes stdin or sends SIGINT.
 
 Doctor returns exit code `0` when there are no errors (warnings are allowed),
 `1` when local diagnostic errors are found, and `2` for invalid CLI usage. It
@@ -66,6 +67,14 @@ does not delete stale workspaces. Use the MCP tools `list_stale_workspaces` and
 The default user configuration is `%APPDATA%\acp-mcp\config.json` on Windows and
 `$XDG_CONFIG_HOME/acp-mcp/config.json` or `~/.config/acp-mcp/config.json`
 elsewhere. An MCP host can launch the installed command directly:
+
+The stdio server trusts the host and user that launch it; acp-mcp does not add a
+separate MCP authentication or authorization layer. The host owns its server
+registration, whether it starts acp-mcp, the environment passed to it, and
+whether returned tools are exposed to the coding agent. If connected tools are
+missing, check the host registration and startup status; `doctor` cannot inspect
+third-party host configuration or predict the environment a future host process
+will pass.
 
 ### Codex registration
 
@@ -96,8 +105,9 @@ produces the standalone executable, `check` and `test` validate the source, and
 planning scripts under `scripts/` are source-checkout utilities, not installed
 product commands.
 
-The default profile launches `opencode acp`; authenticate separately with
-`opencode auth login`.
+When the default user config is absent, the built-in `opencode` profile is
+available and launches `opencode acp`; authenticate separately with
+`opencode auth login`. This is one built-in integration in the generic bridge.
 
 Built-in agent IDs use their canonical ACP launch paths:
 
@@ -143,22 +153,23 @@ availability and rerun the live test for current status. Arbitrary configured
 ACP agents remain supported by the generic launch/session path, but are not
 implied to be live validated here.
 
-| Agent                                                                                    | Built-in profile | Live compatibility demonstrated                                                                                                                                              | Protocol evidence for this agent     |
-| ---------------------------------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| [OpenCode](https://opencode.ai/docs/cli/acp/)                                            | Yes              | Model/config selection, `run_task`, permissions, and disposable planning; direct writes without ACP permission were observed                                                 | v1 live; v2 not confirmed            |
-| [Codex ACP](https://github.com/agentclientprotocol/codex-acp)                            | Yes              | Model/config selection, `run_task`, cleanup, and adapter permission/sandbox configuration                                                                                    | v1 live; v2 not confirmed            |
-| [Antigravity](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp) | Yes              | Model/config selection, `run_task`, permission denial, persisted ACP auth, and process cleanup                                                                               | v1 live; v2 not confirmed            |
-| [Claude Agent ACP](https://github.com/agentclientprotocol/claude-agent-acp)              | Yes              | Model/effort selection, v1/v2 `run_task`, permission denial, v1 load, v2 replay/resume and follow-up, and cleanup; tested through one externally configured OpenRouter route | v1 live; experimental v2 live-tested |
+| Agent                                                                                    | Built-in profile | Live evidence                                                                                                                                                                                                                                                   | Protocol evidence                                                                                |
+| ---------------------------------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [OpenCode](https://opencode.ai/docs/cli/acp/)                                            | Yes              | OpenCode 2.0.18, v1: `run_task`, advanced sessions, config, load/resume, cleanup. A controlled write occurred without an ACP permission request.                                                                                                                | v1 currently live validated; v2 unconfirmed                                                      |
+| [Codex ACP](https://github.com/agentclientprotocol/codex-acp)                            | Yes              | Adapter 2.1.1, v1: `run_task`, advanced sessions, cancellation, cross-session isolation, load/resume, cleanup. Legacy `set_mode` changed state without `current_mode_update`; mode config was observable.                                                       | v1 currently live validated; v2 unconfirmed                                                      |
+| [Antigravity](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp) | Yes              | ACP 1.3.0, v1: `run_task`, advanced sessions, permission denial, load/resume, cleanup. Tested `oauth-personal` ACP auth path advertised 11 Gemini choices; `agy` CLI 1.3.2 showed a broader 18-choice catalog. Version/auth sensitive.                          | v1 currently live validated; v2 unconfirmed                                                      |
+| [Claude Agent ACP](https://github.com/agentclientprotocol/claude-agent-acp)              | Yes              | Adapter 0.88.0: direct installed runs validated v1 and experimental v2 through one external provider route. In one host-launched setup discovery worked but session creation did not; the route was ineffective and the failing process hop was not observable. | v1 direct-process live validated; v2 experimental/route-specific; host-launched route unresolved |
 
 ACP protocol versions are the `protocolVersion` selected during `initialize`;
 they are unrelated to an agent or package's software version. The bridge
 supports ACP v1 and the experimental ACP v2 draft through separate protocol
-drivers. ACP v2 and the SDK's v2 entrypoint may change incompatibly. The table
-records agent evidence, not just bridge capability: Claude v2 was exercised end
-to end against one externally configured provider route. This does not establish
-compatibility with other provider/model combinations. The Claude adapter exposes
-an upstream experimental v2 mode; the bridge enables it only when Claude is
-explicitly configured for v2. ACP v2 remains a draft.
+drivers. ACP v1 is the mature/default path. ACP v2 and the SDK's v2 entrypoint
+may change incompatibly. The table records agent evidence, not just bridge
+capability: Claude v2 was exercised end to end against one externally configured
+provider route. This does not establish compatibility with other provider/model
+combinations. The Claude adapter exposes an upstream experimental v2 mode; the
+bridge enables it only when Claude is explicitly configured for v2. ACP v2
+remains a draft.
 
 Protocol selection is per agent in `%APPDATA%\acp-mcp\config.json` on Windows
 (the normal user config path on other platforms). Omitted `acpProtocol` means
@@ -180,6 +191,11 @@ The bridge uses only the configured protocol: it does not retry or silently fall
 back when initialization fails. `acp-mcp doctor` reports the local selection and
 executable availability, but does not prove that the agent supports or accepts
 that protocol.
+
+ACP agents differ in their model/config catalogs, modes, permission requests,
+and load/resume support. Use live discovery and advertised capabilities rather
+than assuming parity between profiles. Codex as an MCP host is distinct from the
+downstream Codex ACP agent represented by the `codex` profile.
 
 ### Live compatibility tests
 
@@ -275,6 +291,10 @@ instead of silently using built-in defaults.
 }
 ```
 
+Known agent fields are validated with field-specific errors. Unknown fields are
+currently allowed for forward-compatible configuration; they do not add behavior
+unless acp-mcp or that profile consumes them.
+
 Configured agents run with the current user's OS permissions. The bridge does
 not sandbox subprocesses. ACP permission policy controls responses to
 `session/request_permission`; it does not intercept ordinary tool calls or
@@ -282,6 +302,17 @@ provide OS-level isolation. By default, `read_only` allows requested
 agent-reported `read`, `search`, `fetch`, and `think` kinds and rejects other
 requested kinds. ACP agents may perform actions without requesting permission,
 so `read_only` does not guarantee that a task cannot modify files.
+
+ACP children run with the launching user's OS privileges; acp-mcp does not
+privilege-drop or sandbox them. The stdio transport has no separate acp-mcp
+caller authentication, so access is governed by the launching host and user.
+Advanced session results intentionally expose ACP agent/provider content when
+requested. `get_events` may contain user or assistant text, tool details, paths,
+permission context, and agent/provider metadata; requesting raw events exposes
+the original ACP envelope. Treat these as potentially sensitive content rather
+than sanitized diagnostic logs. acp-mcp does not add child environment values to
+event journals. Child stderr is drained internally for bounded diagnostics; it
+is not prompt activity, journal content, or forwarded in startup errors.
 
 For a built-in profile, configured `command` and `args` replace its launch
 values. Configured `env` entries override same-named inherited or profile
@@ -391,17 +422,22 @@ working directory. Agent profiles cannot silently override it.
 ACP updates for the active session and ACP permission requests count as task
 activity. The bridge does not use arbitrary subprocess stderr as a heartbeat.
 
-Tools include `run_task`, `list_models`, `list_agents`, `list_stale_workspaces`,
-`cleanup_stale_workspaces`, `start_session`, `load_session`, `get_session`,
-`prompt`, `get_events`, `cancel_prompt`, `resolve_permission`,
-`set_config_option`, `set_mode`, `list_sessions`, and `close_session`. Use
-`run_task` for one-shot work. Use explicit session tools for multi-turn
-conversations, manual permission handling, or event inspection. A prompt call
-accepts `wait` and `waitMs`; if it is still running at the wait limit, the
-response includes its prompt ID. Use `get_events` with the session ID and
-`afterSequence` cursor to read updates, or `cancel_prompt` to send ACP
-cancellation. Raw ACP payloads and thought events are omitted from polling
-results unless requested.
+The MCP API currently exposes 16 tools: `run_task`, `list_models`,
+`list_agents`, `list_stale_workspaces`, `cleanup_stale_workspaces`,
+`start_session`, `load_session`, `get_session`, `prompt`, `get_events`,
+`cancel_prompt`, `resolve_permission`, `set_config_option`, `set_mode`,
+`list_sessions`, and `close_session`. Use `run_task` for one-shot work. Use
+explicit session tools for multi-turn conversations, manual permission handling,
+or event inspection. A prompt call accepts `wait` and `waitMs`; if it is still
+running at the wait limit, the response includes its prompt ID. Use `get_events`
+with the session ID and `afterSequence` cursor to read updates, or
+`cancel_prompt` to send ACP cancellation. Raw ACP payloads and thought events
+are omitted from polling results unless requested.
+
+The bridge supports up to eight active in-memory sessions per server process.
+Closing or failing a session releases capacity. A server restart loses the
+bridge's session map and journals; an underlying ACP session may still be
+loadable when that agent supports `session/load`.
 
 Each MCP tool advertises effect and open-world annotations to help hosts decide
 how to present or gate calls. These are behavioral hints, not security controls
@@ -436,8 +472,8 @@ activity remains inside `acp-mcp`; the MCP caller receives only the result
 returned by `run_task`. The task and files the ACP agent reads may be sent to
 its configured model provider. The permission policy defaults to `read_only`;
 this controls ACP permission responses, not data locality or OS isolation. This
-supports subagent-style workflows while remaining a generic one-shot ACP task
-operation. Request `allow_all` explicitly when needed. With `operator`, a
+is a generic one-shot ACP task operation that can also support subagent-style
+workflows. Request `allow_all` explicitly when needed. With `operator`, a
 permission request returns a `permission_required` result containing the managed
 session and permission IDs, advertised choices, and lease duration. Resolve it
 with `resolve_permission` and use low-level tools to continue or close that
@@ -538,11 +574,3 @@ model's failure state.
 Sessions and event journals are held in memory by the `acp-mcp` process. A
 server restart loses this bridge state. Loading an existing ACP session depends
 on support from the underlying agent.
-
-## OpenCode smoke test
-
-After installing and authenticating OpenCode, opt in to the integration check
-with `$env:ACPMCP_OPENCODE_TEST='1'; mise exec -- deno task test`. It launches
-`opencode acp`, selects `opencode/longcat-2.5-preview-free` through the generic
-ACP config option, and asks for a short response. The test is ignored by default
-and uses the existing OpenCode login.
