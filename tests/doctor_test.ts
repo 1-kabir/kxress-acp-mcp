@@ -171,6 +171,7 @@ Deno.test("doctor reports a too-old local runtime prerequisite", async () => {
           command: "agent",
           args: [],
           acpProtocol: "v2",
+          runtimePrerequisites: [{ command: "node", minimumVersion: "22.0.0" }],
         },
       }, { runVersionCommand: () => Promise.resolve("v20.15.0") }),
     );
@@ -183,6 +184,81 @@ Deno.test("doctor reports a too-old local runtime prerequisite", async () => {
         check.summary.includes("found v20.15.0")
       )
     ) throw new Error("Runtime version prerequisite was not checked");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("doctor identifies the selected Antigravity implementation and backend prerequisite", async () => {
+  const root = await Deno.makeTempDir({
+    prefix: "acp-mcp-doctor-antigravity-",
+  });
+  const config = `${root}\\config.json`;
+  try {
+    await Deno.writeTextFile(config, JSON.stringify({ agents: {} }));
+    const report = await diagnose(
+      { configPath: config },
+      dependencies(root, {
+        antigravity: {
+          command: "refined-antigravity-acp",
+          args: [],
+          implementation: "refined",
+          acpProtocol: "v1",
+          requiredExecutableEnv: ["REFINED_AGY_ACP_BIN"],
+          runtimePrerequisites: [{ command: "node", minimumVersion: "22.0.0" }],
+          env: { REFINED_AGY_ACP_BIN: "" },
+        },
+      }, {
+        resolveExecutable: (command) =>
+          Promise.resolve(
+            command === "refined-antigravity-acp" || command === "node"
+              ? `C:\\fixtures\\${command}.exe`
+              : undefined,
+          ),
+        runVersionCommand: () => Promise.resolve("v22.1.0"),
+      }),
+    );
+    if (
+      !report.checks.some((check) =>
+        check.id === "agent.antigravity.protocol" &&
+        check.summary.includes("refined implementation")
+      ) ||
+      !report.checks.some((check) =>
+        check.id === "agent.antigravity.required.REFINED_AGY_ACP_BIN" &&
+        check.status === "error"
+      ) ||
+      !report.checks.some((check) =>
+        check.id === "runtime.antigravity.1" && check.status === "ok"
+      )
+    ) {
+      throw new Error(
+        "Doctor did not report refined implementation prerequisites",
+      );
+    }
+
+    const configured = await diagnose(
+      { configPath: config },
+      dependencies(root, {
+        antigravity: {
+          command: "refined-antigravity-acp",
+          args: [],
+          implementation: "refined",
+          acpProtocol: "v1",
+          requiredExecutableEnv: ["REFINED_AGY_ACP_BIN"],
+          runtimePrerequisites: [{ command: "node", minimumVersion: "22.0.0" }],
+          env: { REFINED_AGY_ACP_BIN: "C:\\fixtures\\agy_acp_server.exe" },
+        },
+      }, {
+        resolveExecutable: (command) =>
+          Promise.resolve(`C:\\fixtures\\${command}.exe`),
+        runVersionCommand: () => Promise.resolve("v22.1.0"),
+      }),
+    );
+    if (
+      configured.checks.find((check) =>
+        check.id === "agent.antigravity.required.REFINED_AGY_ACP_BIN"
+      )?.status !== "ok"
+    ) throw new Error("Doctor rejected an existing refined ACP backend");
   } finally {
     await Deno.remove(root, { recursive: true });
   }

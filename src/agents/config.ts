@@ -1,6 +1,8 @@
 export interface AgentDefinition {
   command: string;
   args: string[];
+  /** Built-in Antigravity implementation selector; omitted means official. */
+  implementation?: "official" | "refined";
   acpProtocol?: "v1" | "v2";
   /** Protocols confirmed for this maintained profile; custom agents may omit it. */
   supportedProtocols?: Array<"v1" | "v2">;
@@ -12,15 +14,14 @@ export interface AgentDefinition {
   modelConfigId?: string;
   modelEnrichment?: "opencode_catalog";
   failureClassifier?: string;
+  /** Trusted local requirements owned by the selected built-in profile. */
+  runtimePrerequisites?: Array<{
+    command: string;
+    minimumVersion?: string;
+  }>;
+  /** Environment values which must resolve to executable files before launch. */
+  requiredExecutableEnv?: string[];
 }
-
-/** Trusted local runtime requirements for maintained built-in adapters. */
-export const BUILTIN_RUNTIME_PREREQUISITES: Record<
-  string,
-  Array<{ command: string; minimumVersion?: string }>
-> = {
-  claude: [{ command: "node", minimumVersion: "22.0.0" }],
-};
 
 export type AgentMap = Record<string, AgentDefinition>;
 
@@ -67,6 +68,7 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
       command: "claude-agent-acp",
       args: [],
       supportedProtocols: ["v1", "v2"],
+      runtimePrerequisites: [{ command: "node", minimumVersion: "22.0.0" }],
       protocolEnv: {
         v2: { CLAUDE_AGENT_ACP_EXPERIMENTAL_V2: "1" },
       },
@@ -77,10 +79,28 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
     antigravity: {
       command: antigravityCommand,
       args: Deno.build.os === "linux" ? ["--uid="] : [],
+      implementation: "official",
       supportedProtocols: ["v1"],
       displayName: "Antigravity",
       installHint:
         "Install Google Antigravity ACP from the official Agent Client Protocol Registry. Configure the executable's absolute path in the acp-mcp agent config (Windows: agy_acp_server.exe); changing PATH is not required.",
+    },
+  };
+  const antigravityImplementations: Record<
+    "official" | "refined",
+    AgentDefinition
+  > = {
+    official: agents.antigravity,
+    refined: {
+      command: "refined-antigravity-acp",
+      args: [],
+      implementation: "refined",
+      supportedProtocols: ["v1"],
+      displayName: "Antigravity (Refined)",
+      installHint:
+        "Install @simonepri/refined-antigravity-acp and Node.js 22 or later. Set env.REFINED_AGY_ACP_BIN to the absolute path of an already-installed official agy_acp_server executable; this prevents the wrapper from downloading its backend during startup.",
+      runtimePrerequisites: [{ command: "node", minimumVersion: "22.0.0" }],
+      requiredExecutableEnv: ["REFINED_AGY_ACP_BIN"],
     },
   };
   const explicitConfigPath = configPath !== undefined;
@@ -119,12 +139,39 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
     if (!id) {
       throw new Error("Agent ID must not be empty");
     }
-    if (typeof def.command !== "string" || !def.command.trim()) {
+    if (def.implementation !== undefined) {
+      if (id !== "antigravity") {
+        throw new Error(
+          `Agent '${id}' implementation is only valid for 'antigravity'`,
+        );
+      }
+      if (
+        def.implementation !== "official" && def.implementation !== "refined"
+      ) {
+        throw new Error(
+          "Agent 'antigravity' implementation must be 'official' or 'refined'",
+        );
+      }
+    }
+    const builtIn = id === "antigravity"
+      ? antigravityImplementations[def.implementation ?? "official"]
+      : agents[id];
+    if (
+      def.command !== undefined &&
+      (typeof def.command !== "string" || !def.command.trim())
+    ) {
+      throw new Error(`Agent '${id}' command must be a non-empty string`);
+    }
+    if (def.command === undefined && !builtIn) {
       throw new Error(`Agent '${id}' command must be a non-empty string`);
     }
     if (
-      !Array.isArray(def.args) || !def.args.every((x) => typeof x === "string")
+      def.args !== undefined && (!Array.isArray(def.args) ||
+        !def.args.every((x) => typeof x === "string"))
     ) {
+      throw new Error(`Agent '${id}' args must be an array of strings`);
+    }
+    if (def.args === undefined && !builtIn) {
       throw new Error(`Agent '${id}' args must be an array of strings`);
     }
     if (def.env !== undefined) {
@@ -145,7 +192,6 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
     ) {
       throw new Error(`Agent '${id}' acpProtocol must be 'v1' or 'v2'`);
     }
-    const builtIn = agents[id];
     agents[id] = {
       ...builtIn,
       ...rawDefinition,
@@ -154,6 +200,9 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
         def.supportedProtocols,
       protocolEnv: builtIn?.protocolEnv ?? def.protocolEnv,
       acpProtocol: def.acpProtocol ?? builtIn?.acpProtocol ?? "v1",
+      implementation: builtIn?.implementation,
+      runtimePrerequisites: builtIn?.runtimePrerequisites,
+      requiredExecutableEnv: builtIn?.requiredExecutableEnv,
     };
   }
   return agents;

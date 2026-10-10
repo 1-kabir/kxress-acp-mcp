@@ -1,6 +1,6 @@
 import { loadAgents } from "../src/agents/config.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
-import { findExecutablePath } from "../src/runtime/process.ts";
+import { findExecutablePath, startAgent } from "../src/runtime/process.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
@@ -36,6 +36,7 @@ Deno.test("built-in profiles describe ACP launch routes without vendor behavior"
       agents.antigravity.command !== expectedAntigravityCommand ||
       JSON.stringify(agents.antigravity.args) !==
         JSON.stringify(expectedAntigravityArgs) ||
+      agents.antigravity.implementation !== "official" ||
       agents.antigravity.env || agents.antigravity.modelConfigId ||
       agents.antigravity.modelEnrichment ||
       agents.antigravity.failureClassifier
@@ -49,6 +50,102 @@ Deno.test("built-in profiles describe ACP launch routes without vendor behavior"
         "Agent Client Protocol Registry",
       ) || !agents.antigravity.installHint?.includes("absolute path")
     ) throw new Error("Built-in profiles lack canonical install hints");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("Antigravity implementation selection is explicit and profile-driven", async () => {
+  const dir = await Deno.makeTempDir();
+  const configPath = `${dir}/config.json`;
+  try {
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        agents: { antigravity: { implementation: "refined" } },
+      }),
+    );
+    const agents = await loadAgents(configPath);
+    const refined = agents.antigravity;
+    if (
+      refined.implementation !== "refined" ||
+      refined.command !== "refined-antigravity-acp" ||
+      refined.args.length !== 0 || refined.acpProtocol !== "v1" ||
+      JSON.stringify(refined.supportedProtocols) !== JSON.stringify(["v1"]) ||
+      refined.modelEnrichment !== undefined ||
+      JSON.stringify(refined.requiredExecutableEnv) !==
+        JSON.stringify(["REFINED_AGY_ACP_BIN"]) ||
+      refined.runtimePrerequisites?.[0]?.command !== "node" ||
+      refined.runtimePrerequisites[0]?.minimumVersion !== "22.0.0"
+    ) throw new Error("Refined selection did not load its distinct v1 profile");
+
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({ agents: { antigravity: { implementation: "other" } } }),
+    );
+    let rejected = false;
+    try {
+      await loadAgents(configPath);
+    } catch (error) {
+      rejected = String(error).includes(
+        "implementation must be 'official' or 'refined'",
+      );
+    }
+    if (!rejected) {
+      throw new Error("Invalid Antigravity implementation accepted");
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("refined Antigravity inherits generic profile overrides and requires an installed backend", async () => {
+  const dir = await Deno.makeTempDir();
+  const configPath = `${dir}/config.json`;
+  const backend = Deno.execPath();
+  try {
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          antigravity: {
+            implementation: "refined",
+            command: backend,
+            args: ["eval", "Deno.exit(0)"],
+            env: { REFINED_AGY_ACP_BIN: backend, ACP_MCP_PROFILE_TEST: "yes" },
+          },
+        },
+      }),
+    );
+    const definition = (await loadAgents(configPath)).antigravity;
+    if (
+      definition.implementation !== "refined" ||
+      definition.command !== backend ||
+      JSON.stringify(definition.args) !==
+        JSON.stringify(["eval", "Deno.exit(0)"]) ||
+      definition.env?.ACP_MCP_PROFILE_TEST !== "yes" ||
+      definition.requiredExecutableEnv?.[0] !== "REFINED_AGY_ACP_BIN" ||
+      definition.acpProtocol !== "v1"
+    ) throw new Error("User overrides lost refined profile metadata");
+
+    const withoutBackend = {
+      ...definition,
+      env: { REFINED_AGY_ACP_BIN: "" },
+    };
+    let rejected = false;
+    try {
+      await startAgent(withoutBackend, dir);
+    } catch (error) {
+      rejected = String(error).includes("REFINED_AGY_ACP_BIN");
+    }
+    if (!rejected) throw new Error("Missing refined backend was not rejected");
+
+    const process = await startAgent(definition, dir);
+    const status = await process.child.status;
+    await process.stderrDone;
+    if (status.code !== 0) {
+      throw new Error("Configured executable did not launch");
+    }
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -211,7 +308,10 @@ Deno.test("list_agents reports command presence without implying authentication"
 Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures", async () => {
   const dir = await Deno.makeTempDir();
   const configPath = `${dir}/config.json`;
-  await Deno.writeTextFile(configPath, JSON.stringify({ agents: {} }));
+  await Deno.writeTextFile(
+    configPath,
+    JSON.stringify({ agents: { antigravity: { implementation: "refined" } } }),
+  );
   const agents = await loadAgents(configPath);
   const fixtureArgs = [
     "run",
@@ -226,12 +326,26 @@ Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures
       ...agents[id],
       command: Deno.execPath(),
       args: fixtureArgs,
+      ...(id === "antigravity"
+        ? { env: { REFINED_AGY_ACP_BIN: Deno.execPath() } }
+        : {}),
     };
   }
   const manager = new SessionManager(agents);
   const server = createMcpServer(agents, manager);
   const mcp = await connectMcp(server);
   try {
+    const listed: unknown = parseToolResult(
+      await mcp.callTool("list_agents", {}).response,
+    );
+    if (!Array.isArray(listed)) {
+      throw new Error("list_agents did not return a list");
+    }
+    const antigravity = listed.find((row) => row.id === "antigravity");
+    if (
+      antigravity?.implementation !== "refined" ||
+      antigravity.displayName !== "Antigravity (Refined)"
+    ) throw new Error("list_agents did not expose the selected implementation");
     for (const agentId of ["codex", "claude", "antigravity"]) {
       const discovery = parseToolResult(
         await mcp.callTool("list_models", {
@@ -252,6 +366,23 @@ Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures
           }`,
         );
       }
+      if (
+        agentId === "antigravity" &&
+        JSON.stringify(models.map((model) => model.id).sort()) !==
+          JSON.stringify([
+            "opencode/available-without-metadata",
+            "opencode/fledge-alpha-free",
+            "opencode/paid-model",
+          ])
+      ) {
+        throw new Error(
+          "Refined profile discovery added models not advertised by the ACP fixture",
+        );
+      }
+      if (
+        agentId === "antigravity" &&
+        agents.antigravity.implementation !== "refined"
+      ) throw new Error("Refined profile selection was not retained");
       const failure = parseToolResult(
         await mcp.callTool("run_task", {
           agentId,

@@ -57,6 +57,11 @@ asks about configured agents and models.
 - Antigravity's CLI catalog is not its ACP catalog. Use only values advertised
   by the connected ACP session; do not synthesize CLI models or reasoning
   controls.
+- The `antigravity` profile defaults to Google's official ACP server. The
+  `implementation: "refined"` config option explicitly selects the independent
+  refined wrapper; `list_agents` reports the effective implementation. There is
+  no automatic fallback between them. Use the selected implementation's live ACP
+  model/config advertisement.
 
 ## Trust and privacy
 

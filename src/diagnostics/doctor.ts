@@ -1,10 +1,12 @@
 import {
   type AgentDefinition,
-  BUILTIN_RUNTIME_PREREQUISITES,
   defaultConfigPath,
   loadAgents,
 } from "../agents/config.ts";
-import { findExecutablePath } from "../runtime/process.ts";
+import {
+  findExecutablePath,
+  getAgentEnvironmentValue,
+} from "../runtime/process.ts";
 import { cleanupStaleWorkspaceSnapshots } from "../workspaces/stale_cleanup.ts";
 import { getWorkspaceRoot } from "../workspaces/snapshot.ts";
 import { VERSION } from "../version.ts";
@@ -130,13 +132,16 @@ async function agentChecks(
     )
   ) {
     const protocol = agent.acpProtocol ?? "v1";
+    const identity = agent.implementation
+      ? `${id} (${agent.implementation} implementation)`
+      : id;
     checks.push({
       id: `agent.${id}.protocol`,
       status: agent.supportedProtocols &&
           !agent.supportedProtocols.includes(protocol)
         ? "warning"
         : "ok",
-      summary: `${id}: ACP ${protocol} ${
+      summary: `${identity}: ACP ${protocol} ${
         agent.supportedProtocols && !agent.supportedProtocols.includes(protocol)
           ? "is not confirmed for this built-in profile"
           : "selected"
@@ -148,7 +153,7 @@ async function agentChecks(
         id: `agent.${id}`,
         status: "error",
         summary:
-          `${id} (ACP ${protocol}): command not found (${agent.command}); ${agent.args.length} configured argument(s)`,
+          `${identity} (ACP ${protocol}): command not found (${agent.command}); ${agent.args.length} configured argument(s)`,
         ...(agent.installHint
           ? { detail: "See the agent installation instructions in README." }
           : {}),
@@ -159,11 +164,32 @@ async function agentChecks(
       id: `agent.${id}`,
       status: "ok",
       summary:
-        `${id} (ACP ${protocol}): ${commandPath}; ${agent.args.length} configured argument(s)`,
+        `${identity} (ACP ${protocol}): ${commandPath}; ${agent.args.length} configured argument(s)`,
     });
 
+    for (const name of agent.requiredExecutableEnv ?? []) {
+      const value = getAgentEnvironmentValue(agent, name)?.trim();
+      const resolved = value
+        ? await dependencies.resolveExecutable(value)
+        : undefined;
+      checks.push(
+        resolved
+          ? {
+            id: `agent.${id}.required.${name}`,
+            status: "ok",
+            summary:
+              `${identity}: required executable environment setting is configured (${name})`,
+          }
+          : {
+            id: `agent.${id}.required.${name}`,
+            status: "error",
+            summary: `${identity}: ${name} must name an existing executable`,
+          },
+      );
+    }
+
     for (
-      const [index, prerequisite] of (BUILTIN_RUNTIME_PREREQUISITES[id] ?? [])
+      const [index, prerequisite] of (agent.runtimePrerequisites ?? [])
         .entries()
     ) {
       const prerequisiteId = `runtime.${id}.${index + 1}`;
@@ -174,7 +200,7 @@ async function agentChecks(
         checks.push({
           id: prerequisiteId,
           status: "error",
-          summary: `${id} requires ${prerequisite.command}${
+          summary: `${identity} requires ${prerequisite.command}${
             prerequisite.minimumVersion
               ? ` ${prerequisite.minimumVersion} or later`
               : ""
@@ -207,8 +233,8 @@ async function agentChecks(
             id: prerequisiteId,
             status: "error",
             summary: actualVersion
-              ? `${id} requires ${prerequisite.command} ${prerequisite.minimumVersion} or later; found ${actualVersion}`
-              : `Could not read ${prerequisite.command} version required by ${id}`,
+              ? `${identity} requires ${prerequisite.command} ${prerequisite.minimumVersion} or later; found ${actualVersion}`
+              : `Could not read ${prerequisite.command} version required by ${identity}`,
           },
       );
     }

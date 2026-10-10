@@ -46,6 +46,20 @@ export async function findExecutablePath(
   return undefined;
 }
 
+export function getAgentEnvironmentValue(
+  definition: AgentDefinition,
+  name: string,
+): string | undefined {
+  const overrideName = Object.keys(definition.env ?? {}).find((candidate) =>
+    Deno.build.os === "windows"
+      ? candidate.toLowerCase() === name.toLowerCase()
+      : candidate === name
+  );
+  return overrideName === undefined
+    ? Deno.env.get(name)
+    : definition.env?.[overrideName];
+}
+
 export async function resolveWindowsExecutable(
   command: string,
 ): Promise<string> {
@@ -80,6 +94,14 @@ export function quoteCmdStaticArgument(value: string): string {
 }
 
 export async function startAgent(definition: AgentDefinition, cwd: string) {
+  for (const name of definition.requiredExecutableEnv ?? []) {
+    const value = getAgentEnvironmentValue(definition, name);
+    if (!value?.trim() || !await findExecutablePath(value.trim())) {
+      throw new Error(
+        `Agent requires environment variable '${name}' to name an existing executable`,
+      );
+    }
+  }
   const resolved = await resolveWindowsExecutable(definition.command);
   const isBatch = Deno.build.os === "windows" && /\.(cmd|bat)$/i.test(resolved);
   const command = isBatch ? (Deno.env.get("COMSPEC") ?? "cmd.exe") : resolved;

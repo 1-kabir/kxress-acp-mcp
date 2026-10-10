@@ -235,6 +235,9 @@ export function createMcpServer(
       Object.entries(agents).map(async ([id, agent]) => ({
         id,
         displayName: agent.displayName ?? id,
+        ...(agent.implementation
+          ? { implementation: agent.implementation }
+          : {}),
         acpProtocol: agent.acpProtocol ?? "v1",
         supportedProtocols: agent.supportedProtocols,
         commandFound: !!await findExecutablePath(agent.command),
