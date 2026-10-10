@@ -188,11 +188,11 @@ expose.
 
 ### Download a release
 
-The version-tagged release workflow builds Windows x86_64 and Linux x86_64
-binaries. After a tag's workflow completes, its GitHub Release will include a
-native executable, a SHA-256 sidecar, and a manifest. The workflow publishes
-only when the tag version matches `src/version.ts`; the first hosted run
-validates the GitHub runner builds.
+The version-tagged release workflow builds native Windows x86_64 and Linux
+x86_64 executables. Each GitHub Release includes both binaries, a SHA-256
+sidecar, and a manifest for each target. The workflow publishes only when the
+tag version matches `src/version.ts`, and publishes only if both native builds
+and smoke tests pass.
 
 Published downloads appear under
 [GitHub Releases](https://github.com/kxress/acp-mcp/releases). SHA-256 lets you
@@ -217,18 +217,28 @@ Move-Item $artifact (Join-Path $install "acp-mcp.exe")
 Configure your MCP host to launch that executable. An absolute executable path
 is the most predictable choice.
 
-On Linux x86_64, download the native binary and run:
+On Linux x86_64, download the binary and checksum, then install it in your user
+bin directory:
 
 ```sh
 version=0.2.1
 sha256sum -c "acp-mcp-$version-linux-x86_64.sha256"
-chmod +x "acp-mcp-$version-linux-x86_64"
-"./acp-mcp-$version-linux-x86_64" --version
+mkdir -p "$HOME/.local/bin"
+install -m 0755 "acp-mcp-$version-linux-x86_64" "$HOME/.local/bin/acp-mcp"
+"$HOME/.local/bin/acp-mcp" --version
 ```
 
-The Linux release target is built on GitHub's Ubuntu runner; Debian 13/WSL2
-runtime and Codex-hosted MCP smoke tests have also passed. Other distributions
-have not been individually validated.
+The repository installer also accepts a directory containing the three
+downloaded Linux release assets and installs by default to
+`$HOME/.local/bin/acp-mcp`:
+
+```sh
+deno task install --release-dir ./acp-mcp-release-assets
+```
+
+This installer is repository tooling; the installed executable does not require
+Deno. If `$HOME/.local/bin` is not on `PATH`, the installer reports that and
+does not modify shell startup files.
 
 The installed executable is native. Deno, mise, and the source checkout are not
 required at runtime.
@@ -763,17 +773,18 @@ deno task compat <agent>
 
 Compatibility tasks may consume provider quota.
 
-## Platform status
+## Platform support
 
-| Platform                    | Status                                                               |
-| --------------------------- | -------------------------------------------------------------------- |
-| Windows x86_64              | GitHub release workflow target                                       |
-| Linux x86_64                | GitHub release workflow target; hosted build awaits first tagged run |
-| Windows                     | Runtime smoke-tested                                                 |
-| Debian 13 / WSL2            | Native Linux runtime smoke-tested                                    |
-| Codex-hosted MCP under WSL2 | Smoke-tested                                                         |
+Packaged release targets:
 
-Linux and WSL smoke testing does not imply support for every Linux distribution.
+- Windows x86_64
+- Linux x86_64
+
+Both targets use native executables and the same local release format. Linux is
+also validated natively on Debian 13 / WSL2, including Codex-hosted MCP. The
+GitHub release workflow builds Linux on Ubuntu; WSL2 is one tested Linux
+environment, not a separate platform target. Other Linux distributions have not
+been individually tested.
 
 ## License
 
