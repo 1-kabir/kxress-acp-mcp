@@ -667,3 +667,7 @@ Runtime smoke:
 
 Linux/WSL smoke validation does not currently provide a packaged Linux release
 or establish support for other Linux distributions.
+
+## License
+
+This project is licensed under the [WTFPL, Version 2](LICENSE).
