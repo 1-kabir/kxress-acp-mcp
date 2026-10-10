@@ -71,10 +71,17 @@ async function processIsAlive(pid: number): Promise<boolean> {
     const result = await new Deno.Command("ps", {
       args: ["-p", String(pid), "-o", "pid="],
       stdout: "piped",
-      stderr: "null",
+      stderr: "piped",
     }).output();
-    if (!result.success) return true;
-    return new TextDecoder().decode(result.stdout).trim() === String(pid);
+    const output = new TextDecoder().decode(result.stdout).trim();
+    const error = new TextDecoder().decode(result.stderr).trim();
+    if (!result.success) {
+      // procps exits with code 1 and no output when the PID is absent. Treat
+      // that ordinary result as dead, while preserving entries if ps itself
+      // reports an error we cannot interpret safely.
+      return output !== "" || error !== "";
+    }
+    return output === String(pid);
   } catch {
     // If liveness cannot be checked, preserve the workspace conservatively.
     return true;
