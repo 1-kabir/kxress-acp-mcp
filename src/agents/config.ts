@@ -31,6 +31,8 @@ export interface AgentDefinition {
 
 export type AgentMap = Record<string, AgentDefinition>;
 
+const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 export const ANTIGRAVITY_AGY_ACP_RELEASE = {
   version: "1.2.0",
   revision: "d10aa13c932236ef241863f2c8b3afdda2a2be12",
@@ -70,7 +72,7 @@ export function builtInAgents(): AgentMap {
   const antigravityCommand = Deno.build.os === "windows"
     ? "agy_acp_server"
     : "agy_acp_server.par";
-  const agents: AgentMap = {
+  const agents = Object.assign(Object.create(null) as AgentMap, {
     opencode: {
       command: "opencode",
       args: ["acp"],
@@ -111,7 +113,7 @@ export function builtInAgents(): AgentMap {
       installHint:
         "Install Google Antigravity ACP from the official Agent Client Protocol Registry. Configure the executable's absolute path in the acp-mcp agent config (Windows: agy_acp_server.exe); changing PATH is not required.",
     },
-  };
+  });
   return agents;
 }
 
@@ -156,7 +158,10 @@ export function parseAgentConfig(
   parsed: unknown,
   path = "<configuration>",
 ): AgentMap {
-  const agents = builtInAgents();
+  const agents = Object.assign(
+    Object.create(null) as AgentMap,
+    builtInAgents(),
+  );
   if (!isRecord(parsed)) {
     throw new Error(`Config file '${path}' must contain a JSON object`);
   }
@@ -173,8 +178,10 @@ export function parseAgentConfig(
       );
     }
     const def = rawDefinition as Partial<AgentDefinition>;
-    if (!id) {
-      throw new Error(`Config file '${path}': agent ID must not be empty`);
+    if (!AGENT_ID_PATTERN.test(id)) {
+      throw new Error(
+        `Config file '${path}': agent ID '${id}' must match ${AGENT_ID_PATTERN}`,
+      );
     }
     if (def.implementation !== undefined) {
       if (id !== "antigravity") {
@@ -193,7 +200,9 @@ export function parseAgentConfig(
     }
     const builtIn = id === "antigravity"
       ? antigravityImplementations[def.implementation ?? "official"]
-      : agents[id];
+      : Object.hasOwn(agents, id)
+      ? agents[id]
+      : undefined;
     if (
       def.command !== undefined &&
       (typeof def.command !== "string" || !def.command.trim())
@@ -207,15 +216,16 @@ export function parseAgentConfig(
         `Config file '${path}': agent '${id}' command must be a non-empty string`,
       );
     }
+    const command = def.command ?? builtIn?.command;
+    if (command === undefined) {
+      throw new Error(
+        `Config file '${path}': agent '${id}' command must be a non-empty string`,
+      );
+    }
     if (
       def.args !== undefined && (!Array.isArray(def.args) ||
         !def.args.every((x) => typeof x === "string"))
     ) {
-      throw new Error(
-        `Config file '${path}': agent '${id}' args must be an array of strings`,
-      );
-    }
-    if (def.args === undefined && !builtIn) {
       throw new Error(
         `Config file '${path}': agent '${id}' args must be an array of strings`,
       );
@@ -248,8 +258,12 @@ export function parseAgentConfig(
     agents[id] = {
       ...builtIn,
       ...rawDefinition,
+      command,
+      args: def.args ?? builtIn?.args ?? [],
       models,
       env: { ...builtIn?.env, ...def.env },
+      modelConfigId: def.modelConfigId ?? builtIn?.modelConfigId ??
+        (builtIn ? undefined : "model"),
       supportedProtocols: builtIn?.supportedProtocols ??
         def.supportedProtocols,
       protocolEnv: builtIn?.protocolEnv ?? def.protocolEnv,

@@ -326,11 +326,15 @@ Deno.test("ACP protocol config defaults to v1 and rejects invalid values", async
     await Deno.writeTextFile(
       configPath,
       JSON.stringify({
-        agents: { custom: { command: "custom-agent", args: [] } },
+        agents: { custom: { command: "custom-agent" } },
       }),
     );
     const defaulted = await loadAgents(configPath);
-    if (defaulted.custom.acpProtocol !== "v1") {
+    if (
+      defaulted.custom.acpProtocol !== "v1" ||
+      defaulted.custom.args.length !== 0 ||
+      defaulted.custom.modelConfigId !== "model"
+    ) {
       throw new Error("Omitted custom agent protocol did not default to v1");
     }
     await Deno.writeTextFile(
@@ -348,6 +352,59 @@ Deno.test("ACP protocol config defaults to v1 and rejects invalid values", async
       rejected = String(error).includes("acpProtocol must be 'v1' or 'v2'");
     }
     if (!rejected) throw new Error("Invalid ACP protocol was accepted");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("trusted config may override built-in launches and select ACP v2", async () => {
+  const dir = await Deno.makeTempDir();
+  const configPath = `${dir}/config.json`;
+  try {
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          codex: {
+            command: "replacement-codex-acp",
+            args: ["--stdio", "arg with spaces"],
+            env: { CUSTOM_ROUTE: "configured" },
+          },
+          custom_v2: {
+            command: "custom-acp-v2",
+            acpProtocol: "v2",
+          },
+        },
+      }),
+    );
+    const agents = await loadAgents(configPath);
+    if (
+      agents.codex.command !== "replacement-codex-acp" ||
+      agents.codex.args.join("|") !== "--stdio|arg with spaces" ||
+      agents.codex.acpProtocol !== "v1" ||
+      agents.codex.supportedProtocols?.join() !== "v1" ||
+      agents.custom_v2.command !== "custom-acp-v2" ||
+      agents.custom_v2.args.length !== 0 ||
+      agents.custom_v2.acpProtocol !== "v2"
+    ) {
+      throw new Error(
+        "Trusted launch override or explicit v2 selection failed",
+      );
+    }
+
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        agents: { "bad/id": { command: "bad" } },
+      }),
+    );
+    let rejected = false;
+    try {
+      await loadAgents(configPath);
+    } catch (error) {
+      rejected = String(error).includes("agent ID 'bad/id'");
+    }
+    if (!rejected) throw new Error("Invalid custom agent ID was accepted");
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

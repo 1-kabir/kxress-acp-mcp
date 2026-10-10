@@ -38,7 +38,10 @@ function mergeObjects(base: unknown, overlay: unknown): unknown {
   if (!isRecord(base) || !isRecord(overlay)) {
     return Array.isArray(overlay) ? [...overlay] : overlay;
   }
-  const result: Record<string, unknown> = { ...base };
+  const result = Object.assign(
+    Object.create(null) as Record<string, unknown>,
+    base,
+  );
   for (const [key, value] of Object.entries(overlay)) {
     result[key] = key in result && isRecord(result[key]) && isRecord(value)
       ? mergeObjects(result[key], value)

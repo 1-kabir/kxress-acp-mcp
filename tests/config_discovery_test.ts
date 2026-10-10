@@ -171,6 +171,95 @@ Deno.test("project config is safe, arrays replace, and cannot inject launch data
   }
 });
 
+Deno.test("project policy may target a trusted custom agent but cannot create or replace one", async () => {
+  const root = await Deno.makeTempDir({ prefix: "acp-mcp custom trust-" });
+  const home = join(root, "home");
+  const repo = join(root, "repo");
+  try {
+    await writeConfig(home, {
+      agents: {
+        reviewer: {
+          command: "trusted-reviewer-acp",
+          env: { REVIEWER_SECRET: "trusted-secret-canary" },
+          acpProtocol: "v2",
+          models: { allowedModels: ["trusted-*"] },
+        },
+      },
+    });
+    await writeConfig(repo, {
+      agents: {
+        reviewer: {
+          models: {
+            default: { model: "trusted-review-model" },
+            deniedModels: ["trusted-expensive-*"],
+          },
+        },
+      },
+    });
+    const resolved = await resolveConfiguration({
+      cwd: repo,
+      homeDirectory: home,
+    });
+    const reviewer = resolved.agents.reviewer;
+    if (
+      reviewer.command !== "trusted-reviewer-acp" ||
+      reviewer.args.length !== 0 ||
+      reviewer.env?.REVIEWER_SECRET !== "trusted-secret-canary" ||
+      reviewer.acpProtocol !== "v2" ||
+      reviewer.models?.default?.model !== "trusted-review-model" ||
+      reviewer.models?.deniedModels?.[0] !== "trusted-expensive-*"
+    ) throw new Error("Project policy changed trusted custom launch data");
+
+    for (
+      const launch of [
+        { command: "evil.exe" },
+        { args: ["--replace"] },
+        { env: { REVIEWER_SECRET: "project-value" } },
+      ]
+    ) {
+      const badRepo = join(root, `bad-${Object.keys(launch)[0]}`);
+      await writeConfig(badRepo, { agents: { reviewer: launch } });
+      let rejected = false;
+      try {
+        await resolveConfiguration({
+          cwd: badRepo,
+          homeDirectory: home,
+        });
+      } catch (error) {
+        rejected = error instanceof Error &&
+          error.message.includes("project configuration");
+      }
+      if (!rejected) {
+        throw new Error(
+          `Project configuration replaced trusted custom ${
+            Object.keys(launch)[0]
+          }`,
+        );
+      }
+    }
+
+    const untrustedOnly = join(root, "untrusted-only");
+    await writeConfig(untrustedOnly, {
+      agents: { notTrusted: { models: { deniedModels: ["*"] } } },
+    });
+    let creationRejected = false;
+    try {
+      await resolveConfiguration({
+        cwd: untrustedOnly,
+        homeDirectory: join(root, "empty-home"),
+      });
+    } catch (error) {
+      creationRejected = error instanceof Error &&
+        error.message.includes("agent 'notTrusted' command");
+    }
+    if (!creationRejected) {
+      throw new Error("Project policy created a runnable custom agent");
+    }
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("explicit config is exact and disables home/project discovery", async () => {
   const root = await Deno.makeTempDir({ prefix: "acp-mcp explicit-" });
   const home = join(root, "home");
