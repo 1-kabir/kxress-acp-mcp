@@ -46,6 +46,7 @@ function serverFor(
             "tests/fixtures/fake_acp_agent.ts",
             ...(id === "bad" ? ["--session-fail"] : []),
             ...(id === "slow" ? ["--session-delay-ms=150"] : []),
+            ...(id === "async-models" ? ["--async-models"] : []),
             ...(id === "bool" ? ["--advertise-bool"] : []),
           ],
         }),
@@ -56,6 +57,7 @@ function serverFor(
           modelEnrichment: "opencode_catalog" as const,
         }
         : {}),
+      ...(id === "async-models" ? { modelConfigId: "model" } : {}),
     },
   ]));
   const manager = new SessionManager(agents);
@@ -216,6 +218,64 @@ Deno.test("generic model discovery uses ACP options and cleans its temporary ses
     }
     if (manager.sessions.size !== 0) {
       throw new Error("Discovery leaked its temporary session");
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
+Deno.test("asynchronous ACP config updates drive model discovery and selection", async () => {
+  const { manager, server } = serverFor(["async-models"]);
+  const mcp = await connectMcp(server);
+  try {
+    const discovered = parseToolResult(
+      await mcp.callTool("list_models", {
+        agentId: "async-models",
+        timeoutMs: 2_000,
+      }).response,
+    );
+    const models = discovered.models as Array<Record<string, unknown>>;
+    const expected = [
+      "claude-opus-5-5-low",
+      "claude-opus-5-5-medium",
+      "claude-opus-5-5-high",
+    ];
+    if (
+      JSON.stringify(models.map((model) => model.id)) !==
+        JSON.stringify(expected)
+    ) {
+      throw new Error("Late advertised model IDs were not preserved exactly");
+    }
+    if (manager.sessions.size !== 0) {
+      throw new Error("Asynchronous discovery leaked its temporary session");
+    }
+
+    const started = parseToolResult(
+      await mcp.callTool("start_session", {
+        agentId: "async-models",
+        config: { model: "claude-opus-5-5-high" },
+      }).response,
+    );
+    const sessionId = started.sessionId as string;
+    const session = manager.get(sessionId);
+    const selected = session.configOptions.find((option) =>
+      option.id === "model"
+    );
+    if (selected?.currentValue !== "claude-opus-5-5-high") {
+      throw new Error("Late model selection was not applied to the session");
+    }
+    if (
+      !manager.getEvents(sessionId).events.some((event) =>
+        event.kind === "config_option_update"
+      )
+    ) {
+      throw new Error("The asynchronous config update was not journaled");
+    }
+    await mcp.callTool("close_session", { sessionId }).response;
+    if (manager.sessions.size !== 0) {
+      throw new Error("Closing the async-config session leaked it");
     }
   } finally {
     await mcp.close();

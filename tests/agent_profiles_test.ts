@@ -88,12 +88,112 @@ Deno.test("Antigravity implementation selection is explicit and profile-driven",
       await loadAgents(configPath);
     } catch (error) {
       rejected = String(error).includes(
-        "implementation must be 'official' or 'refined'",
+        "implementation must be 'official', 'refined', or 'agy'",
       );
     }
     if (!rejected) {
       throw new Error("Invalid Antigravity implementation accepted");
     }
+
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({ agents: { antigravity: { implementation: "agy" } } }),
+    );
+    const agy = (await loadAgents(configPath)).antigravity;
+    const localAppData = Deno.env.get("LOCALAPPDATA");
+    const expectedAgyCommand = Deno.build.os === "windows" &&
+        Deno.build.arch === "x86_64" && localAppData
+      ? `${localAppData}\\acp-mcp\\agents\\antigravity-agy\\1.2.0\\agy-acp-windows-x64.exe`
+      : "agy-acp-windows-x64.exe";
+    if (
+      agy.implementation !== "agy" || agy.command !== expectedAgyCommand ||
+      agy.args.length !== 0 || agy.acpProtocol !== "v1" ||
+      JSON.stringify(agy.supportedProtocols) !== JSON.stringify(["v1"]) ||
+      agy.modelConfigId !== "model" ||
+      JSON.stringify(agy.requiredExecutableEnv) !==
+        JSON.stringify(["AGY_BIN"]) ||
+      agy.runtimePrerequisites?.length
+    ) throw new Error("agy selection did not load its pinned v1 profile");
+
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({ agents: { opencode: { implementation: "agy" } } }),
+    );
+    rejected = false;
+    try {
+      await loadAgents(configPath);
+    } catch (error) {
+      rejected = String(error).includes(
+        "implementation is only valid for 'antigravity'",
+      );
+    }
+    if (!rejected) {
+      throw new Error("Antigravity implementation selector leaked to OpenCode");
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("agy Antigravity profile preserves overrides and validates AGY_BIN paths with spaces", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "acp agy profile " });
+  const configPath = `${dir}/config.json`;
+  const executable = `${dir}/fake agy.exe`;
+  const adapter = `${dir}/fake agy adapter.exe`;
+  try {
+    await Deno.writeTextFile(executable, "fake executable");
+    await Deno.copyFile(Deno.execPath(), adapter);
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          antigravity: {
+            implementation: "agy",
+            command: adapter,
+            args: ["argument with spaces"],
+            env: { AGY_BIN: executable, ACP_MCP_PROFILE_TEST: "preserved" },
+          },
+        },
+      }),
+    );
+    const definition = (await loadAgents(configPath)).antigravity;
+    if (
+      definition.implementation !== "agy" ||
+      definition.command !== adapter ||
+      JSON.stringify(definition.args) !==
+        JSON.stringify(["argument with spaces"]) ||
+      definition.env?.AGY_BIN !== executable ||
+      definition.env.ACP_MCP_PROFILE_TEST !== "preserved" ||
+      definition.requiredExecutableEnv?.[0] !== "AGY_BIN"
+    ) {
+      throw new Error(
+        "agy user overrides did not compose with profile metadata",
+      );
+    }
+
+    const process = await startAgent({
+      ...definition,
+      args: [
+        "eval",
+        `Deno.exit(Deno.env.get("AGY_BIN") === ${
+          JSON.stringify(executable)
+        } && Deno.env.get("ACP_MCP_PROFILE_TEST") === "preserved" ? 0 : 1)`,
+      ],
+    }, dir);
+    const status = await process.child.status;
+    await process.stderrDone;
+    if (status.code !== 0) {
+      throw new Error(
+        "agy adapter/AGY_BIN paths containing spaces were not preserved at process launch",
+      );
+    }
+    let rejected = false;
+    try {
+      await startAgent({ ...definition, env: { AGY_BIN: "" } }, dir);
+    } catch (error) {
+      rejected = String(error).includes("AGY_BIN");
+    }
+    if (!rejected) throw new Error("Missing AGY_BIN was not rejected");
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -145,6 +245,44 @@ Deno.test("refined Antigravity inherits generic profile overrides and requires a
     await process.stderrDone;
     if (status.code !== 0) {
       throw new Error("Configured executable did not launch");
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("list_agents identifies the explicitly selected agy implementation", async () => {
+  const dir = await Deno.makeTempDir();
+  const configPath = `${dir}/config.json`;
+  try {
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({ agents: { antigravity: { implementation: "agy" } } }),
+    );
+    const agents = await loadAgents(configPath);
+    agents.antigravity.command = Deno.execPath();
+    agents.antigravity.env = { AGY_BIN: Deno.execPath() };
+    const manager = new SessionManager(agents);
+    const server = createMcpServer(agents, manager);
+    const mcp = await connectMcp(server);
+    try {
+      const listedResponse = await mcp.callTool("list_agents", {}).response as {
+        result?: { content?: Array<{ text?: string }> };
+      };
+      const listedText = listedResponse.result?.content?.find((item) =>
+        item.text
+      )?.text;
+      if (!listedText) throw new Error("list_agents returned no result");
+      const listed = JSON.parse(listedText) as Array<Record<string, unknown>>;
+      const antigravity = listed.find((entry) => entry.id === "antigravity");
+      if (
+        antigravity?.implementation !== "agy" ||
+        antigravity.displayName !== "Antigravity (agy ACP)"
+      ) throw new Error("list_agents hid the selected agy implementation");
+    } finally {
+      await mcp.close();
+      await manager.closeAll();
+      await server.close();
     }
   } finally {
     await Deno.remove(dir, { recursive: true });

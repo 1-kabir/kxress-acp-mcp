@@ -2,7 +2,7 @@ export interface AgentDefinition {
   command: string;
   args: string[];
   /** Built-in Antigravity implementation selector; omitted means official. */
-  implementation?: "official" | "refined";
+  implementation?: "official" | "refined" | "agy";
   acpProtocol?: "v1" | "v2";
   /** Protocols confirmed for this maintained profile; custom agents may omit it. */
   supportedProtocols?: Array<"v1" | "v2">;
@@ -24,6 +24,25 @@ export interface AgentDefinition {
 }
 
 export type AgentMap = Record<string, AgentDefinition>;
+
+export const ANTIGRAVITY_AGY_ACP_RELEASE = {
+  version: "1.2.0",
+  revision: "d10aa13c932236ef241863f2c8b3afdda2a2be12",
+  target: "windows-x86_64",
+  asset: "agy-acp-windows-x64.exe",
+  url:
+    "https://github.com/shubzkothekar/antigravity-acp/releases/download/v1.2.0/agy-acp-windows-x64.exe",
+  sha256: "fe7515f0e7de51e09f9c8b2c70c6c4ec2a9bd9f08850c21ba86a1fcbe8ff7074",
+} as const;
+
+export function antigravityAgyAcpInstallPath(
+  localAppData = Deno.env.get("LOCALAPPDATA"),
+): string {
+  if (!localAppData) {
+    throw new Error("LOCALAPPDATA is not set; pass an explicit agent command");
+  }
+  return `${localAppData}\\acp-mcp\\agents\\antigravity-agy\\${ANTIGRAVITY_AGY_ACP_RELEASE.version}\\${ANTIGRAVITY_AGY_ACP_RELEASE.asset}`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -86,8 +105,15 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
         "Install Google Antigravity ACP from the official Agent Client Protocol Registry. Configure the executable's absolute path in the acp-mcp agent config (Windows: agy_acp_server.exe); changing PATH is not required.",
     },
   };
+  const localAppData = Deno.build.os === "windows"
+    ? Deno.env.get("LOCALAPPDATA")
+    : undefined;
+  const agyAcpCommand = Deno.build.os === "windows" &&
+      Deno.build.arch === "x86_64" && localAppData
+    ? antigravityAgyAcpInstallPath(localAppData)
+    : "agy-acp-windows-x64.exe";
   const antigravityImplementations: Record<
-    "official" | "refined",
+    "official" | "refined" | "agy",
     AgentDefinition
   > = {
     official: agents.antigravity,
@@ -101,6 +127,17 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
         "Install @simonepri/refined-antigravity-acp and Node.js 22 or later. Set env.REFINED_AGY_ACP_BIN to the absolute path of an already-installed official agy_acp_server executable; this prevents the wrapper from downloading its backend during startup.",
       runtimePrerequisites: [{ command: "node", minimumVersion: "22.0.0" }],
       requiredExecutableEnv: ["REFINED_AGY_ACP_BIN"],
+    },
+    agy: {
+      command: agyAcpCommand,
+      args: [],
+      implementation: "agy",
+      supportedProtocols: ["v1"],
+      displayName: "Antigravity (agy ACP)",
+      installHint:
+        "Provision the pinned Windows x64 adapter with 'mise exec -- deno task provision:antigravity-agy'. Set env.AGY_BIN to an existing agy executable; the adapter skips downloads when AGY_BIN is supplied.",
+      modelConfigId: "model",
+      requiredExecutableEnv: ["AGY_BIN"],
     },
   };
   const explicitConfigPath = configPath !== undefined;
@@ -146,10 +183,11 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
         );
       }
       if (
-        def.implementation !== "official" && def.implementation !== "refined"
+        def.implementation !== "official" && def.implementation !== "refined" &&
+        def.implementation !== "agy"
       ) {
         throw new Error(
-          "Agent 'antigravity' implementation must be 'official' or 'refined'",
+          "Agent 'antigravity' implementation must be 'official', 'refined', or 'agy'",
         );
       }
     }

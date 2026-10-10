@@ -60,8 +60,27 @@ export type PermissionPolicy =
   | "allow_all"
   | "deny_all";
 
+type ConfigOptionWaiter = {
+  predicate: (options: Array<Record<string, unknown>>) => boolean;
+  finish: (options: Array<Record<string, unknown>>) => void;
+};
+
+function configOptionsFromUpdate(
+  event: NormalizedAcpUpdate,
+): Array<Record<string, unknown>> | undefined {
+  if (event.kind !== "config_option_update") return undefined;
+  if (!event.update || typeof event.update !== "object") return undefined;
+  const options = (event.update as { configOptions?: unknown }).configOptions;
+  if (
+    !Array.isArray(options) ||
+    !options.every((option) => option !== null && typeof option === "object")
+  ) return undefined;
+  return options as Array<Record<string, unknown>>;
+}
+
 export const DEFAULT_SESSION_START_TIMEOUT_MS = 30_000;
 export const DEFAULT_SESSION_CLOSE_TIMEOUT_MS = 5_000;
+export const DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS = 5_000;
 
 export interface PendingPermission {
   id: string;
@@ -78,6 +97,10 @@ export interface PendingPermission {
 
 export class SessionManager {
   readonly sessions = new Map<string, ManagedSession>();
+  private readonly configOptionWaiters = new Map<
+    string,
+    Set<ConfigOptionWaiter>
+  >();
   constructor(
     private agents: AgentMap,
     private readonly startupTimeoutMs = DEFAULT_SESSION_START_TIMEOUT_MS,
@@ -135,13 +158,16 @@ export class SessionManager {
     };
     const process = await startAgent(launchDefinition, cwd);
     const earlyUpdates: NormalizedAcpUpdate[] = [];
+    let wakeStartupUpdate: (() => void) | undefined;
     const driver = createProtocolDriver(protocol, def, process, {
       update: (update) => {
         const managed = [...this.sessions.values()].find((item) =>
           item.acpSessionId === update.sessionId
         );
-        if (!managed) earlyUpdates.push(update);
-        else this.receiveUpdate(managed, update);
+        if (!managed) {
+          earlyUpdates.push(update);
+          wakeStartupUpdate?.();
+        } else this.receiveUpdate(managed, update);
       },
       permission: (request) =>
         this.requestPermission(request, permissionPolicy),
@@ -155,6 +181,19 @@ export class SessionManager {
           : await driver.newSession(cwd);
         const acpId = sessionResponse.sessionId;
         let configOptions = [...sessionResponse.configOptions];
+        let configOptionsEarlyUpdateCursor = 0;
+        let appliedEarlyUpdates = 0;
+        const applyEarlyConfigUpdates = () => {
+          for (
+            ;
+            appliedEarlyUpdates < earlyUpdates.length;
+            appliedEarlyUpdates++
+          ) {
+            const update = earlyUpdates[appliedEarlyUpdates];
+            const options = configOptionsFromUpdate(update);
+            if (options) configOptions = options;
+          }
+        };
         let modes = sessionResponse.modes;
         const modelConfigIds = new Set(configOptions.flatMap((option) => {
           const id = typeof option.id === "string" ? option.id : undefined;
@@ -170,7 +209,25 @@ export class SessionManager {
           Number(modelConfigIds.has(b)) - Number(modelConfigIds.has(a))
         );
         for (const [configId, value] of desired) {
-          const option = configOptions.find((item) => item.id === configId);
+          applyEarlyConfigUpdates();
+          let option = configOptions.find((item) => item.id === configId);
+          while (!option && configOptions.length) {
+            const received = await new Promise<boolean>((resolve) => {
+              const timer = setTimeout(() => {
+                if (wakeStartupUpdate === wake) wakeStartupUpdate = undefined;
+                resolve(false);
+              }, DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS);
+              const wake = () => {
+                clearTimeout(timer);
+                if (wakeStartupUpdate === wake) wakeStartupUpdate = undefined;
+                resolve(true);
+              };
+              wakeStartupUpdate = wake;
+            });
+            if (!received) break;
+            applyEarlyConfigUpdates();
+            option = configOptions.find((item) => item.id === configId);
+          }
           if (!option && configOptions.length) {
             throw new Error(`Unknown config option: ${configId}`);
           }
@@ -195,12 +252,19 @@ export class SessionManager {
             value,
             option,
           );
+          configOptionsEarlyUpdateCursor = earlyUpdates.length;
         }
         if (modeId) {
           modes = await driver.setMode(acpId, modeId, configOptions, modes) ??
             modes;
         }
-        return { initialized, sessionResponse, configOptions, modes };
+        return {
+          initialized,
+          sessionResponse,
+          configOptions,
+          modes,
+          configOptionsEarlyUpdateCursor,
+        };
       };
       const timedOut = new Promise<never>((_, reject) => {
         startupTimer = setTimeout(() => {
@@ -211,11 +275,13 @@ export class SessionManager {
           reject(error);
         }, this.startupTimeoutMs);
       });
-      const { initialized, sessionResponse, configOptions, modes } =
-        await Promise.race([
-          startup(),
-          timedOut,
-        ]);
+      const {
+        initialized,
+        sessionResponse,
+        configOptions,
+        modes,
+        configOptionsEarlyUpdateCursor,
+      } = await Promise.race([startup(), timedOut]);
       const acpId = sessionResponse.sessionId;
       const session: ManagedSession = {
         id: crypto.randomUUID(),
@@ -237,8 +303,14 @@ export class SessionManager {
         pendingPermissions: new Map(),
       };
       this.sessions.set(session.id, session);
-      for (const update of earlyUpdates) {
-        if (update.sessionId === acpId) this.receiveUpdate(session, update);
+      for (const [index, update] of earlyUpdates.entries()) {
+        if (update.sessionId === acpId) {
+          this.receiveUpdate(
+            session,
+            update,
+            index >= configOptionsEarlyUpdateCursor,
+          );
+        }
       }
       return session;
     } catch (error) {
@@ -431,8 +503,14 @@ export class SessionManager {
   private receiveUpdate(
     session: ManagedSession,
     updateEvent: NormalizedAcpUpdate,
+    applyConfigOptions = true,
   ) {
     this.recordPromptActivity(session);
+    const configOptions = configOptionsFromUpdate(updateEvent);
+    if (configOptions && applyConfigOptions) {
+      session.configOptions = configOptions;
+      this.notifyConfigOptionWaiters(session);
+    }
     this.appendEvent(
       session,
       updateEvent.kind,
@@ -474,6 +552,56 @@ export class SessionManager {
         session.prompt.state = "completed";
       }
       session.promptActive = false;
+    }
+  }
+
+  waitForConfigOptions(
+    sessionId: string,
+    predicate: (options: Array<Record<string, unknown>>) => boolean,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<Array<Record<string, unknown>>> {
+    const session = this.get(sessionId);
+    if (predicate(session.configOptions) || timeoutMs <= 0) {
+      return Promise.resolve(session.configOptions);
+    }
+    return new Promise((resolve) => {
+      const waiters = this.configOptionWaiters.get(sessionId) ?? new Set();
+      this.configOptionWaiters.set(sessionId, waiters);
+      let abort: (() => void) | undefined;
+      const waiter: ConfigOptionWaiter = {
+        predicate,
+        finish: (options) => {
+          clearTimeout(timer);
+          if (signal && abort) signal.removeEventListener("abort", abort);
+          waiters.delete(waiter);
+          if (waiters.size === 0) this.configOptionWaiters.delete(sessionId);
+          resolve(options);
+        },
+      };
+      const timer = setTimeout(
+        () => waiter.finish(session.configOptions),
+        timeoutMs,
+      );
+      if (signal) {
+        abort = () => waiter.finish(session.configOptions);
+        signal.addEventListener("abort", abort, { once: true });
+      }
+      if (signal?.aborted) {
+        waiter.finish(session.configOptions);
+      } else {
+        waiters.add(waiter);
+      }
+    });
+  }
+
+  private notifyConfigOptionWaiters(session: ManagedSession): void {
+    const waiters = this.configOptionWaiters.get(session.id);
+    if (!waiters) return;
+    for (const waiter of [...waiters]) {
+      if (waiter.predicate(session.configOptions)) {
+        waiter.finish(session.configOptions);
+      }
     }
   }
 
@@ -609,6 +737,11 @@ export class SessionManager {
     }
     if (session.permissionLease) clearTimeout(session.permissionLease);
     session.permissionLease = undefined;
+    for (
+      const waiter of [
+        ...(this.configOptionWaiters.get(id) ?? []),
+      ]
+    ) waiter.finish(session.configOptions);
     for (const pending of session.pendingPermissions.values()) {
       pending.resolve({ outcome: { outcome: "cancelled" } });
     }

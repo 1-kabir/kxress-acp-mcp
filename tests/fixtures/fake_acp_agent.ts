@@ -36,7 +36,7 @@ app.onRequest(
     return { protocolVersion: 1, agentCapabilities: { loadSession: true } };
   },
 );
-app.onRequest("session/new", ({ params }) => {
+app.onRequest("session/new", ({ params, client }) => {
   if (Deno.args.includes("--session-exit")) Deno.exit(13);
   if (Deno.args.includes("--session-hang")) return new Promise(() => {});
   const delayArgument = Deno.args.find((arg) =>
@@ -53,6 +53,42 @@ app.onRequest("session/new", ({ params }) => {
   }
   if (Deno.args.includes("--session-fail")) {
     throw new Error("fixture session creation failed");
+  }
+  if (Deno.args.includes("--async-models")) {
+    const sessionId = crypto.randomUUID();
+    const initialOptions: SessionConfigOption[] = [{
+      id: "mode",
+      name: "Mode",
+      type: "select",
+      currentValue: "default",
+      options: [{ value: "default", name: "Default" }],
+    }];
+    const discoveredOptions: SessionConfigOption[] = [
+      {
+        id: "model",
+        name: "Model",
+        type: "select",
+        currentValue: "claude-opus-5-5-low",
+        options: [
+          { value: "claude-opus-5-5-low", name: "Opus low" },
+          { value: "claude-opus-5-5-medium", name: "Opus medium" },
+          { value: "claude-opus-5-5-high", name: "Opus high" },
+        ],
+      },
+      ...initialOptions,
+    ];
+    activeConfigOptions = initialOptions;
+    setTimeout(() => {
+      activeConfigOptions = discoveredOptions;
+      void client.notify("session/update", {
+        sessionId,
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: discoveredOptions,
+        },
+      });
+    }, 40);
+    return { sessionId, configOptions: initialOptions };
   }
   const configOptions: SessionConfigOption[] =
     Deno.args.includes("--advertise-models")
@@ -151,6 +187,12 @@ app.onRequest("session/set_config_option", ({ params }) => {
     if (type !== "boolean" || typeof value !== "boolean") {
       throw new Error("Boolean option was not sent with ACP boolean semantics");
     }
+    activeConfigOptions = activeConfigOptions.map((option) =>
+      option.id === configId
+        ? { ...option, currentValue: value } as SessionConfigOption
+        : option
+    );
+  } else if (configId === "model") {
     activeConfigOptions = activeConfigOptions.map((option) =>
       option.id === configId
         ? { ...option, currentValue: value } as SessionConfigOption

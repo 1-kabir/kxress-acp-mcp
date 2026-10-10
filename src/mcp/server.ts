@@ -14,7 +14,10 @@ import {
   fetchOpenCodeCatalog,
   type OpenCodeCatalog,
 } from "../models/opencode_catalog.ts";
-import { SessionManager } from "../sessions/manager.ts";
+import {
+  DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS,
+  SessionManager,
+} from "../sessions/manager.ts";
 import { cleanupStaleWorkspaceSnapshots } from "../workspaces/stale_cleanup.ts";
 import { VERSION } from "../version.ts";
 
@@ -596,10 +599,26 @@ export function createMcpServer(
             }],
           };
         }
-        const models = discoverAdvertisedModels(
+        let models = discoverAdvertisedModels(
           session.configOptions,
           definition,
         );
+        if (!models.length) {
+          await abortable(
+            manager.waitForConfigOptions(
+              session.id,
+              (options) =>
+                discoverAdvertisedModels(options, definition).length > 0,
+              Math.min(timeoutMs, DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS),
+              signal,
+            ),
+            signal,
+          );
+          models = discoverAdvertisedModels(
+            session.configOptions,
+            definition,
+          );
+        }
         let enrichedModels = models;
         let enrichment: {
           source?: string;

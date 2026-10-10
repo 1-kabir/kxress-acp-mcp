@@ -263,3 +263,69 @@ Deno.test("doctor identifies the selected Antigravity implementation and backend
     await Deno.remove(root, { recursive: true });
   }
 });
+
+Deno.test("doctor checks agy adapter identity and the explicitly supplied agy executable", async () => {
+  const root = await Deno.makeTempDir({ prefix: "acp-mcp-doctor-agy-" });
+  const config = `${root}\\config.json`;
+  try {
+    await Deno.writeTextFile(config, JSON.stringify({ agents: {} }));
+    const missing = await diagnose(
+      { configPath: config },
+      dependencies(root, {
+        antigravity: {
+          command: "agy-acp-windows-x64.exe",
+          args: [],
+          implementation: "agy",
+          displayName: "Antigravity (agy ACP)",
+          acpProtocol: "v1",
+          requiredExecutableEnv: ["AGY_BIN"],
+          env: { AGY_BIN: "" },
+        },
+      }, {
+        resolveExecutable: (command) =>
+          Promise.resolve(
+            command === "agy-acp-windows-x64.exe"
+              ? "C:\\fixtures\\agy-acp-windows-x64.exe"
+              : undefined,
+          ),
+      }),
+    );
+    if (
+      !missing.checks.some((check) =>
+        check.id === "agent.antigravity.protocol" &&
+        check.summary.includes("agy implementation")
+      ) ||
+      missing.checks.find((check) =>
+          check.id === "agent.antigravity.required.AGY_BIN"
+        )?.status !== "error"
+    ) {
+      throw new Error(
+        "Doctor did not report the agy implementation requirement",
+      );
+    }
+
+    const configured = await diagnose(
+      { configPath: config },
+      dependencies(root, {
+        antigravity: {
+          command: "agy-acp-windows-x64.exe",
+          args: [],
+          implementation: "agy",
+          acpProtocol: "v1",
+          requiredExecutableEnv: ["AGY_BIN"],
+          env: { AGY_BIN: "C:\\fixtures\\agy.exe" },
+        },
+      }, {
+        resolveExecutable: (command) =>
+          Promise.resolve(`C:\\fixtures\\${command}.exe`),
+      }),
+    );
+    if (
+      configured.checks.find((check) =>
+        check.id === "agent.antigravity.required.AGY_BIN"
+      )?.status !== "ok"
+    ) throw new Error("Doctor rejected an existing agy executable");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
