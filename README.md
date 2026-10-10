@@ -1,196 +1,108 @@
 # acp-mcp
 
-A generic stdio MCP server that starts one configured ACP agent process per
-managed session. Built-in profiles cover OpenCode, Codex ACP, Antigravity, and
-Claude Agent ACP; JSON configuration can define or override local ACP commands.
+acp-mcp exposes ACP-compatible coding agents through a common MCP interface. It
+connects an MCP host such as Codex to a downstream agent such as OpenCode,
+Codex ACP, Antigravity, or Claude Agent ACP:
 
-## Install and run
-
-The product entrypoint is a self-contained native executable. End users need no
-source checkout, Deno, or mise. Maintainers can prepare a validated local
-release with the repository-pinned Deno toolchain:
-
-```powershell
-mise exec -- deno task release
+```text
+MCP host -> acp-mcp -> ACP agent -> model/provider
 ```
 
-This runs the offline checks, builds and smoke-tests the native executable
-outside the checkout, then writes a versioned artifact, SHA-256 checksum, and
-JSON manifest under `dist/releases/`. The manifest records the product version,
-target, source commit, and artifact hash. SHA-256 lets you compare bytes with a
-known checksum; it does not establish publisher identity. Artifacts are local
-and are not published automatically. The project does not currently provide code
-signing or another publisher-authentication mechanism.
+acp-mcp is the bridge; it does not provide models or agent credentials.
 
-To install or update the validated Windows artifact, use:
+## Why use it?
+
+MCP hosts can call tools, while ACP gives coding agents a common way to expose
+sessions, models, and configuration. acp-mcp joins those interfaces so a host
+can use supported ACP agents without a separate bespoke MCP integration for
+each one.
+
+You can discover the models an agent actually advertises, run a one-shot task,
+or keep a session for multi-turn work, events, and configuration changes.
+Project-level configuration can also set model policy for work in a repository.
+
+## Quick start
+
+The currently validated packaged target is Windows x86_64. Local release
+artifacts are prepared by an operator; this repository does not publish hosted
+downloads or package-manager releases.
+
+For this project, a maintainer currently builds and installs the local Windows
+artifact from a source checkout. The checkout's pinned toolchain is Deno 2.9.6
+and mise:
 
 ```powershell
+mise install
+mise exec -- deno task release
 mise exec -- deno task install --release-dir dist/releases/acp-mcp-0.2.0-windows-x86_64
 ```
 
-By default, installation targets `%LOCALAPPDATA%\Programs\acp-mcp\acp-mcp.exe`.
-Override the destination with `--destination C:\Tools\acp-mcp\acp-mcp.exe`. The
-installer verifies the manifest and checksum, then verifies the installed hash
-and version. It does not change user configuration, `PATH`, or MCP host
-registration. Close programs using the executable before updating it.
+This creates the validated bundle and installs it. The installer defaults to
+`%LOCALAPPDATA%\Programs\acp-mcp\acp-mcp.exe` and accepts
+`--destination <executable-path>` to choose another location. Close programs
+using acp-mcp before updating it. The installer verifies the artifact checksum,
+installed bytes, and version. It does not change PATH, user configuration, or
+MCP host settings.
 
-Windows x86_64 is the currently validated release target. A target is supported
-only after a native build, outside-checkout smoke test, and packaging run on
-that target. Other platforms are not currently claimed as release targets.
-
-For development, maintainers can still build without packaging:
+The installed native executable does not need Deno, mise, or a source checkout.
+Once it is on the machine, check it with:
 
 ```powershell
-mise exec -- deno task build
+acp-mcp --version
+acp-mcp doctor
 ```
 
-On Windows this creates `dist\acp-mcp.exe`; it is a checkout build artifact, not
-a stable installed location. To install a separately validated artifact, use the
-local install task above. The executable bundles its runtime.
+## Register an MCP host
 
-Running `acp-mcp` starts the MCP stdio server. Use `acp-mcp --help` for the
-small command-line interface or `acp-mcp --version` for its version. Run
-`acp-mcp doctor` for offline checks of local config, agent executables, runtime
-prerequisites, and disposable workspace state; `acp-mcp doctor --json` emits a
-machine-readable, secret-safe report. Doctor does not start ACP agents, contact
-providers, consume quota, or verify provider authentication. Its stale-workspace
-summary does not inspect creator processes; it reports age-qualified workspaces
-with unknown creator status separately. MCP protocol traffic stays on stdout;
-startup errors go to stderr. The server closes managed ACP sessions when its
-host closes stdin or sends SIGINT.
-
-Doctor returns exit code `0` when there are no errors (warnings are allowed),
-`1` when local diagnostic errors are found, and `2` for invalid CLI usage. It
-does not delete stale workspaces. Use the MCP tools `list_stale_workspaces` and
-`cleanup_stale_workspaces` to inspect and explicitly remove eligible leftovers.
-
-The home configuration is `%USERPROFILE%\.acp-mcp.json` on Windows and
-`$HOME/.acp-mcp.json` on POSIX. An MCP host can launch the installed command
-directly:
-
-The stdio server trusts the host and user that launch it; acp-mcp does not add a
-separate MCP authentication or authorization layer. The host owns its server
-registration, whether it starts acp-mcp, the environment passed to it, and
-whether returned tools are exposed to the coding agent. If connected tools are
-missing, check the host registration and startup status; `doctor` cannot inspect
-third-party host configuration or predict the environment a future host process
-will pass.
-
-### Codex registration
-
-Register the executable with the Codex CLI:
-
-```powershell
-codex mcp add acp_mcp -- acp-mcp
-```
-
-This adds a global stdio entry to Codex's `config.toml` and leaves other MCP
-servers intact. The entry is equivalent to:
+Configure the host to start the installed executable over stdio. For Codex, a
+direct registration can look like:
 
 ```toml
 [mcp_servers.acp_mcp]
-command = "acp-mcp"
+command = 'C:\Tools\acp-mcp\acp-mcp.exe'
 args = []
 ```
 
-Codex starts the server on demand. If the install directory is not on the host's
-PATH, set `command` to the absolute executable path. Pass `--config <path>` in
-`args` to use an explicit acp-mcp config file.
+Running `acp-mcp` without arguments starts the MCP server. Use the actual
+executable path where you installed it. The host owns this registration,
+starts acp-mcp, controls the environment passed to it, and decides which
+returned tools are available to the agent. If the executable is on the host's
+PATH, the command can be `acp-mcp`.
 
-### Repository development
+Install downstream agents separately. For example, the Codex adapter is
+available as `@agentclientprotocol/codex-acp` on npm; Claude Agent ACP requires
+Node.js 22+ and `@agentclientprotocol/claude-agent-acp`. The official Google
+Antigravity ACP server is listed in the
+[ACP Registry](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp).
 
-The Deno tasks are for maintainers working from a source checkout: `build`
-produces the standalone executable, `check` and `test` validate the source, and
-`compat <agent>` explicitly runs provider-backed live compatibility tests. The
-planning scripts under `scripts/` are source-checkout utilities, not installed
-product commands.
+## Agents
 
-When the default user config is absent, the built-in `opencode` profile is
-available and launches `opencode acp`; authenticate separately with
-`opencode auth login`. This is one built-in integration in the generic bridge.
+An agent is the ACP implementation that acp-mcp launches. It is distinct from
+the model selected by that agent. Built-in profiles currently include:
 
-Built-in agent IDs use their canonical ACP launch paths:
+| Agent ID | What it launches | Notes |
+| --- | --- | --- |
+| `opencode` | OpenCode's `opencode acp` command | ACP v1 |
+| `codex` | The `codex-acp` adapter | ACP v1; install with `npm install -g @agentclientprotocol/codex-acp` |
+| `claude` | Claude Agent ACP | Node.js 22+; install `@agentclientprotocol/claude-agent-acp`; ACP v1 by default, v2 when explicitly selected |
+| `antigravity` | A selected Antigravity ACP implementation | Official Google server by default; see below |
 
-- `opencode` starts OpenCode's native `opencode acp` mode.
-- `codex` starts the maintained `codex-acp` adapter. Install it globally with
-  `npm install -g @agentclientprotocol/codex-acp`. To use the documented
-  one-shot route, configure `command: "npx"` and
-  `args: ["-y", "@agentclientprotocol/codex-acp"]`; this may download the
-  package when first run. The adapter bundles a compatible Codex CLI by default
-  and supports `CODEX_PATH` when you want to select another executable.
-- `claude` starts the
-  [maintained Claude Agent ACP adapter](https://github.com/agentclientprotocol/claude-agent-acp),
-  powered by the official Claude Agent SDK. Install Node.js 22 or later and
-  install the upstream adapter with
-  `npm install -g @agentclientprotocol/claude-agent-acp`. The built-in profile
-  launches `claude-agent-acp`; generic `agents.claude.command`, `args`, and
-  `env` overrides support user-local installations and external provider
-  configuration. Provider authentication, endpoint, and model remain user
-  configuration. The profile does not choose billing or require an Anthropic
-  subscription; the adapter still needs a supported provider configuration. Use
-  `list_models` before selecting an exact model; there is no preferred Claude
-  model in `acp-mcp`. The adapter can use providers compatible with the Claude
-  Agent SDK, but this does not establish compatibility with every provider/model
-  combination. Live validation used a user-configured OpenRouter route.
-- `antigravity` starts Google's separate first-party ACP server. Install it from
-  the
-  [ACP Registry](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp);
-  on Windows the binary is `agy_acp_server.exe`. Put it on `PATH` or configure
-  its absolute path. This remains the default Antigravity implementation and the
-  official ACP baseline.
-- The same profile can explicitly select the independent refined wrapper with
-  `"implementation": "refined"`; `list_agents` and doctor identify the chosen
-  implementation. Install Node.js 22+ and the wrapper with
-  `npm install -g @simonepri/refined-antigravity-acp@1.4.2`, then set
-  `env.REFINED_AGY_ACP_BIN` to an existing official `agy_acp_server` executable.
-  The wrapper can download its Google backend when that setting is omitted;
-  acp-mcp requires a resolvable executable setting before launching it, so
-  normal acp-mcp startup does not provision the backend. The wrapper uses the
-  official ACP process for authentication and model execution; its own
-  ACP-advertised models/config are passed through without acp-mcp additions. It
-  does not make Opus available unless it advertises it.
+Install and authenticate downstream agents separately. Use `list_agents` to see
+the effective configured profile and whether its command is available. Use
+`list_models` to ask a live ACP agent what model choices it advertises.
 
-- The `"implementation": "agy"` selection uses the pinned
-  [shubzkothekar/antigravity-acp](https://github.com/shubzkothekar/antigravity-acp)
-  Windows x64 v1.2.0 adapter (revision
-  `d10aa13c932236ef241863f2c8b3afdda2a2be12`), which drives the existing `agy`
-  CLI. Run the explicit provisioning task below to verify the upstream release
-  SHA-256 and install the adapter under
-  `%LOCALAPPDATA%\acp-mcp\agents\antigravity-agy\1.2.0\`. It does not install or
-  change `agy` or its authentication. Set `env.AGY_BIN` to the absolute path of
-  an existing `agy.exe`; config values do not expand environment-variable
-  placeholders. The adapter is v1-only in this profile. It dynamically discovers
-  and advertises models. In the tested account and adapter version, ACP
-  advertised 18 choices including `claude-opus-5-5-high`; availability depends
-  on the installed CLI, account, and entitlement. acp-mcp does not add models.
-  The adapter invokes `agy` with `--dangerously-skip-permissions`, so its
-  actions are not mediated by ACP permission requests and `permissionPolicy`
-  cannot gate those actions. The adapter's upstream README warns that
-  third-party tools accessing Antigravity with personal OAuth may violate
-  Google's terms and could lead to account suspension or termination; review the
-  [current Antigravity terms](https://antigravity.google/terms) before choosing
-  this implementation. It is an explicit community-adapter trust and account-
-  risk choice, not official Google software.
+## Antigravity implementations
 
-Select refined explicitly in `%USERPROFILE%\.acp-mcp.json` (replace the
-placeholder with the actual absolute executable path; config paths do not expand
-environment variables):
+The `antigravity` profile has three explicit implementations. Omit
+`implementation` to keep the official Google server as the default.
 
-```json
-{
-  "agents": {
-    "antigravity": {
-      "implementation": "refined",
-      "env": {
-        "REFINED_AGY_ACP_BIN": "C:\\Tools\\Antigravity ACP\\agy_acp_server.exe"
-      }
-    }
-  }
-}
-```
+| Selector | Implementation | What to expect |
+| --- | --- | --- |
+| `official` | Google's `agy_acp_server` | Default, official ACP baseline. Its advertised catalog can differ from the `agy` CLI catalog. |
+| `refined` | `simonepri/refined-antigravity-acp` | Explicit wrapper around the official ACP backend; live validated with Gemini model choices and `thought_level`, but did not advertise Opus in the tested setup. |
+| `agy` | `shubzkothekar/antigravity-acp` v1.2.0 | Explicit community adapter that uses the existing authenticated `agy` CLI. Opus was advertised and validated in the tested account/catalog. |
 
-Select the agy-backed implementation explicitly (replace the `AGY_BIN`
-placeholder with the absolute path to the existing CLI executable):
+For example, put this in a trusted home config to select the community adapter:
 
 ```json
 {
@@ -198,274 +110,136 @@ placeholder with the absolute path to the existing CLI executable):
     "antigravity": {
       "implementation": "agy",
       "env": {
-        "AGY_BIN": "C:\\Tools\\Antigravity CLI\\agy.exe"
+        "AGY_BIN": "C:\\Tools\\agy.exe"
       }
     }
   }
 }
 ```
 
-All profiles use the same acp-mcp session, configuration, timeout, permission,
-event, and cleanup path. Downstream implementations can still transform ACP
-traffic or advertise different capabilities. Custom ACP stdio commands work
-without a built-in profile. `list_agents` includes `commandFound` to report
-whether the configured executable is present; it does not check authentication
-or provider access.
+The `agy` adapter is not official Google software. It uses the user's existing
+`agy` authentication. The pinned adapter invokes `agy` with
+`--dangerously-skip-permissions` and does not expose normal `agy` approval
+requests through ACP, so acp-mcp cannot mediate those operations with
+`permissionPolicy`. Choose it explicitly with that tradeoff in mind. Its live
+catalog depends on the adapter, CLI, account, and entitlements; Opus is not
+available to every account. acp-mcp uses the choices advertised by the selected
+ACP implementation and does not merge in CLI-only models.
+Its upstream warns that third-party tools using Antigravity personal OAuth may
+violate Google's terms and could put the account at risk; review the
+[Antigravity terms](https://antigravity.google/terms) before choosing it.
 
-### Compatibility status
+On Windows x86_64, provision the pinned adapter with
+`mise exec -- deno task provision:antigravity-agy`. This installs the adapter
+under `%LOCALAPPDATA%\acp-mcp\agents\antigravity-agy\1.2.0\` and verifies the
+upstream release hash. Install the `agy` CLI separately and point `AGY_BIN` at
+its executable.
 
-This table distinguishes established live evidence from implementations that
-have not yet been live validated through acp-mcp. Live evidence records
-demonstrated compatibility, not current installation or provider availability;
-check `list_agents` for local command availability. Arbitrary configured ACP
-agents remain supported by the generic launch/session path, but are not implied
-to be live validated here.
+Install the `refined` wrapper with
+`npm install -g @simonepri/refined-antigravity-acp@1.4.2`. It requires Node.js
+22+ and an installed official `agy_acp_server` executable. Configure its path with
+`env.REFINED_AGY_ACP_BIN` in trusted configuration. The `official` and
+`refined` implementations use the Google ACP backend; selecting one never
+silently falls back to another.
 
-| Agent                                                                                             | Built-in profile                | Live evidence                                                                                                                                                                                                                                                                                                                                           | Protocol evidence                                                                                |
-| ------------------------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [OpenCode](https://opencode.ai/docs/cli/acp/)                                                     | Yes                             | OpenCode 2.0.18, v1: `run_task`, advanced sessions, config, load/resume, cleanup. A controlled write occurred without an ACP permission request.                                                                                                                                                                                                        | v1 currently live validated; v2 unconfirmed                                                      |
-| [Codex ACP](https://github.com/agentclientprotocol/codex-acp)                                     | Yes                             | Adapter 2.1.1, v1: `run_task`, advanced sessions, cancellation, cross-session isolation, load/resume, cleanup. Legacy `set_mode` changed state without `current_mode_update`; mode config was observable.                                                                                                                                               | v1 currently live validated; v2 unconfirmed                                                      |
-| [Antigravity official](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp) | Yes (`antigravity`, default)    | ACP 1.3.0, v1: `run_task`, advanced sessions, permission denial, load/resume, cleanup. Tested `oauth-personal` ACP auth path advertised 11 Gemini choices; `agy` CLI 1.3.2 showed a broader 18-choice catalog. Version/auth sensitive.                                                                                                                  | v1 currently live validated; v2 unconfirmed                                                      |
-| [Antigravity refined](https://github.com/simonepri/refined-antigravity-acp)                       | Yes (`implementation: refined`) | Wrapper 1.4.2 / source `7590d40d170b18dbd66338514e42e08e63bae072`; raw ACP and installed acp-mcp v1 validation passed. Four Gemini choices; no Opus in the tested catalog.                                                                                                                                                                              | v1 currently live validated; capabilities depend on wrapper/backend advertisement                |
-| [Antigravity agy](https://github.com/shubzkothekar/antigravity-acp)                               | Yes (`implementation: agy`)     | Adapter 1.2.0 / source `d10aa13c932236ef241863f2c8b3afdda2a2be12`; v1 live validated. Tested ACP advertised 18 choices including Opus; `run_task`, multi-turn continuity, model switch, resume, cancellation, and cleanup passed. Adapter uses `--dangerously-skip-permissions`; personal OAuth use carries the upstream-documented account/terms risk. | v1 currently live validated; cancellation observed; ACP permission mediation is bypassed         |
-| [Claude Agent ACP](https://github.com/agentclientprotocol/claude-agent-acp)                       | Yes                             | Adapter 0.88.0: direct installed runs validated v1 and experimental v2 through one external provider route. In one host-launched setup discovery worked but session creation did not; the route was ineffective and the failing process hop was not observable.                                                                                         | v1 direct-process live validated; v2 experimental/route-specific; host-launched route unresolved |
+## Configuration
 
-ACP protocol versions are the `protocolVersion` selected during `initialize`;
-they are unrelated to an agent or package's software version. The bridge
-supports ACP v1 and the experimental ACP v2 draft through separate protocol
-drivers. ACP v1 is the mature/default path. ACP v2 and the SDK's v2 entrypoint
-may change incompatibly. The table records agent evidence, not just bridge
-capability: Claude v2 was exercised end to end against one externally configured
-provider route. This does not establish compatibility with other provider/model
-combinations. The Claude adapter exposes an upstream experimental v2 mode; the
-bridge enables it only when Claude is explicitly configured for v2. ACP v2
-remains a draft.
+The configuration filename is `.acp-mcp.json`. Without an explicit
+`--config` argument, acp-mcp loads the home file and then discovers project
+files from the operation's working directory up to the filesystem root:
 
-Protocol selection is per agent in `%USERPROFILE%\.acp-mcp.json` on Windows or
-`$HOME/.acp-mcp.json` on POSIX. Omitted `acpProtocol` means `v1`, preserving the
-existing default. For example:
-
-```json
-{
-  "agents": {
-    "claude": {
-      "acpProtocol": "v2"
-    }
-  }
-}
+```text
+~/.acp-mcp.json
+  -> /work/.acp-mcp.json
+    -> /work/repo/.acp-mcp.json
+      -> /work/repo/subproject/.acp-mcp.json
 ```
 
-Claude's built-in profile supplies its documented v2 opt-in environment setting
-when selected. Custom ACP agents may also set `acpProtocol` to `"v1"` or `"v2"`.
-The bridge uses only the configured protocol: it does not retry or silently fall
-back when initialization fails. `acp-mcp doctor` reports the local selection and
-executable availability, but does not prove that the agent supports or accepts
-that protocol.
+On Windows the home file is `%USERPROFILE%\.acp-mcp.json`; on POSIX it is
+`$HOME/.acp-mcp.json`. Project files apply from outermost to nearest. Objects
+merge recursively, scalar values replace earlier values, and arrays replace
+earlier arrays. The nearest project file wins where it sets a value. An
+operation's `cwd` determines project discovery; session configuration is
+captured when that session starts or loads.
 
-ACP agents differ in their model/config catalogs, modes, permission requests,
-and load/resume support. Use live discovery and advertised capabilities rather
-than assuming parity between profiles. Codex as an MCP host is distinct from the
-downstream Codex ACP agent represented by the `codex` profile.
-
-### Live compatibility tests
-
-`deno task test` runs offline/deterministic tests and does not start real
-agents. To explicitly run an opt-in live test, use the PowerShell-friendly
-runner:
-
-```powershell
-mise exec -- deno task compat antigravity
-mise exec -- deno task compat claude
-mise exec -- deno task compat claude --protocol v2
-```
-
-Targets are `opencode`, `codex`, `antigravity`, and `claude`. Invoke one target
-at a time. These tests launch the selected local agent and may require provider
-credentials or use quota/API billing. No target (or `--help`) prints usage and
-does not contact a provider. A missing executable or a real integration failure
-returns a nonzero exit status; see the relevant setup section above.
-
-For repository planning with Claude or another ACP agent, discover models and
-configuration through the host-connected `acp-mcp` MCP tools, then use a
-disposable workspace when relative writes should not touch the checkout. The
-repository planning scripts documented below are a deliberate source-checkout
-workflow using a separate local bridge path; they do not represent or replace
-the host-connected service. If its MCP tools are unavailable, report that and
-skip optional delegated planning rather than launching another bridge. A
-disposable workspace is not an OS sandbox.
-
-### Antigravity authentication
-
-The normal `agy` CLI profile and the ACP server's profile are separate. The
-normal CLI login alone does not establish ACP authentication. On Windows, the
-ACP profile selector is `%USERPROFILE%\.gemini\antigravity-acp\settings.json`:
-
-```json
-{ "auth": { "type": "oauth-personal" } }
-```
-
-Authenticate through the official ACP server if its existing state requires it.
-After that authentication has been completed once, fresh server processes can
-reuse the ACP server's persisted authentication state. It manages its own
-runtime files in this profile; do not copy token files or credentials from the
-CLI profile.
-
-### Antigravity ACP installation on Windows
-
-#### Provision the agy-backed community adapter
-
-Run:
-
-```powershell
-mise exec -- deno task provision:antigravity-agy
-```
-
-#### Install the official Google ACP server
-
-Download the Windows archive listed by the official
-[ACP Registry entry](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json)
-and extract the entire archive in a user-local directory such as
-`%LOCALAPPDATA%\acp-mcp\agents\antigravity\<version>\`. Keep
-`localharness_external.exe` alongside `agy_acp_server.exe`; the server needs
-both. Then configure `agents.antigravity.command` in
-`%USERPROFILE%\.acp-mcp.json` to the absolute path of `agy_acp_server.exe` and
-set `args` to `[]`. For example:
+For example, a home file can set an exact default model, while a repository
+file changes that default for the project. Replace these illustrative IDs with
+IDs returned by `list_models`:
 
 ```json
 {
   "agents": {
     "antigravity": {
-      "command": "C:\\Users\\<user>\\AppData\\Local\\acp-mcp\\agents\\antigravity\\<version>\\agy_acp_server.exe",
-      "args": []
+      "implementation": "agy",
+      "env": {
+        "AGY_BIN": "C:\\Tools\\agy.exe"
+      },
+      "models": {
+        "default": { "model": "exact-home-model-id" }
+      }
     }
   }
 }
 ```
 
-`acp-mcp` supports absolute executable paths but does not expand environment
-variables inside `command`; substitute the actual user-local path. This explicit
-configuration is checked by `list_agents` and avoids a PATH change. The current
-ACP Registry entry provides the current official archive URL and version but no
-archive checksum; the 1.3.0 Windows executables were Authenticode-verified as
-signed by Google LLC.
-
-For the refined implementation, install the upstream npm package separately and
-configure `agents.antigravity.implementation` as `"refined"`. Keep the official
-server and its `localharness_external.exe` together in their existing
-installation directory, and point `REFINED_AGY_ACP_BIN` at that server through
-the profile's `env` map. Do not run the wrapper's editor `setup` command for
-acp-mcp; acp-mcp does not install or update either component. The wrapper passes
-ACP authentication, permission, session, and cancellation traffic to the
-official server and adds fixes around that ACP stream. Upstream currently
-documents Windows support and Node.js 22+; use live ACP discovery for models,
-config, modes, and resume support.
-
-For the `agy` implementation, run the explicit Windows x64 provisioning task
-above, keep the official Google server installation untouched, and configure
-`agents.antigravity.implementation` as `"agy"` with `env.AGY_BIN` pointing to
-the existing `agy.exe`. The community adapter is pinned to v1.2.0 and is not
-downloaded during normal MCP startup. It supports ACP v1 and advertises its
-dynamic catalog after session startup. In live testing, `session/cancel`
-canceled an active prompt and stopped its `agy` child; behavior may change with
-future adapter versions. The adapter does not relay `agy` approvals as ACP
-permission requests. Its upstream project warns that third-party Antigravity
-OAuth use may violate Google's terms and risk account suspension or termination.
-This is a community integration, not an official Google implementation. The
-explicit selector values are `official` (default), `refined`, and `agy`; acp-mcp
-does not switch implementations automatically or merge their model catalogs.
-
-## Agent configuration
-
-Without `--config`, acp-mcp loads `~/.acp-mcp.json` (Windows:
-`%USERPROFILE%\.acp-mcp.json`) and then discovers `.acp-mcp.json` files from the
-operation's working directory up to the filesystem root. Project files are
-applied outermost to nearest, so the nearest project setting wins. Objects merge
-recursively, arrays replace, and scalars replace. The home file is not applied
-twice if it is also an ancestor. Missing files are optional; built-in profiles
-remain available.
-
-The effective project context is resolved for each operation that accepts a
-`cwd` (`run_task`, session creation/load, `list_models`, and `list_agents`). If
-omitted, the MCP process cwd is used. A managed session keeps the configuration
-resolved when it was created or loaded; edits affect later operations/sessions.
-
-Pass `--config <path>` for deterministic exact-file configuration. This loads
-only that file: home and project discovery are disabled. A missing or invalid
-explicit file is an error and never falls back.
+`repo/.acp-mcp.json`:
 
 ```json
 {
   "agents": {
-    "custom": {
-      "command": "C:\\tools\\custom-agent.exe",
-      "args": ["serve"],
-      "displayName": "Custom agent",
-      "env": { "AGENT_LOG_LEVEL": "warn" }
+    "antigravity": {
+      "models": {
+        "default": { "model": "exact-project-model-id" }
+      }
     }
   }
 }
 ```
 
-Known agent fields are validated with field-specific errors. Unknown fields are
-currently allowed for forward-compatible configuration; they do not add behavior
-unless acp-mcp or that profile consumes them.
+Project files are useful for project policy and the closed built-in
+Antigravity implementation selector. They cannot define or replace executable
+`command`, `args`, or `env` settings. Put launch configuration in the trusted
+home file, or pass an exact file with `--config`.
 
-Home and explicit configs are trusted launch configuration sources and may
-define executable, arguments, and environment. Auto-discovered project configs
-are restricted to model policy and closed built-in implementation choices such
-as Antigravity `official`, `refined`, or `agy`; they cannot set `command`,
-`args`, or `env`. This prevents opening a repository from launching an arbitrary
-project-selected executable.
+`acp-mcp --config <path>` uses exactly that file: it does not also load the
+home file or discover project files. A missing or invalid explicit file is an
+error. The same option is available to doctor.
 
-### Model policy
+## Model policy
 
-Per-agent policy uses exact live ACP model IDs and simple `*`/`?` patterns.
-`allowedModels` limits the advertised catalog when present; `deniedModels`
-subtracts from it and always wins. An explicit model request cannot bypass these
-rules. If no configured default exists, acp-mcp leaves the downstream-selected
-model unchanged. It never invents models, silently switches models, or retries
-another choice.
+Model names vary across agents. A project may want to choose a model family
+position, restrict which advertised IDs can be used, or request a level of
+thinking effort. These are configured per agent under `agents.<id>.models`.
 
-An exact `default.model` or abstract `default.modelSize` can be configured; the
-two are mutually exclusive. An MCP request's exact `model` or `modelSize`
-overrides that selector, and request `thinkingEffort` overrides the configured
-default effort. Policy filtering still applies. The generic `set_config_option`
-tool also enforces allow/deny policy when changing a model.
+### Model size
 
-`modelSize` is a user-configured family-position abstraction with exactly four
-values: `small`, `medium`, `large`, and `xlarge`. It is independent of thinking
-effort and is not a capability, quality, speed, or cost ranking. For example, a
-user may map Claude Haiku/Sonnet/Opus/Fable or OpenAI Luna/Terra/Sol/Astra to
-those positions; the runtime does not infer mappings from names.
+`small`, `medium`, `large`, and `xlarge` are user-configured model-family
+positions. They are independent of thinking effort and are not a ranking of
+quality, speed, cost, or capability.
 
-Normalized `thinkingEffort` values are `low`, `medium`, `high`, `xhigh`, `max`,
-and `ultra`. Concrete requests fail if unsupported. `max` and `ultra` saturate
-at the highest effort advertised for the selected model. For effort-encoded
-model IDs, configure each exact variant explicitly. No model-size candidate
-lists or hidden fallback are supported.
+For example, a user might map `small` to a Haiku or Luna model, `medium` to
+Sonnet or Terra, `large` to Opus or Sol, and `xlarge` to Fable or Astra.
+These are policy examples, not built-in name inference: acp-mcp does not assume
+that a model containing `opus` is large. Each mapping must name an exact model
+that the live ACP advertises.
 
-For downstreams that expose effort separately, map normalized values to the
-advertised ACP config option and values, for example:
+### Thinking effort
 
-```json
-{
-  "thinkingEffort": {
-    "configOption": "thought_level",
-    "values": { "low": "low", "medium": "medium", "high": "high" }
-  },
-  "modelSizes": {
-    "large": { "model": "opus", "maxThinkingEffort": "high" }
-  }
-}
-```
+The normalized values are `low`, `medium`, `high`, `xhigh`, `max`, and
+`ultra`. The first four are concrete requests: if the selected model cannot
+provide one, the request fails instead of silently lowering it. `max` and
+`ultra` are saturating requests that resolve to the highest supported effort
+for the selected model. If only low, medium, and high are available, both
+resolve to high.
 
-Only values present in the live ACP advertisement can be selected. `max` and
-`ultra` cap at the highest mapped and currently advertised effort; a concrete
-unsupported effort returns an error.
+An ACP may expose effort as a separate config option, such as
+`thought_level`, or encode it in separate advertised model IDs. Configure the
+mapping to match that agent's live ACP surface.
 
-Example for the `agy` Antigravity ACP, whose adapter advertises exact
-effort-suffixed IDs (availability depends on the current ACP catalog and account
-entitlement):
+### Example: Antigravity agy model policy
+
+The following illustrates effort encoded in exact model IDs. It is a
+user-provided policy example; the live ACP catalog remains authoritative.
 
 ```json
 {
@@ -475,7 +249,10 @@ entitlement):
       "models": {
         "allowedModels": ["claude-*", "gemini-*"],
         "deniedModels": ["gpt-oss-*"],
-        "default": { "modelSize": "large", "thinkingEffort": "max" },
+        "default": {
+          "modelSize": "large",
+          "thinkingEffort": "max"
+        },
         "modelSizes": {
           "medium": {
             "modelsByThinkingEffort": {
@@ -498,294 +275,176 @@ entitlement):
 }
 ```
 
-Project configs can inherit home model-size mappings and override only a
-specific default. For example, a repository `.acp-mcp.json` can set
-`agents.antigravity.models.default` to
-`{ "modelSize": "medium",
-"thinkingEffort": "high" }`; a nested project dotfile
-can set it to `{ "modelSize": "large", "thinkingEffort": "ultra" }`. The more
-specific project selector wins while inherited mappings remain in effect.
-Claude-family users commonly map small/medium/large/xlarge to
-Haiku/Sonnet/Opus/Fable; OpenAI-family users may map them to
-Luna/Terra/Sol/Astra. These are user policy examples, not names inferred by
+With that mapping, `large` plus `max` resolves to the highest configured
+variant that the live ACP advertises and policy allows. If the available
+variants stop at `high`, the exact result is
+`claude-opus-5-5-high`. If a mapped ID is not advertised or is denied, the
+selection fails; acp-mcp does not try another size or model.
+
+A separate-config-option mapping can be configured like this:
+
+```json
+{
+  "agents": {
+    "claude": {
+      "models": {
+        "thinkingEffort": {
+          "configOption": "reasoning_effort",
+          "values": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Change option and value strings to match the choices advertised by the selected
+ACP. A concrete effort not present in both the mapping and live config is an
+error.
+
+### Selection and policy
+
+Selection precedence is:
+
+1. Exact `model` or `modelSize` supplied to a tool call.
+2. The agent's configured `models.default`.
+3. The downstream agent's own default, if no selector is configured.
+
+An exact model and a model size cannot be supplied together. `allowedModels`
+filters the live catalog when present; `deniedModels` then removes matching
+IDs, so deny always wins. Patterns support exact IDs and simple case-sensitive
+`*` wildcards. Explicit tool arguments do not bypass policy. There is no
+automatic model fallback.
+
+`list_models` reports advertised choices after policy filtering and marks the
+effective configured default where it can be resolved. For a session, selection
+and policy are resolved against that session's cwd and retained for its
+lifetime. A later project-file edit affects new operations/sessions, not an
+already running session. An explicit `set_config_option` call can still change
+the downstream session configuration.
+
+## One-shot tasks
+
+Use `list_models` to inspect an agent's live choices, then call `run_task` for
+one requested execution. For example:
+
+```json
+{
+  "agentId": "antigravity",
+  "task": "Review the failing test and suggest a minimal fix.",
+  "modelSize": "large",
+  "thinkingEffort": "max",
+  "cwd": "C:\\work\\my-project"
+}
+```
+
+`run_task` returns a compact final result. It does not retry another model,
+implementation, or protocol. Use a session when you need to continue the
+conversation, inspect updates, or control it interactively.
+
+## Sessions
+
+Sessions are for multi-turn work. A typical flow is:
+
+```text
+start_session
+  -> prompt
+  -> get_events
+  -> prompt
+  -> close_session
+```
+
+Use `get_session` to inspect state, `set_config_option` or `set_mode` when the
+agent advertises those controls, `resolve_permission` for an operator policy,
+and `cancel_prompt` to request ACP cancellation. `load_session` is available
+when the downstream agent supports resume/load. Capabilities and config options
+differ among agents, so use live discovery rather than assuming every agent
+supports the same controls.
+
+The server keeps up to eight active managed sessions in memory per process.
+Restarting acp-mcp loses its in-memory session map and event journals; the
+underlying agent session may still be loadable if that agent supports it.
+
+## MCP tools
+
+The server exposes 16 tools:
+
+**Discovery:** `list_agents`, `list_models`
+
+**One-shot:** `run_task`
+
+**Sessions:** `start_session`, `load_session`, `prompt`, `get_events`,
+`list_sessions`, `get_session`, `close_session`
+
+**Configuration and control:** `set_config_option`, `set_mode`,
+`cancel_prompt`, `resolve_permission`
+
+**Workspace recovery:** `list_stale_workspaces`, `cleanup_stale_workspaces`
+
+## Doctor
+
+`acp-mcp doctor` checks local configuration, effective agent definitions,
+command resolution, declared runtime prerequisites, selected ACP protocol, and
+workspace state. It is local, offline, and secret-safe. Use
+`acp-mcp doctor --json` for structured output, or
+`acp-mcp doctor --config <path>` to inspect an exact trusted config file.
+
+Doctor does not log in, inspect credentials, contact providers to test health,
+or verify that a model is available to your account. It also cannot inspect an
+MCP host's registration or predict what environment that host will pass to
 acp-mcp.
 
-Configured agents run with the current user's OS permissions. The bridge does
-not sandbox subprocesses. ACP permission policy controls responses to
-`session/request_permission`; it does not intercept ordinary tool calls or
-provide OS-level isolation. By default, `read_only` allows requested
-agent-reported `read`, `search`, `fetch`, and `think` kinds and rejects other
-requested kinds. ACP agents may perform actions without requesting permission,
-so `read_only` does not guarantee that a task cannot modify files.
+## Important boundaries
 
-ACP children run with the launching user's OS privileges; acp-mcp does not
-privilege-drop or sandbox them. The stdio transport has no separate acp-mcp
-caller authentication, so access is governed by the launching host and user.
-Advanced session results intentionally expose ACP agent/provider content when
-requested. `get_events` may contain user or assistant text, tool details, paths,
-permission context, and agent/provider metadata; requesting raw events exposes
-the original ACP envelope. Treat these as potentially sensitive content rather
-than sanitized diagnostic logs. acp-mcp does not add child environment values to
-event journals. Child stderr is drained internally for bounded diagnostics; it
-is not prompt activity, journal content, or forwarded in startup errors.
+- acp-mcp is a bridge, not a model provider. Downstream ACP model/config
+  advertisements are the source of truth.
+- ACP children run with the launching user's OS privileges. The stdio server
+  trusts its launching host/user and adds no separate MCP authentication.
+- `permissionPolicy: "read_only"` controls how acp-mcp answers ACP permission
+  requests. It is not filesystem protection or an OS sandbox; an agent may act
+  without asking for permission.
+- Session events can contain user, assistant, tool, path, permission, and
+  provider/agent content. They are caller-visible session data, not sanitized
+  logs. Handle them accordingly.
+- Model/provider credentials belong to the downstream agent and its provider.
+  acp-mcp does not read credential files or provide authentication.
+- There is no automatic model, implementation, or protocol fallback.
+- SHA-256 checks a release artifact against a known hash; it does not prove who
+  published that hash.
 
-For a built-in profile, configured `command` and `args` replace its launch
-values. Configured `env` entries override same-named inherited or profile
-values; other parent environment variables remain inherited. The built-in
-profile's protocol metadata is retained, and `acpProtocol` selects its protocol
-explicitly.
+## ACP protocol versions
 
-The `run_task` tool may send its task and repository content read by the ACP
-agent to that agent's configured model provider. `read_only` does not keep
-repository data local, restrict network access, or sandbox the child process.
-Codex and other MCP hosts continue to apply their own approval and security
-policies. See the
-[ACP permission request protocol](https://agentclientprotocol.com/protocol/v1/tool-calls#requesting-permission)
-for the agent's permission-request behavior.
+ACP v1 is the default and mature path. ACP v2 is experimental and must be
+selected explicitly in trusted agent configuration with `"acpProtocol": "v2"`.
+The selected protocol is not retried as another version if it fails, and the
+downstream agent must support the chosen version.
 
-For a deliberate source-checkout planning workflow, use the repository script
-from PowerShell. It creates its own local bridge path and is intended for
-maintainer orchestration/testing; its discovery results are not the catalog of
-an already-connected host MCP service. For normal agent workflows, use the
-connected `list_models` and config discovery tools instead. If they are
-unavailable, do not use this script as a substitute. When choosing the
-source-checkout workflow deliberately, first discover that local workflow's
-candidates with a required privacy and cost policy:
+## Development and platform status
+
+The repository uses Deno and mise for development. For example:
 
 ```powershell
-mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts models --agent <agentId> --privacy-policy allow_any --search <optional-text> --limit 30
+mise exec -- deno task check
+mise exec -- deno task test
+mise exec -- deno lint
+mise exec -- deno fmt --check
+mise exec -- deno task build
+mise exec -- deno task release
 ```
 
-The result preserves ACP order, shows at most 30 compact candidates by default,
-and supports `--offset` for another page. It includes exact model IDs, ACP's
-currently selected value, current free/paid/unknown and privacy facts, known
-subscription requirement, and economic tier where available. Tier is an economic
-signal, not a capability score. Search and hard filters reduce large catalogs;
-no quality ranking or model recommendation is applied. Advertisement means
-selectable, not that the provider is healthy or accepting requests.
+`deno task compat <agent>` runs an explicit live compatibility test and may
+use provider quota. Ordinary tests remain offline.
 
-After choosing an exact advertised ID, inspect its config separately:
+Packaged release target:
+- Windows x86_64.
 
-```powershell
-mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts configs --agent <agentId> --model <exact-model-id> --repo (Get-Location).Path
-```
+Runtime smoke:
+- Windows and Linux/WSL.
 
-Then execute the exact choice:
-
-```powershell
-mise exec -- deno run --allow-env --allow-read --allow-write --allow-run --allow-net=opencode.ai scripts/planning_workflow.ts run --agent <agentId> --model <exact-model-id> --repo (Get-Location).Path --task "Inspect this repository and propose a plan" --privacy-policy allow_any
-```
-
-No agent, model, or fallback is selected implicitly. `--free-only` requires
-known free status, while `--no-subscription` requires explicit metadata that no
-subscription is needed; use both to apply both constraints. With neither flag,
-the workflow imposes no cost constraint. `--fallback agentId:modelId` adds
-caller-approved candidates in order; `--allow-rate-limited-fallback` is also
-required to retry after an allowed `rate_limited` classification. Strict privacy
-policies require known metadata. Use `--config-option id=value` or `--mode` only
-with values shown by the selected model's live `configs` output; the run command
-checks them before execution. The calling session's explicit selection wins over
-price, tier, or ACP's current selection.
-
-The workflow captures one canonical snapshot and creates a fresh clone for each
-model attempt, so failed-attempt mutations cannot contaminate fallback input and
-all candidates see the same source state. Snapshots include current tracked
-filesystem contents and untracked non-ignored files; they omit the Git index,
-untracked ignored files, `.git`, symlink/reparse entries, and submodule
-contents. Cleanup runs after attempts and reports leftovers. A hard process or
-machine crash may leave temp directories behind.
-
-The snapshot keeps ordinary relative planner writes and deletions out of the
-original checkout. It is not an OS sandbox and does not prevent access through
-absolute paths, other directories, credentials, subprocesses, or the network.
-Review the copied files before sending repository context to a model provider.
-For low-level workflows, `scripts/planning_workspace.ts` exposes explicit
-snapshot `create` and `cleanup` actions. `run_task` itself remains a one-model
-primitive and uses exactly its supplied `cwd` for both the ACP session and
-launched process.
-
-#### Stale workspace recovery
-
-Normal planning workflows remove their snapshots immediately. A hard crash may
-leave product-owned workspaces behind. Use `list_stale_workspaces` to inspect
-eligible candidates (24-hour age threshold by default), then call
-`cleanup_stale_workspaces` when you want to remove all currently eligible
-workspaces. Both tools accept an optional `olderThanMs` threshold. Recent or
-active workspaces and entries without a valid ownership manifest are preserved;
-the tools do not accept arbitrary paths or scan/stop agent processes.
-
-`run_task.idleTimeoutMs` defaults to 10 minutes and limits consecutive silence
-from the task's ACP session. Any inbound `session/update` for that session
-resets it, including update variants this bridge does not recognize. Active
-tasks can run longer than 10 minutes; there is no absolute runtime limit. MCP
-request cancellation still cancels the task immediately. For
-`permission_required` handoffs, `permissionLeaseMs` (default 2 minutes) controls
-how long the session remains available for operator resolution; after the
-handoff, that lease owns the session lifecycle.
-
-ACP initialization, session creation/resume, and startup configuration have a
-separate 30-second bound before a managed session is created. `close_session`
-cancels an active prompt before closing the agent session; the close RPC is
-bounded at 5 seconds before process cleanup continues. A graceful MCP stdio
-disconnect closes managed sessions. Forced server termination is not a
-cross-platform child-cleanup guarantee.
-
-The `cwd` supplied to `run_task`, `start_session`, or `load_session` is used
-both as the ACP session working directory and as the launched agent process's
-working directory. Agent profiles cannot silently override it.
-
-ACP updates for the active session and ACP permission requests count as task
-activity. The bridge does not use arbitrary subprocess stderr as a heartbeat.
-
-The MCP API currently exposes 16 tools: `run_task`, `list_models`,
-`list_agents`, `list_stale_workspaces`, `cleanup_stale_workspaces`,
-`start_session`, `load_session`, `get_session`, `prompt`, `get_events`,
-`cancel_prompt`, `resolve_permission`, `set_config_option`, `set_mode`,
-`list_sessions`, and `close_session`. Use `run_task` for one-shot work. Use
-explicit session tools for multi-turn conversations, manual permission handling,
-or event inspection. A prompt call accepts `wait` and `waitMs`; if it is still
-running at the wait limit, the response includes its prompt ID. Use `get_events`
-with the session ID and `afterSequence` cursor to read updates, or
-`cancel_prompt` to send ACP cancellation. Raw ACP payloads and thought events
-are omitted from polling results unless requested.
-
-The bridge supports up to eight active in-memory sessions per server process.
-Closing or failing a session releases capacity. A server restart loses the
-bridge's session map and journals; an underlying ACP session may still be
-loadable when that agent supports `session/load`.
-
-Each MCP tool advertises effect and open-world annotations to help hosts decide
-how to present or gate calls. These are behavioral hints, not security controls
-or a sandbox; host approval policies and the tool implementation remain
-authoritative.
-
-Inbound `session/update` notifications are intercepted at the public SDK stream
-boundary before SDK notification validation. The bridge journals their original
-params, including metadata and unknown update tags, while all other ACP traffic
-continues through the SDK client.
-
-`start_session` accepts arbitrary advertised config IDs through its `config`
-object and an optional `modeId`. Config values are strings; boolean ACP options
-use `"true"` or `"false"`. The ACP client advertises boolean config-option
-support and converts those strings to protocol booleans. `permissionPolicy`
-defaults to `read_only`; `operator` exposes requests through `get_session` and
-waits for `resolve_permission`, while `allow_all` and `deny_all` apply
-advertised ACP options. `read_only` allows requests whose advertised tool kind
-is `read`, `search`, `fetch`, or `think`, and rejects other requested kinds.
-These policies apply only when an agent requests permission; they do not prevent
-an agent from acting without a request or sandbox the child process.
-
-`load_session` starts a fresh agent process and calls `session/load` only when
-the agent advertises that capability. Supply the original absolute working
-directory along with the ACP session ID.
-
-Use `run_task` for one-shot planning, research, review, second opinions,
-repository exploration, and other tasks. It runs one task in an internal ACP
-session, waits up to 120 seconds (configurable to 10 minutes), returns only the
-final assistant text and stop reason, then closes the session. Internal ACP
-activity remains inside `acp-mcp`; the MCP caller receives only the result
-returned by `run_task`. The task and files the ACP agent reads may be sent to
-its configured model provider. The permission policy defaults to `read_only`;
-this controls ACP permission responses, not data locality or OS isolation. This
-is a generic one-shot ACP task operation that can also support subagent-style
-workflows. Request `allow_all` explicitly when needed. With `operator`, a
-permission request returns a `permission_required` result containing the managed
-session and permission IDs, advertised choices, and lease duration. Resolve it
-with `resolve_permission` and use low-level tools to continue or close that
-session. Unused permission continuations close when the lease expires.
-
-`run_task` failures return a compact `error` with a generic `kind` and `stage`.
-For example, `prompt_failed` means the ACP prompt request failed; an optional
-`acpCode` is a JSON-RPC code and does not identify an HTTP status or prove a
-provider rate limit. Provider messages, stderr, and event history stay private.
-The tool does not retry or switch models automatically. A failed prompt may have
-already performed work, and `read_only` is not an OS sandbox, so callers must
-decide whether restarting a particular task is safe. `timed_out` means the
-bridge deadline expired while waiting for the prompt; it is separate from a
-provider rate-limit failure.
-
-### Implementation planning
-
-For repository planning where relative writes should not affect the real
-checkout, use the disposable planning workflow described above. Direct
-`run_task` against a real checkout is also valid when the caller explicitly
-accepts that execution environment. In either case, use `list_models` when the
-exact model/config selection needs live validation and give the ACP agent a
-concise task rather than pasting repository contents unless you intend to send
-them to its configured provider.
-
-Review the host's approval prompt for external ACP calls and approve the
-invocation if appropriate. The host's approval flow remains the boundary for
-starting the external agent.
-
-In Codex, a per-invocation prompt for this tool can be enabled with:
-
-```powershell
-codex --ask-for-approval on-request -c 'mcp_servers.acp_mcp.tools.run_task.approval_mode="prompt"'
-```
-
-This is a temporary command-line override. It does not persist an approval
-setting; Codex still asks before running the tool. The host's confirmation
-screen is the approval boundary. `acp-mcp` does not bypass or replace it.
-
-Use the low-level session tools for multi-turn sessions, event inspection,
-manual permission handling, long-running asynchronous work, debugging, and
-advanced orchestration. `start_session` and `prompt` preserve session state;
-`get_events` exposes buffered updates on request; `cancel_prompt` sends ACP
-cancellation.
-
-ACP activity and event journals remain server-side unless a tool explicitly
-returns them (for example, `get_events`).
-
-Use `list_models` to inspect model choices exposed by a live ACP session. It
-starts and closes a temporary `read_only` session, and returns only the
-advertised choices with their ACP config ID so `run_task` or `start_session` can
-select one through the existing `config` map. ACP `category: "model"` metadata
-identifies model selectors; the configured profile mapping is used only when the
-live option has no category. Other config options remain available through the
-generic `config` map and explicit session tools. Agents without model choices
-return an empty list. Set `enrich: true` to request optional OpenCode Zen and Go
-metadata for the OpenCode profile; metadata is attached only to exact
-provider-qualified IDs already advertised by ACP. The official
-[Zen model endpoint](https://opencode.ai/zen/v1/models),
-[Zen documentation](https://opencode.ai/docs/zen/),
-[Go model endpoint](https://opencode.ai/zen/go/v1/models), and
-[Go documentation](https://opencode.ai/docs/go/) provide catalog, pricing, and
-data-use information. OpenCode Go token prices apply within a paid monthly
-subscription, which enriched Go entries mark with `subscriptionRequired: true`.
-Metadata lookup failures preserve the available ACP model list. No catalog or
-availability cache is used.
-
-For OpenCode models, enrichment keeps current `pricing`/`free` separate from
-optional `pricingStatus: "limited_time"` and `underlyingCostTier`. The cost tier
-is a coarse project band derived from the maximum published input/output price
-per million tokens: below $1 is `low`, below $5 is `medium`, below $20 is
-`high`, and $20 or more is `premium`. A zero-priced model gets no underlying
-tier unless OpenCode documents an exact paid counterpart. The documented
-`jev-1.13-free` to `jev-1.13` relationship is represented explicitly; similar
-model names alone never establish a counterpart. OpenCode Go's directly
-published token prices can provide a cost tier for that Go catalog entry, but do
-not automatically establish a counterpart relationship to a Zen model. Tier and
-privacy facts include source provenance. Privacy metadata is only attached where
-the relevant official catalog documents it; absent metadata means unknown, not a
-guarantee. `underlyingCostTier` describes pricing position, not model
-capability. OpenCode Go entries report `free` from per-token prices and
-separately mark the required subscription so zero token price is not mistaken
-for free access.
-
-`run_task` never retries or switches models. For restartable planning/research,
-the caller may compose `list_models` and separate `run_task` calls using an
-explicit, bounded model preference order. Only a failure classification allowed
-by that workflow (currently OpenCode's explicit-wording `rate_limited`
-heuristic) can authorize fallback; generic `-32603`, unclassified failures, and
-idle timeouts do not. A model being ACP-advertised means it is selectable, not
-healthy. Keep privacy/data-use constraints across fallback; unknown metadata
-must fail closed when the workflow requires a known property. Do not silently
-move from known source-model data terms to weaker or unknown candidate terms. A
-free price does not imply equal privacy or underlying economic tier. Never
-replay arbitrary implementation tasks automatically, and do not persist a
-model's failure state.
-
-Sessions and event journals are held in memory by the `acp-mcp` process. A
-server restart loses this bridge state. Loading an existing ACP session depends
-on support from the underlying agent.
+Linux/WSL runtime validation does not mean a packaged Linux release is
+available.
