@@ -4,6 +4,18 @@ import { findExecutablePath } from "../src/runtime/process.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
+function childStatusForTest(manager: SessionManager, id: string) {
+  type TestSession = {
+    process: { child: { status: Promise<Deno.CommandStatus> } };
+  };
+  const sessions =
+    (manager as unknown as { sessions: Map<string, TestSession> })
+      .sessions;
+  const session = sessions.get(id);
+  if (!session) throw new Error(`Missing test session ${id}`);
+  return session.process.child.status;
+}
+
 async function runIntegration(
   agentId: "codex" | "claude" | "antigravity",
 ): Promise<void> {
@@ -48,13 +60,13 @@ async function runIntegration(
   }> = [];
   const close = manager.close.bind(manager);
   manager.close = async (id) => {
-    const session = manager.get(id);
-    closedChildren.push(session.process.child.status);
+    closedChildren.push(childStatusForTest(manager, id));
+    const events = manager.getEvents(id).events;
     closedSessions.push({
-      acpSessionId: session.acpSessionId,
-      eventCount: session.events.length,
-      eventKinds: [...new Set(session.events.map((event) => event.kind))],
-      journalBytes: JSON.stringify(session.events).length,
+      acpSessionId: manager.getSessionSnapshot(id).acpSessionId,
+      eventCount: events.length,
+      eventKinds: [...new Set(events.map((event) => event.kind))],
+      journalBytes: JSON.stringify(events).length,
     });
     await close(id);
   };
@@ -277,7 +289,7 @@ async function runIntegration(
         `${agentId} harmless run_task failed: ${JSON.stringify(result)}`,
       );
     }
-    if (manager.sessions.size) {
+    if (manager.sessionCount) {
       throw new Error(`${agentId} left a session active`);
     }
     const statuses = await Promise.all(closedChildren);

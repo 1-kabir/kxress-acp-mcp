@@ -35,6 +35,33 @@ Deno.test("requested cwd is shared by the ACP session and child process", async 
   }
 });
 
+Deno.test("session query APIs return detached snapshots", async () => {
+  const manager = rawFixtureManager();
+  try {
+    const session = await manager.start("raw", Deno.cwd());
+    const snapshot = manager.getSessionSnapshot(session.id);
+    const listed = manager.listSessionSnapshots();
+    (snapshot.configOptions as Array<Record<string, unknown>>).push({
+      id: "caller-mutation",
+    });
+    (listed[0].capabilities as Record<string, unknown>).callerMutation = true;
+    if (
+      manager.getSessionSnapshot(session.id).configOptions.some((option) =>
+        option.id === "caller-mutation"
+      ) ||
+      "callerMutation" in
+        (manager.getSessionSnapshot(session.id).capabilities as object)
+    ) {
+      throw new Error("A caller mutation changed manager-owned session state");
+    }
+    if (manager.sessionCount !== 1 || !manager.hasSession(session.id)) {
+      throw new Error("Read-only session queries changed manager capacity");
+    }
+  } finally {
+    await manager.closeAll();
+  }
+});
+
 function rawFixtureManager() {
   return new SessionManager({
     raw: {
@@ -88,6 +115,14 @@ Deno.test("journals unknown raw updates in order and keeps the connection usable
       throw new Error(
         "Original raw params, unknown detail, or metadata changed",
       );
+    }
+    (events[1].update as { detail: { retained: boolean } }).detail.retained =
+      false;
+    const reread = manager.getEvents(session.id).events[1].update as {
+      detail: { retained: boolean };
+    };
+    if (!reread.detail.retained) {
+      throw new Error("Mutating an event query changed the manager journal");
     }
   } finally {
     await manager.closeAll();
@@ -262,7 +297,7 @@ Deno.test("closing an active session cancels its prompt before cleanup", async (
     const prompt = manager.beginPrompt(session.id, "wait");
     await manager.close(session.id);
     await prompt.done;
-    if (prompt.state !== "cancelled" || manager.sessions.size !== 0) {
+    if (prompt.state !== "cancelled" || manager.sessionCount !== 0) {
       throw new Error(
         `Active close did not cancel/remove the session: ${prompt.state}`,
       );
@@ -315,12 +350,12 @@ Deno.test("closed sessions release capacity while active sessions are retained",
     } catch (error) {
       rejected = String(error).includes("Active session limit (8) reached");
     }
-    if (!rejected || manager.sessions.size !== 8) {
+    if (!rejected || manager.sessionCount !== 8) {
       throw new Error("The active-session capacity was not enforced");
     }
     await manager.close(sessions[0].id);
     const replacement = await manager.start("fake", Deno.cwd());
-    if (manager.sessions.size !== 8) {
+    if (manager.sessionCount !== 8) {
       throw new Error("A closed session continued to consume capacity");
     }
     await manager.close(replacement.id);
@@ -351,7 +386,7 @@ Deno.test("a hung ACP session/close cannot block child cleanup", async () => {
     const startedAt = performance.now();
     await manager.close(session.id);
     if (
-      performance.now() - startedAt > 1_000 || manager.sessions.size !== 0
+      performance.now() - startedAt > 1_000 || manager.sessionCount !== 0
     ) {
       throw new Error("Hung session/close blocked cleanup or retained state");
     }
@@ -381,10 +416,16 @@ Deno.test("holds operator permission until an advertised choice is resolved", as
       "operator",
     );
     const prompt = manager.beginPrompt(session.id, "permission");
-    for (let i = 0; i < 100 && session.pendingPermissions.size === 0; i++) {
+    for (
+      let i = 0;
+      i < 100 &&
+      manager.getSessionSnapshot(session.id).pendingPermissions.length === 0;
+      i++
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    const pending = [...session.pendingPermissions.values()][0];
+    const pending =
+      manager.getSessionSnapshot(session.id).pendingPermissions[0];
     if (!pending) throw new Error("Permission request was not exposed");
     manager.resolvePermission(session.id, pending.id, "reject");
     await prompt.done;

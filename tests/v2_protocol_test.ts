@@ -388,7 +388,7 @@ Deno.test("ACP v2 protocol mismatch fails without retrying v1", async () => {
     }
     const launches = await Deno.readTextFile(marker);
     if (
-      !message.includes("ACP v2 required") || manager.sessions.size ||
+      !message.includes("ACP v2 required") || manager.sessionCount ||
       launches.trim().split(/\r?\n/).length !== 1
     ) {
       throw new Error(`V2 mismatch was hidden or retried: ${message}`);
@@ -414,7 +414,7 @@ Deno.test("ACP v1 protocol mismatch fails without retrying v2", async () => {
     }
     const launches = await Deno.readTextFile(marker);
     if (
-      !failed || manager.sessions.size ||
+      !failed || manager.sessionCount ||
       launches.trim().split(/\r?\n/).length !== 1
     ) {
       throw new Error(
@@ -543,7 +543,7 @@ Deno.test("v2 task completion survives nonzero child exit during cleanup", async
     );
     if (
       result.status !== "completed" || result.response !== "v2 reply" ||
-      manager.sessions.size !== 0
+      manager.sessionCount !== 0
     ) {
       throw new Error(
         `V2 cleanup exit changed task completion: ${JSON.stringify(result)}`,

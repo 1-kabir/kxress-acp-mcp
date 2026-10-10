@@ -27,6 +27,21 @@ function managerFor(agentId: "raw" | "fake" = "fake") {
   });
 }
 
+function sessionInternalsForTest(manager: SessionManager, id: string) {
+  type TestSession = {
+    process: {
+      child: { status: Promise<Deno.CommandStatus> };
+      stderrTail: () => string;
+    };
+  };
+  const sessions =
+    (manager as unknown as { sessions: Map<string, TestSession> })
+      .sessions;
+  const session = sessions.get(id);
+  if (!session) throw new Error(`Missing test session ${id}`);
+  return session;
+}
+
 async function harness(
   agentId: "raw" | "fake" = "fake",
   failureClassifier?: string,
@@ -37,7 +52,7 @@ async function harness(
   const closedStderr: Array<() => string> = [];
   const originalClose = manager.close.bind(manager);
   manager.close = async (id) => {
-    const process = manager.get(id).process;
+    const process = sessionInternalsForTest(manager, id).process;
     closedChildren.push(process.child.status);
     closedStderr.push(process.stderrTail);
     await originalClose(id);
@@ -109,7 +124,7 @@ Deno.test("run_task enriches only recognized OpenCode failures", async () => {
     ) {
       throw new Error("Unrelated diagnostic text leaked to caller");
     }
-    if (manager.sessions.size) throw new Error("Failure leaked a session");
+    if (manager.sessionCount) throw new Error("Failure leaked a session");
   } finally {
     await mcp.close();
     await manager.closeAll();
@@ -135,6 +150,77 @@ Deno.test("generic agents do not infer rate limits from ACP -32603", async () =>
       throw new Error(
         `Generic agent failure was enriched: ${JSON.stringify(result)}`,
       );
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
+Deno.test("MCP session queries preserve public metadata without manager internals", async () => {
+  const { manager, server, mcp } = await harness();
+  try {
+    const started = parseToolResult(
+      await mcp.callTool("start_session", { agentId: "fake" }).response,
+    );
+    const sessionId = String(started.sessionId);
+    if (
+      started.agentId !== "fake" || !started.acpSessionId ||
+      started.acpProtocol !== "v1"
+    ) {
+      throw new Error(
+        `start_session metadata changed: ${JSON.stringify(started)}`,
+      );
+    }
+    const listedResult = parseToolResult(
+      await mcp.callTool("list_sessions", {}).response,
+    );
+    if (!Array.isArray(listedResult)) {
+      throw new Error("list_sessions did not return an array");
+    }
+    const listed = listedResult as unknown as Array<Record<string, unknown>>;
+    if (
+      listed.length !== 1 || listed[0].id !== sessionId ||
+      listed[0].agentId !== "fake" ||
+      listed[0].acpSessionId !== started.acpSessionId
+    ) {
+      throw new Error(
+        `list_sessions metadata changed: ${JSON.stringify(listed)}`,
+      );
+    }
+    const details = parseToolResult(
+      await mcp.callTool("get_session", { sessionId }).response,
+    );
+    const expected = [
+      "acpProtocol",
+      "acpSessionId",
+      "agentId",
+      "authMethods",
+      "capabilities",
+      "configOptions",
+      "cwd",
+      "id",
+      "nextSequence",
+      "pendingPermissions",
+      "permissionPolicy",
+    ];
+    const detailKeys = Object.keys(details);
+    if (
+      details.id !== sessionId ||
+      expected.some((key) => !detailKeys.includes(key)) ||
+      detailKeys.some((key) =>
+        ["driver", "process", "events", "permissionLease"].includes(key)
+      ) ||
+      !Array.isArray(details.pendingPermissions)
+    ) {
+      throw new Error(
+        `get_session metadata changed: ${JSON.stringify(details)}`,
+      );
+    }
+    await mcp.callTool("close_session", { sessionId }).response;
+    if (manager.sessionCount !== 0) {
+      throw new Error("MCP close_session did not release its managed session");
     }
   } finally {
     await mcp.close();
@@ -260,7 +346,10 @@ Deno.test("run_task returns one compact answer while retaining internal ACP upda
   let observed: Array<{ kind: string; raw: unknown }> = [];
   const close = manager.close.bind(manager);
   manager.close = async (id) => {
-    observed = manager.get(id).events.map(({ kind, raw }) => ({ kind, raw }));
+    observed = manager.getEvents(id).events.map(({ kind, raw }) => ({
+      kind,
+      raw,
+    }));
     await close(id);
   };
   try {
@@ -319,7 +408,7 @@ Deno.test("run_task returns one compact answer while retaining internal ACP upda
     console.log(
       `Delegate serialized MCP result: ${serialized.length} bytes; internal event journal: ${journalBytes} bytes`,
     );
-    if (manager.sessions.size !== 0) {
+    if (manager.sessionCount !== 0) {
       throw new Error("Successful delegation leaked its session");
     }
     const second = await mcp.callTool("run_task", {
@@ -328,7 +417,7 @@ Deno.test("run_task returns one compact answer while retaining internal ACP upda
     }).response;
     if (
       parseToolResult(second).status !== "completed" ||
-      manager.sessions.size !== 0
+      manager.sessionCount !== 0
     ) {
       throw new Error("A subsequent delegation failed or leaked its session");
     }
@@ -373,7 +462,7 @@ Deno.test("completed run_task result survives nonzero child cleanup exit", async
         }`,
       );
     }
-    if (manager.sessions.size) {
+    if (manager.sessionCount) {
       throw new Error("Completed run leaked its session after child exit");
     }
   } finally {
@@ -414,20 +503,20 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
     }
     const sessionId = String(handoff.sessionId);
     const permissionId = String(handoff.permissionId);
-    const expiringSession = manager.get(sessionId);
+    const expiringSession = manager.getSessionSnapshot(sessionId);
+    const promptCompletion = expiringSession.prompt
+      ? manager.waitForPromptCompletion(sessionId, expiringSession.prompt.id)
+      : Promise.resolve(undefined);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    if (!manager.sessions.has(sessionId)) {
+    if (!manager.hasSession(sessionId)) {
       throw new Error("Prompt idle timeout overrode the permission lease");
     }
     await new Promise((resolve) => setTimeout(resolve, 180));
-    if (manager.sessions.has(sessionId)) {
+    if (manager.hasSession(sessionId)) {
       throw new Error("Permission lease did not close the session");
     }
-    await expiringSession.prompt?.done;
-    if (
-      expiringSession.prompt?.state === "running" ||
-      expiringSession.pendingPermissions.size
-    ) {
+    const expiredPrompt = await promptCompletion;
+    if (expiredPrompt?.state === "running" || manager.hasSession(sessionId)) {
       throw new Error(
         "Lease cleanup left a running prompt or pending permission",
       );
@@ -461,6 +550,20 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
     if (!parseToolResult(resolved).resolved) {
       throw new Error("Low-level permission resolution failed");
     }
+    const continuationSessionId = String(continuation.sessionId);
+    const continuationSnapshot = manager.getSessionSnapshot(
+      continuationSessionId,
+    );
+    const continuationPrompt = continuationSnapshot.prompt
+      ? manager.waitForPromptCompletion(
+        continuationSessionId,
+        continuationSnapshot.prompt.id,
+      )
+      : undefined;
+    if (continuationSnapshot.pendingPermissions.length !== 0) {
+      throw new Error("Resolved permission remained pending in session state");
+    }
+    await continuationPrompt;
     const session = parseToolResult(
       await mcp.callTool("get_session", {
         sessionId: continuation.sessionId,
@@ -469,12 +572,13 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
     if (session.id !== continuation.sessionId) {
       throw new Error("Resolved continuation was not inspectable");
     }
-    if (manager.get(String(continuation.sessionId)).permissionLease) {
-      throw new Error("Resolved permission left an unused lease timer running");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (!manager.hasSession(String(continuation.sessionId))) {
+      throw new Error("Resolved permission lease closed the continued session");
     }
     await mcp.callTool("close_session", { sessionId: continuation.sessionId })
       .response;
-    if (manager.sessions.has(String(continuation.sessionId))) {
+    if (manager.hasSession(String(continuation.sessionId))) {
       throw new Error("Manual continuation close failed");
     }
     const subsequent = await mcp.callTool("run_task", {
@@ -495,13 +599,123 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
   }
 });
 
+Deno.test("permission leases are invalidated by cancellation and close", async () => {
+  const { manager, server, mcp, closedChildren } = await harness();
+  try {
+    const cancelled = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "operator delegate",
+        permissionPolicy: "operator",
+        idleTimeoutMs: 1000,
+        permissionLeaseMs: 200,
+      }).response,
+    );
+    const cancelledId = String(cancelled.sessionId);
+    const cancelledSession = manager.getSessionSnapshot(cancelledId);
+    if (!cancelledSession.prompt) {
+      throw new Error("Permission continuation did not keep a prompt record");
+    }
+    await manager.cancelPrompt(cancelledId, cancelledSession.prompt.id);
+    const cancelledSnapshot = manager.getSessionSnapshot(cancelledId);
+    if (
+      cancelledSnapshot.prompt?.state !== "cancelled" ||
+      cancelledSnapshot.pendingPermissions.length !== 0
+    ) {
+      throw new Error("Cancellation did not finalize permission state");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (!manager.hasSession(cancelledId)) {
+      throw new Error("Cancelled prompt's lease later closed the session");
+    }
+    await manager.close(cancelledId);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (manager.hasSession(cancelledId)) {
+      throw new Error("Closed session was resurrected by its old lease");
+    }
+
+    const closed = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "operator delegate",
+        permissionPolicy: "operator",
+        idleTimeoutMs: 1000,
+        permissionLeaseMs: 200,
+      }).response,
+    );
+    const closedId = String(closed.sessionId);
+    await manager.close(closedId);
+    const replacement = await manager.start("fake");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (
+      !manager.hasSession(replacement.id) || manager.sessionCount !== 1
+    ) {
+      throw new Error("An old lease affected a later managed session");
+    }
+    await manager.close(replacement.id);
+    await Promise.all(closedChildren);
+    if (closedChildren.length !== 3) {
+      throw new Error(
+        "Cancellation/close lease cleanup leaked child processes",
+      );
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
+Deno.test("prompt completion clears a pending permission continuation lease", async () => {
+  const { manager, server, mcp } = await harness();
+  try {
+    const handoff = parseToolResult(
+      await mcp.callTool("run_task", {
+        agentId: "fake",
+        task: "permission then complete",
+        permissionPolicy: "operator",
+        idleTimeoutMs: 1000,
+        permissionLeaseMs: 200,
+      }).response,
+    );
+    if (handoff.status !== "permission_required") {
+      throw new Error(
+        `Expected permission handoff, got ${JSON.stringify(handoff)}`,
+      );
+    }
+    const sessionId = String(handoff.sessionId);
+    const started = manager.getSessionSnapshot(sessionId);
+    if (!started.prompt) throw new Error("Missing active prompt after handoff");
+    const prompt = await manager.waitForPromptCompletion(
+      sessionId,
+      started.prompt.id,
+    );
+    const completed = manager.getSessionSnapshot(sessionId);
+    if (
+      prompt.state !== "completed" ||
+      completed.pendingPermissions.length !== 0
+    ) {
+      throw new Error("Prompt completion retained pending permission state");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (!manager.hasSession(sessionId)) {
+      throw new Error("Completed prompt's lease later closed its session");
+    }
+    await manager.close(sessionId);
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
 Deno.test("run_task applies allow_all only when requested and defaults to read_only", async () => {
   const { manager, server, mcp, closedChildren } = await harness();
   let permissionRequests = 0;
   const close = manager.close.bind(manager);
   manager.close = async (id) => {
     permissionRequests +=
-      manager.get(id).events.filter((event) =>
+      manager.getEvents(id).events.filter((event) =>
         event.kind === "permission_request"
       ).length;
     await close(id);
@@ -543,7 +757,7 @@ Deno.test("read_only cannot stop a fake agent's direct process write", async () 
   let eventKinds: string[] = [];
   const close = manager.close.bind(manager);
   manager.close = async (id) => {
-    eventKinds = manager.get(id).events.map((event) => event.kind);
+    eventKinds = manager.getEvents(id).events.map((event) => event.kind);
     await close(id);
   };
   const separator = Deno.build.os === "windows" ? "\\" : "/";
@@ -576,7 +790,7 @@ Deno.test("read_only cannot stop a fake agent's direct process write", async () 
       );
     }
     await Promise.all(closedChildren);
-    if (closedChildren.length !== 1 || manager.sessions.size) {
+    if (closedChildren.length !== 1 || manager.sessionCount) {
       throw new Error("Direct-write test leaked its ACP child or session");
     }
   } finally {
@@ -612,7 +826,7 @@ Deno.test("run_task reports startup failures without exposing their detail", asy
     if (JSON.stringify(reply).includes("PRIVATE_START_FAILURE_SENTINEL")) {
       throw new Error("Startup error details leaked to the MCP caller");
     }
-    if (manager.sessions.size) {
+    if (manager.sessionCount) {
       throw new Error("Startup failure left a managed session active");
     }
   } finally {
@@ -636,7 +850,7 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
       timeoutResult.status !== "timed_out" ||
       (timeoutResult.error as Record<string, unknown>)?.kind !== "timeout" ||
       (timeoutResult.error as Record<string, unknown>)?.stage !== "prompt" ||
-      manager.sessions.size
+      manager.sessionCount
     ) {
       throw new Error("Timeout did not return compactly and clean up");
     }
@@ -645,24 +859,36 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
       task: "active stream",
       idleTimeoutMs: 5000,
     });
-    for (let i = 0; i < 100 && manager.sessions.size === 0; i++) {
+    for (let i = 0; i < 100 && manager.sessionCount === 0; i++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    if (!manager.sessions.size) {
+    if (!manager.sessionCount) {
       throw new Error("Delegation did not start before cancellation");
     }
-    const runningSession = [...manager.sessions.values()][0];
-    for (let i = 0; i < 100 && !runningSession.prompt?.activityVersion; i++) {
+    let runningSession = manager.listSessionSnapshots()[0];
+    for (
+      let i = 0;
+      i < 100 && (!runningSession?.prompt ||
+        !manager.getPromptHandle(runningSession.id, runningSession.prompt.id)
+          .activityVersion);
+      i++
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 5));
+      runningSession = manager.listSessionSnapshots()[0];
     }
-    if (!runningSession.prompt?.activityVersion) {
+    if (
+      !runningSession?.prompt || !manager.getPromptHandle(
+        runningSession.id,
+        runningSession.prompt.id,
+      ).activityVersion
+    ) {
       throw new Error("Active cancellation fixture did not emit updates");
     }
     await mcp.cancel(cancelled.id);
-    for (let i = 0; i < 100 && manager.sessions.size > 0; i++) {
+    for (let i = 0; i < 100 && manager.sessionCount > 0; i++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    if (manager.sessions.size) {
+    if (manager.sessionCount) {
       throw new Error("MCP request cancellation leaked a session");
     }
     for (
@@ -715,7 +941,7 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
       ) {
         throw new Error("Prompt error details leaked to the MCP caller");
       }
-      if (manager.sessions.size) {
+      if (manager.sessionCount) {
         throw new Error(`Session leaked after '${prompt}'`);
       }
     }
@@ -760,10 +986,10 @@ Deno.test("run_task idle timeout resets on known and unknown ACP updates", async
           `${task} did not outlive its idle timeout: ${JSON.stringify(result)}`,
         );
       }
-      if (manager.sessions.size) throw new Error(`${task} leaked a session`);
+      if (manager.sessionCount) throw new Error(`${task} leaked a session`);
     }
     await new Promise((resolve) => setTimeout(resolve, 120));
-    if (manager.sessions.size) {
+    if (manager.sessionCount) {
       throw new Error("A completed idle timer affected later task state");
     }
     const reusable = parseToolResult(
@@ -796,7 +1022,7 @@ Deno.test("stderr output alone does not reset the run_task idle timeout", async 
     if (
       result.status !== "timed_out" ||
       (result.error as Record<string, unknown>)?.stage !== "prompt" ||
-      manager.sessions.size !== 0
+      manager.sessionCount !== 0
     ) {
       throw new Error(`stderr kept the task alive: ${JSON.stringify(result)}`);
     }
@@ -822,10 +1048,10 @@ Deno.test("activity in another session does not reset a silent task", async () =
       task: "wait",
       idleTimeoutMs: 100,
     });
-    for (let i = 0; i < 100 && manager.sessions.size === 0; i++) {
+    for (let i = 0; i < 100 && manager.sessionCount === 0; i++) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    if (manager.sessions.size !== 1) {
+    if (manager.sessionCount !== 1) {
       throw new Error("Silent task did not start before second session");
     }
     const activeReply = mcp.callTool("run_task", {
@@ -843,7 +1069,7 @@ Deno.test("activity in another session does not reset a silent task", async () =
     if (parseToolResult(activeWire).status !== "completed") {
       throw new Error("Active task did not remain isolated from peer timeout");
     }
-    if (manager.sessions.size) {
+    if (manager.sessionCount) {
       throw new Error("Concurrent tasks leaked sessions");
     }
   } finally {

@@ -8,7 +8,7 @@ import type {
 } from "../acp/protocol.ts";
 import { startAgent, stopAgent } from "../runtime/process.ts";
 
-export interface ManagedSession {
+interface ManagedSession {
   id: string;
   agentId: string;
   cwd: string;
@@ -38,7 +38,7 @@ export interface SessionEvent {
   raw: unknown;
 }
 
-export interface PromptRecord {
+interface PromptRecord {
   id: string;
   state: "running" | "completed" | "cancelled" | "failed";
   text: string;
@@ -59,6 +59,50 @@ export type PermissionPolicy =
   | "operator"
   | "allow_all"
   | "deny_all";
+
+export interface SessionSnapshot {
+  readonly id: string;
+  readonly agentId: string;
+  readonly cwd: string;
+  readonly acpSessionId: string;
+  readonly acpProtocol: AcpProtocol;
+  readonly promptActive: boolean;
+  readonly capabilities: unknown;
+  readonly authMethods: unknown;
+  readonly configOptions: Array<Record<string, unknown>>;
+  readonly modes: Record<string, unknown> | undefined;
+  readonly permissionPolicy: PermissionPolicy;
+  readonly pendingPermissions: Array<{
+    id: string;
+    toolCall: unknown;
+    options: Array<{ optionId: string; kind: string; name: string }>;
+  }>;
+  readonly prompt?: {
+    id: string;
+    state: PromptRecord["state"];
+    text: string;
+    stopReason?: string;
+    error?: string;
+    errorCode?: number;
+    errorData?: unknown;
+  };
+  readonly nextSequence: number;
+}
+
+export interface PromptHandle {
+  readonly id: string;
+  readonly state: PromptRecord["state"];
+  readonly text: string;
+  readonly stopReason?: string;
+  readonly error?: string;
+  readonly errorCode?: number;
+  readonly errorData?: unknown;
+  readonly lastActivityAt: number;
+  readonly activityVersion: number;
+  readonly done: Promise<void>;
+}
+
+type PendingPermissionSnapshot = SessionSnapshot["pendingPermissions"][number];
 
 type ConfigOptionWaiter = {
   predicate: (options: Array<Record<string, unknown>>) => boolean;
@@ -82,7 +126,7 @@ export const DEFAULT_SESSION_START_TIMEOUT_MS = 30_000;
 export const DEFAULT_SESSION_CLOSE_TIMEOUT_MS = 5_000;
 export const DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS = 5_000;
 
-export interface PendingPermission {
+interface PendingPermission {
   id: string;
   toolCall: unknown;
   options: Array<{ optionId: string; kind: string; name: string }>;
@@ -96,7 +140,7 @@ export interface PendingPermission {
 }
 
 export class SessionManager {
-  readonly sessions = new Map<string, ManagedSession>();
+  private readonly sessions = new Map<string, ManagedSession>();
   private readonly configOptionWaiters = new Map<
     string,
     Set<ConfigOptionWaiter>
@@ -107,14 +151,132 @@ export class SessionManager {
     private readonly closeRequestTimeoutMs = DEFAULT_SESSION_CLOSE_TIMEOUT_MS,
   ) {}
 
+  get sessionCount(): number {
+    return this.sessions.size;
+  }
+
+  hasSession(id: string): boolean {
+    return this.sessions.has(id);
+  }
+
+  listSessionSnapshots(): SessionSnapshot[] {
+    return [...this.sessions.values()].map((session) =>
+      this.sessionSnapshot(session)
+    );
+  }
+
+  getSessionSnapshot(id: string): SessionSnapshot {
+    return this.sessionSnapshot(this.requireSession(id));
+  }
+
+  getPromptHandle(sessionId: string, promptId: string): PromptHandle {
+    return this.promptHandle(this.requirePrompt(sessionId, promptId));
+  }
+
+  private sessionSnapshot(session: ManagedSession): SessionSnapshot {
+    return {
+      id: session.id,
+      agentId: session.agentId,
+      cwd: session.cwd,
+      acpSessionId: session.acpSessionId,
+      acpProtocol: session.acpProtocol,
+      promptActive: session.promptActive,
+      capabilities: structuredClone(session.capabilities),
+      authMethods: structuredClone(session.authMethods),
+      configOptions: structuredClone(session.configOptions),
+      modes: structuredClone(session.modes),
+      permissionPolicy: session.permissionPolicy,
+      pendingPermissions: [...session.pendingPermissions.values()].map((
+        pending,
+      ) => ({
+        id: pending.id,
+        toolCall: structuredClone(pending.toolCall),
+        options: structuredClone(pending.options),
+      })),
+      prompt: session.prompt
+        ? {
+          id: session.prompt.id,
+          state: session.prompt.state,
+          text: session.prompt.text,
+          stopReason: session.prompt.stopReason,
+          error: session.prompt.error,
+          errorCode: session.prompt.errorCode,
+          errorData: structuredClone(session.prompt.errorData),
+        }
+        : undefined,
+      nextSequence: session.nextSequence,
+    };
+  }
+
+  private promptHandle(prompt: PromptRecord): PromptHandle {
+    return {
+      get id() {
+        return prompt.id;
+      },
+      get state() {
+        return prompt.state;
+      },
+      get text() {
+        return prompt.text;
+      },
+      get stopReason() {
+        return prompt.stopReason;
+      },
+      get error() {
+        return prompt.error;
+      },
+      get errorCode() {
+        return prompt.errorCode;
+      },
+      get errorData() {
+        return structuredClone(prompt.errorData);
+      },
+      get lastActivityAt() {
+        return prompt.lastActivityAt;
+      },
+      get activityVersion() {
+        return prompt.activityVersion;
+      },
+      done: prompt.done,
+    };
+  }
+
+  private requireSession(id: string): ManagedSession {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Unknown session: ${id}`);
+    return session;
+  }
+
+  private requirePrompt(sessionId: string, promptId: string): PromptRecord {
+    const prompt = this.requireSession(sessionId).prompt;
+    if (!prompt || prompt.id !== promptId) {
+      throw new Error(`Unknown prompt: ${promptId}`);
+    }
+    return prompt;
+  }
+
+  private clearPermissionLease(session: ManagedSession): void {
+    if (session.permissionLease) clearTimeout(session.permissionLease);
+    session.permissionLease = undefined;
+  }
+
+  private cancelPendingPermissions(session: ManagedSession): void {
+    for (const pending of session.pendingPermissions.values()) {
+      pending.resolve({ outcome: { outcome: "cancelled" } });
+    }
+    session.pendingPermissions.clear();
+  }
+
   start(
     agentId: string,
     cwd = Deno.cwd(),
     config: Record<string, string> = {},
     modeId?: string,
     permissionPolicy: PermissionPolicy = "read_only",
-  ) {
-    return this.launch(agentId, cwd, config, modeId, permissionPolicy);
+  ): Promise<SessionSnapshot> {
+    return this.launch(agentId, cwd, config, modeId, permissionPolicy).then(
+      (session) => this.sessionSnapshot(session),
+    );
   }
 
   load(
@@ -122,7 +284,7 @@ export class SessionManager {
     acpSessionId: string,
     cwd: string,
     permissionPolicy: PermissionPolicy = "read_only",
-  ) {
+  ): Promise<SessionSnapshot> {
     return this.launch(
       agentId,
       cwd,
@@ -130,7 +292,7 @@ export class SessionManager {
       undefined,
       permissionPolicy,
       acpSessionId,
-    );
+    ).then((session) => this.sessionSnapshot(session));
   }
 
   private async launch(
@@ -326,8 +488,8 @@ export class SessionManager {
     }
   }
 
-  beginPrompt(sessionId: string, text: string): PromptRecord {
-    const session = this.get(sessionId);
+  beginPrompt(sessionId: string, text: string): PromptHandle {
+    const session = this.requireSession(sessionId);
     if (session.promptActive) {
       throw new Error("A prompt is already active for this session");
     }
@@ -345,7 +507,7 @@ export class SessionManager {
     };
     session.prompt = record;
     record.done = this.consumePrompt(session, record, text);
-    return record;
+    return this.promptHandle(record);
   }
 
   waitForPromptActivity(
@@ -353,10 +515,7 @@ export class SessionManager {
     promptId: string,
     activityVersion: number,
   ): { promise: Promise<void>; cancel: () => void } {
-    const prompt = this.get(sessionId).prompt;
-    if (!prompt || prompt.id !== promptId) {
-      throw new Error(`Unknown prompt: ${promptId}`);
-    }
+    const prompt = this.requirePrompt(sessionId, promptId);
     if (
       prompt.state !== "running" || prompt.activityVersion !== activityVersion
     ) {
@@ -373,6 +532,14 @@ export class SessionManager {
       promise,
       cancel: () => prompt.activityWaiters.delete(waiter),
     };
+  }
+
+  waitForPromptCompletion(
+    sessionId: string,
+    promptId: string,
+  ): Promise<PromptHandle> {
+    const prompt = this.requirePrompt(sessionId, promptId);
+    return prompt.done.then(() => this.promptHandle(prompt));
   }
 
   private recordPromptActivity(session: ManagedSession): void {
@@ -412,6 +579,8 @@ export class SessionManager {
       }
     } finally {
       session.promptActive = false;
+      this.clearPermissionLease(session);
+      this.cancelPendingPermissions(session);
     }
   }
 
@@ -419,51 +588,44 @@ export class SessionManager {
     sessionId: string,
     promptId: string,
     waitMs: number,
-  ): Promise<PromptRecord> {
-    const session = this.get(sessionId);
-    const prompt = session.prompt;
-    if (!prompt || prompt.id !== promptId) {
-      throw new Error(`Unknown prompt: ${promptId}`);
-    }
+  ): Promise<PromptHandle> {
+    const prompt = this.requirePrompt(sessionId, promptId);
     if (prompt.state === "running") {
       await Promise.race([
         prompt.done,
         new Promise((resolve) => setTimeout(resolve, Math.max(0, waitMs))),
       ]);
     }
-    return prompt;
+    return this.promptHandle(prompt);
   }
 
   async cancelPrompt(
     sessionId: string,
     promptId: string,
-  ): Promise<PromptRecord> {
-    const session = this.get(sessionId);
-    const prompt = session.prompt;
-    if (!prompt || prompt.id !== promptId) {
-      throw new Error(`Unknown prompt: ${promptId}`);
-    }
+  ): Promise<PromptHandle> {
+    const session = this.requireSession(sessionId);
+    const prompt = this.requirePrompt(sessionId, promptId);
     if (prompt.state === "running") {
       prompt.state = "cancelled";
       for (const waiter of [...prompt.activityWaiters]) waiter();
-      for (const [id, pending] of session.pendingPermissions) {
-        pending.resolve({ outcome: { outcome: "cancelled" } });
-        session.pendingPermissions.delete(id);
-      }
+      this.cancelPendingPermissions(session);
+      this.clearPermissionLease(session);
       await session.driver.cancel(session.acpSessionId);
       await Promise.race([
         prompt.done,
         new Promise((resolve) => setTimeout(resolve, 5000)),
       ]);
     }
-    return prompt;
+    return this.promptHandle(prompt);
   }
 
   getEvents(sessionId: string, afterSequence = 0, limit = 100) {
-    const session = this.get(sessionId);
+    const session = this.requireSession(sessionId);
     return {
       events: session.events.filter((event) => event.sequence > afterSequence)
-        .slice(0, Math.max(1, Math.min(limit, 500))),
+        .slice(0, Math.max(1, Math.min(limit, 500))).map((event) =>
+          structuredClone(event)
+        ),
       nextSequence: session.nextSequence - 1,
       gap: afterSequence < session.droppedThrough,
       prompt: session.prompt
@@ -552,6 +714,8 @@ export class SessionManager {
         session.prompt.state = "completed";
       }
       session.promptActive = false;
+      this.clearPermissionLease(session);
+      this.cancelPendingPermissions(session);
     }
   }
 
@@ -561,9 +725,9 @@ export class SessionManager {
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<Array<Record<string, unknown>>> {
-    const session = this.get(sessionId);
-    if (predicate(session.configOptions) || timeoutMs <= 0) {
-      return Promise.resolve(session.configOptions);
+    const session = this.requireSession(sessionId);
+    if (predicate(structuredClone(session.configOptions)) || timeoutMs <= 0) {
+      return Promise.resolve(structuredClone(session.configOptions));
     }
     return new Promise((resolve) => {
       const waiters = this.configOptionWaiters.get(sessionId) ?? new Set();
@@ -576,7 +740,7 @@ export class SessionManager {
           if (signal && abort) signal.removeEventListener("abort", abort);
           waiters.delete(waiter);
           if (waiters.size === 0) this.configOptionWaiters.delete(sessionId);
-          resolve(options);
+          resolve(structuredClone(options));
         },
       };
       const timer = setTimeout(
@@ -599,7 +763,7 @@ export class SessionManager {
     const waiters = this.configOptionWaiters.get(session.id);
     if (!waiters) return;
     for (const waiter of [...waiters]) {
-      if (waiter.predicate(session.configOptions)) {
+      if (waiter.predicate(structuredClone(session.configOptions))) {
         waiter.finish(session.configOptions);
       }
     }
@@ -617,14 +781,8 @@ export class SessionManager {
     return { stopReason: prompt.stopReason, text: prompt.text };
   }
 
-  get(id: string): ManagedSession {
-    const session = this.sessions.get(id);
-    if (!session) throw new Error(`Unknown session: ${id}`);
-    return session;
-  }
-
   async setConfigOption(sessionId: string, configId: string, value: string) {
-    const session = this.get(sessionId);
+    const session = this.requireSession(sessionId);
     const option = session.configOptions.find((item) => item.id === configId);
     if (!option && session.configOptions.length) {
       throw new Error(`Unknown config option: ${configId}`);
@@ -648,18 +806,18 @@ export class SessionManager {
       value,
       option,
     );
-    return session.configOptions;
+    return structuredClone(session.configOptions);
   }
 
   async setMode(sessionId: string, modeId: string) {
-    const session = this.get(sessionId);
+    const session = this.requireSession(sessionId);
     session.modes = await session.driver.setMode(
       session.acpSessionId,
       modeId,
       session.configOptions,
       session.modes,
     );
-    return session.modes;
+    return structuredClone(session.modes);
   }
 
   private async requestPermission(
@@ -712,8 +870,37 @@ export class SessionManager {
     };
   }
 
+  beginPermissionContinuation(
+    sessionId: string,
+    leaseTimeoutMs: number,
+  ): PendingPermissionSnapshot | undefined {
+    const session = this.requireSession(sessionId);
+    if (session.prompt?.state !== "running") return undefined;
+    const pending = session.pendingPermissions.values().next().value as
+      | PendingPermission
+      | undefined;
+    if (!pending) return undefined;
+
+    this.clearPermissionLease(session);
+    session.permissionLease = setTimeout(() => {
+      session.permissionLease = undefined;
+      const current = this.sessions.get(sessionId);
+      if (
+        current !== session || current.prompt?.state !== "running" ||
+        !current.pendingPermissions.has(pending.id)
+      ) return;
+      void this.close(sessionId).catch(() => undefined);
+    }, leaseTimeoutMs);
+
+    return {
+      id: pending.id,
+      toolCall: structuredClone(pending.toolCall),
+      options: structuredClone(pending.options),
+    };
+  }
+
   resolvePermission(sessionId: string, permissionId: string, optionId: string) {
-    const session = this.get(sessionId);
+    const session = this.requireSession(sessionId);
     const pending = session.pendingPermissions.get(permissionId);
     if (!pending) {
       throw new Error(`Unknown permission request: ${permissionId}`);
@@ -723,29 +910,24 @@ export class SessionManager {
     }
     pending.resolve({ outcome: { outcome: "selected", optionId } });
     session.pendingPermissions.delete(permissionId);
-    if (session.permissionLease) clearTimeout(session.permissionLease);
-    session.permissionLease = undefined;
+    this.clearPermissionLease(session);
     return { permissionId, optionId, resolved: true };
   }
 
   async close(id: string): Promise<void> {
-    const session = this.get(id);
+    const session = this.requireSession(id);
     if (session.prompt?.state === "running") {
       try {
         await this.cancelPrompt(id, session.prompt.id);
       } catch { /* Closing the connection remains authoritative. */ }
     }
-    if (session.permissionLease) clearTimeout(session.permissionLease);
-    session.permissionLease = undefined;
+    this.clearPermissionLease(session);
     for (
       const waiter of [
         ...(this.configOptionWaiters.get(id) ?? []),
       ]
     ) waiter.finish(session.configOptions);
-    for (const pending of session.pendingPermissions.values()) {
-      pending.resolve({ outcome: { outcome: "cancelled" } });
-    }
-    session.pendingPermissions.clear();
+    this.cancelPendingPermissions(session);
     this.sessions.delete(id);
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
     const closeRequest = session.driver.closeSession(session.acpSessionId)

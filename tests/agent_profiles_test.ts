@@ -533,7 +533,7 @@ Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures
         error.acpCode !== -32603 || "classification" in error
       ) throw new Error(`${agentId} did not keep generic failure semantics`);
     }
-    if (manager.sessions.size) {
+    if (manager.sessionCount) {
       throw new Error("Compatibility fixture leaked a session");
     }
   } finally {

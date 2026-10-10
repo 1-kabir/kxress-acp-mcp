@@ -19,12 +19,12 @@ Deno.test({
     };
     const close = manager.close.bind(manager);
     manager.close = async (id) => {
-      if (manager.sessions.has(id)) {
-        const session = manager.get(id);
+      if (manager.hasSession(id)) {
         internalActivityBytes = Math.max(
           internalActivityBytes,
-          JSON.stringify(session.events).length,
+          JSON.stringify(manager.getEvents(id).events).length,
         );
+        const session = manager.getSessionSnapshot(id);
         if (session.prompt?.state === "failed") {
           failureDiagnostic = {
             error: session.prompt.error,
@@ -149,7 +149,7 @@ Deno.test({
       console.log(
         `OpenCode Fledge run_task: ${callerResultBytes} caller-result bytes; ${internalActivityBytes} internal event bytes`,
       );
-      if (manager.sessions.size) {
+      if (manager.sessionCount) {
         throw new Error("OpenCode run_task left a managed session active");
       }
     } finally {

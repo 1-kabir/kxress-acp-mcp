@@ -30,12 +30,11 @@ Deno.test({
     };
     const close = manager.close.bind(manager);
     manager.close = async (id) => {
-      const session = manager.get(id);
-      const timestamps = session.events.map((event) =>
-        Date.parse(event.timestamp)
-      ).filter(Number.isFinite).sort((a, b) => a - b);
+      const events = manager.getEvents(id).events;
+      const timestamps = events.map((event) => Date.parse(event.timestamp))
+        .filter(Number.isFinite).sort((a, b) => a - b);
       const kinds: Record<string, number> = {};
-      for (const event of session.events) {
+      for (const event of events) {
         kinds[event.kind] = (kinds[event.kind] ?? 0) + 1;
       }
       let longestGapMs = 0;
@@ -46,10 +45,10 @@ Deno.test({
         );
       }
       eventSummary = {
-        count: session.events.length,
+        count: events.length,
         kinds,
         longestGapMs,
-        journalBytes: JSON.stringify(session.events).length,
+        journalBytes: JSON.stringify(events).length,
       };
       await close(id);
     };
@@ -91,7 +90,7 @@ Deno.test({
       if (!eventSummary || !eventSummary.count) {
         throw new Error("OpenCode planning emitted no observable ACP updates");
       }
-      if (manager.sessions.size) {
+      if (manager.sessionCount) {
         throw new Error("OpenCode planning left a managed session active");
       }
       const callerBytes = JSON.stringify(mcpResult).length;

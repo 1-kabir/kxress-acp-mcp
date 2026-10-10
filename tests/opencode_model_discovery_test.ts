@@ -133,7 +133,7 @@ Deno.test({
           );
         }
       }
-      if (manager.sessions.size !== 0) {
+      if (manager.sessionCount !== 0) {
         throw new Error("OpenCode discovery leaked its temporary ACP session");
       }
     } finally {

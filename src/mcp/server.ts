@@ -404,35 +404,34 @@ export function createMcpServer(
             await close();
             return runTaskFailure("cancelled", "cancelled", "prompt");
           }
-          if (
-            permissionPolicy === "operator" && session.pendingPermissions.size
-          ) {
-            const pending = [...session.pendingPermissions.values()][0];
-            const call = pending.toolCall as Record<string, unknown> | null;
-            const action = call && typeof call === "object"
-              ? Object.fromEntries(
-                ["kind", "title", "name"].flatMap((key) =>
-                  typeof call[key] === "string" ? [[key, call[key]]] : []
-                ),
-              )
-              : {};
-            session.permissionLease = setTimeout(() => {
-              session.permissionLease = undefined;
-              void close();
-            }, permissionLeaseMs);
-            return {
-              content: [{
-                type: "text",
-                text: JSON.stringify({
-                  status: "permission_required",
-                  sessionId,
-                  permissionId: pending.id,
-                  leaseTimeoutMs: permissionLeaseMs,
-                  action,
-                  choices: pending.options,
-                }),
-              }],
-            };
+          if (permissionPolicy === "operator") {
+            const pending = manager.beginPermissionContinuation(
+              session.id,
+              permissionLeaseMs,
+            );
+            if (pending) {
+              const call = pending.toolCall as Record<string, unknown> | null;
+              const action = call && typeof call === "object"
+                ? Object.fromEntries(
+                  ["kind", "title", "name"].flatMap((key) =>
+                    typeof call[key] === "string" ? [[key, call[key]]] : []
+                  ),
+                )
+                : {};
+              return {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "permission_required",
+                    sessionId,
+                    permissionId: pending.id,
+                    leaseTimeoutMs: permissionLeaseMs,
+                    action,
+                    choices: pending.options,
+                  }),
+                }],
+              };
+            }
           }
           const activityVersion = promptRecord.activityVersion;
           const remaining = idleTimeoutMs -
@@ -604,7 +603,7 @@ export function createMcpServer(
           definition,
         );
         if (!models.length) {
-          await abortable(
+          const updatedOptions = await abortable(
             manager.waitForConfigOptions(
               session.id,
               (options) =>
@@ -615,7 +614,7 @@ export function createMcpServer(
             signal,
           );
           models = discoverAdvertisedModels(
-            session.configOptions,
+            updatedOptions,
             definition,
           );
         }
@@ -875,7 +874,7 @@ export function createMcpServer(
       content: [{
         type: "text",
         text: JSON.stringify(
-          [...manager.sessions.values()].map((
+          manager.listSessionSnapshots().map((
             { id, agentId, cwd, acpSessionId, acpProtocol, promptActive },
           ) => ({ id, agentId, cwd, acpSessionId, acpProtocol, promptActive })),
         ),
@@ -893,7 +892,7 @@ export function createMcpServer(
     inputSchema: { sessionId: z.string() },
   }, ({ sessionId }) => {
     try {
-      const s = manager.get(sessionId);
+      const s = manager.getSessionSnapshot(sessionId);
       return {
         content: [{
           type: "text",
@@ -908,9 +907,7 @@ export function createMcpServer(
             configOptions: s.configOptions,
             modes: s.modes,
             permissionPolicy: s.permissionPolicy,
-            pendingPermissions: [...s.pendingPermissions.values()].map((
-              { id, toolCall, options },
-            ) => ({ id, toolCall, options })),
+            pendingPermissions: s.pendingPermissions,
             prompt: s.prompt
               ? {
                 id: s.prompt.id,

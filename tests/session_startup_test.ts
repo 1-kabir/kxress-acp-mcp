@@ -41,9 +41,9 @@ Deno.test("startup failures remain session-start failures without registration",
       } catch (error) {
         failure = String(error);
       }
-      if (!failure.includes(expected) || manager.sessions.size !== 0) {
+      if (!failure.includes(expected) || manager.sessionCount !== 0) {
         throw new Error(
-          `${argument} did not fail cleanly: ${failure}; sessions=${manager.sessions.size}`,
+          `${argument} did not fail cleanly: ${failure}; sessions=${manager.sessionCount}`,
         );
       }
     } finally {
@@ -66,19 +66,19 @@ Deno.test("initialize and session creation hangs hit bounded startup timeout", a
       const elapsed = performance.now() - startedAt;
       if (
         !failure.includes("ACP session startup timed out after 40ms") ||
-        elapsed > 2_500 || manager.sessions.size !== 0
+        elapsed > 2_500 || manager.sessionCount !== 0
       ) {
         throw new Error(
           `${argument} was not bounded/cleaned: ${
             JSON.stringify({
               failure,
               elapsed,
-              sessions: manager.sessions.size,
+              sessions: manager.sessionCount,
             })
           }`,
         );
       }
-      if (manager.sessions.size !== 0) {
+      if (manager.sessionCount !== 0) {
         throw new Error(`${argument} left a failed start registered`);
       }
     } finally {
@@ -97,7 +97,7 @@ Deno.test("missing launch command does not create a managed session", async () =
   } catch {
     failed = true;
   }
-  if (!failed || manager.sessions.size !== 0) {
+  if (!failed || manager.sessionCount !== 0) {
     throw new Error("Missing command left a session registered");
   }
 });
@@ -127,7 +127,7 @@ Deno.test("startup stderr is not returned to MCP callers", async () => {
     const serialized = JSON.stringify(reply);
     if (
       serialized.includes(canary) ||
-      !serialized.includes("Could not start fake") || manager.sessions.size
+      !serialized.includes("Could not start fake") || manager.sessionCount
     ) {
       throw new Error("Startup error leaked child stderr or kept a session");
     }
@@ -168,7 +168,7 @@ Deno.test("run_task reports bounded startup timeout at session_start", async () 
           kind: "session_start_failed",
           stage: "session_start",
         }) ||
-      manager.sessions.size !== 0
+      manager.sessionCount !== 0
     ) {
       throw new Error(
         `Unexpected bounded startup result: ${JSON.stringify(result)}`,

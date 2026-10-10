@@ -238,6 +238,25 @@ app.onRequest("session/prompt", async ({ params, client }) => {
     return { stopReason: "end_turn" };
   }
   if (promptText === "empty response") return { stopReason: "end_turn" };
+  if (promptText === "permission then complete") {
+    void client.request("session/request_permission", {
+      sessionId,
+      toolCall: { toolCallId: "fake-call", kind: "execute" },
+      options: [
+        { optionId: "allow", name: "Allow once", kind: "allow_once" },
+        { optionId: "reject", name: "Reject once", kind: "reject_once" },
+      ],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await client.notify("session/update", {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "completed" },
+      },
+    });
+    return { stopReason: "end_turn" };
+  }
   if (promptText === "permission" || promptText === "operator delegate") {
     const permissionMarker = Deno.args.find((arg) =>
       arg.startsWith("--permission-marker=")

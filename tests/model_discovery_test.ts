@@ -216,7 +216,7 @@ Deno.test("generic model discovery uses ACP options and cleans its temporary ses
     if (mapped?.configId !== "backend-choice") {
       throw new Error("Profile modelConfigId mapping was not applied");
     }
-    if (manager.sessions.size !== 0) {
+    if (manager.sessionCount !== 0) {
       throw new Error("Discovery leaked its temporary session");
     }
   } finally {
@@ -248,7 +248,7 @@ Deno.test("asynchronous ACP config updates drive model discovery and selection",
     ) {
       throw new Error("Late advertised model IDs were not preserved exactly");
     }
-    if (manager.sessions.size !== 0) {
+    if (manager.sessionCount !== 0) {
       throw new Error("Asynchronous discovery leaked its temporary session");
     }
 
@@ -259,7 +259,7 @@ Deno.test("asynchronous ACP config updates drive model discovery and selection",
       }).response,
     );
     const sessionId = started.sessionId as string;
-    const session = manager.get(sessionId);
+    const session = manager.getSessionSnapshot(sessionId);
     const selected = session.configOptions.find((option) =>
       option.id === "model"
     );
@@ -274,7 +274,7 @@ Deno.test("asynchronous ACP config updates drive model discovery and selection",
       throw new Error("The asynchronous config update was not journaled");
     }
     await mcp.callTool("close_session", { sessionId }).response;
-    if (manager.sessions.size !== 0) {
+    if (manager.sessionCount !== 0) {
       throw new Error("Closing the async-config session leaked it");
     }
   } finally {
@@ -314,7 +314,7 @@ Deno.test("unprofiled agents use ACP model categories and ignore conflicting pro
     if (conflicting.length) {
       throw new Error("A profile overrode an explicit ACP non-model category");
     }
-    if (manager.sessions.size) {
+    if (manager.sessionCount) {
       throw new Error("Unprofiled model listing leaked its temporary session");
     }
   } finally {
@@ -340,7 +340,7 @@ Deno.test("no advertised model option returns an empty generic model list", asyn
         "Agent without model options should return an empty list",
       );
     }
-    if (manager.sessions.size !== 0) {
+    if (manager.sessionCount !== 0) {
       throw new Error("Empty discovery leaked its session");
     }
   } finally {
@@ -409,7 +409,7 @@ Deno.test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes
     if (paidPricing?.input !== 0.25 || paidPricing.output !== 1.5) {
       throw new Error("Paid model pricing was not normalized");
     }
-    if (manager.sessions.size !== 0) {
+    if (manager.sessionCount !== 0) {
       throw new Error("Enriched discovery leaked its temporary session");
     }
   } finally {
@@ -594,7 +594,7 @@ Deno.test("metadata failure preserves ACP availability and ACP failure remains a
         "ACP discovery failure was not distinguished from metadata failure",
       );
     }
-    if (manager.sessions.size !== 0) {
+    if (manager.sessionCount !== 0) {
       throw new Error("Failure cleanup did not leave the server clean");
     }
   } finally {
@@ -620,7 +620,7 @@ Deno.test("model discovery timeout and MCP cancellation close late sessions", as
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
-    if (manager.sessions.size !== 0) {
+    if (manager.sessionCount !== 0) {
       throw new Error("Late timed-out session was not closed");
     }
 
@@ -628,7 +628,7 @@ Deno.test("model discovery timeout and MCP cancellation close late sessions", as
     await new Promise((resolve) => setTimeout(resolve, 25));
     await mcp.cancel(request.id);
     await new Promise((resolve) => setTimeout(resolve, 250));
-    if (manager.sessions.size !== 0) {
+    if (manager.sessionCount !== 0) {
       throw new Error("Cancelled discovery leaked a late session");
     }
   } finally {
