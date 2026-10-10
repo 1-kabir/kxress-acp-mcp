@@ -1,12 +1,12 @@
 # acp-mcp
 
-**Programmatic remote control and orchestration of ACP coding agents through
-MCP.**
+**Programmatic remote control for coding agents through ACP, exposed over MCP.**
 
-`acp-mcp` lets an MCP-capable host run and control ACP agents as structured
-tools. A parent agent can discover models, start sessions, send prompts, inspect
-events, change configuration, resolve permissions, cancel work, resume supported
-sessions, and keep several downstream agents active at once.
+`acp-mcp` lets an MCP-capable host control other ACP-compatible coding agents as
+real sessions. The host can discover live models, start sessions, send prompts,
+inspect events, change configuration, cancel work, resolve permissions, and
+resume sessions when the downstream agent supports it. It can keep several
+independent agents alive at once.
 
 ```text
 MCP host
@@ -21,46 +21,56 @@ acp-mcp
    +----> ACP agent session ----> model/provider
 ```
 
-`acp-mcp` is the bridge between MCP and ACP. It does not provide models,
-credentials, or a sandbox.
+Each downstream agent talks to its own model or provider. `acp-mcp` provides the
+control interface; it does not provide models or credentials.
 
-## What it is for
+## Why use it?
 
-The main use case is agent-to-agent delegation. A primary agent in Codex,
-Claude, OpenCode, or another MCP-capable host can hand work to a different agent
-without leaving its own workflow.
+MCP gives a host a common way to call tools. ACP gives coding agents a
+structured session protocol. `acp-mcp` connects them so a parent agent can
+control another agent without reducing it to a one-shot shell command.
 
-Typical uses include:
+Headless CLI modes can expose fewer models, use restricted defaults, omit
+session controls, make continuation awkward, or return unstructured stdout.
+Using ACP gives the host a structured control plane and lets it keep multiple
+agent sessions independent. The parent orchestrator decides whether and when to
+run them in parallel; `acp-mcp` is not a scheduler.
 
-- investigating a bug with a second agent
-- sending an implementation task to a better-suited model
-- keeping a reviewer active while another agent implements
-- running independent tasks in parallel
-- using a provider or model the parent agent does not expose directly
-- keeping a specialist session alive for follow-up work
-- applying different model policies by repository or subdirectory
+`acp-mcp` exposes what the ACP implementation actually advertises. It cannot
+bypass downstream restrictions or invent models that the ACP does not expose.
 
-A shell command or headless CLI is enough for simple one-shot work, but it is a
-weak control plane for longer interactions. Depending on the agent, headless
-mode may expose fewer models, omit interactive configuration, make continuation
-awkward, or reduce the interface to stdout.
+## What can I do with this?
 
-`acp-mcp` uses the agent's ACP interface instead, so the host can work with
-downstream agents as sessions rather than subprocess output:
+### Delegate work to another agent
 
-```text
-discover
--> create session
--> configure
--> prompt
--> inspect events
--> continue
--> cancel / close
-```
+From a Codex, Claude, OpenCode, or other MCP-capable host, delegate
+implementation, code review, bug investigation, research, or test analysis to a
+different ACP agent. The result comes back through MCP for the parent to use.
 
-The available models and capabilities still come from the downstream ACP
-implementation. `acp-mcp` does not add features that the agent itself does not
-expose.
+### Run independent agents in parallel
+
+For example, a parent can ask Codex to implement a change, OpenCode to review
+the API, and Antigravity to investigate an integration failure. Each runs in its
+own managed session. The parent decides how to coordinate their work.
+
+### Keep a specialist session alive
+
+Start a downstream session once, prompt it over multiple turns, inspect its
+events, change advertised configuration, then close it when finished. Use
+`run_task` instead when one task and one compact result are enough.
+
+### Use the ACP surface and project model policy
+
+Live discovery can show models and configuration that differ from the same
+agent's CLI mode. `.acp-mcp.json` can select a project's default model size and
+thinking effort, and filter the live catalog with allow/deny rules.
+
+### Bring your own ACP agent
+
+ACP is also the extension mechanism. Trusted configuration can register any
+compatible stdio ACP server; the existing discovery, task, and session tools
+then control it through the same runtime path. See
+[Bring your own ACP agent](#bring-your-own-acp-agent).
 
 ## Quick start
 
@@ -73,7 +83,7 @@ From a source checkout:
 ```powershell
 mise install
 mise exec -- deno task release
-mise exec -- deno task install --release-dir dist/releases/acp-mcp-0.2.0-windows-x86_64
+mise exec -- deno task install --release-dir dist/releases/acp-mcp-0.2.1-windows-x86_64
 ```
 
 The default install location is:
@@ -367,8 +377,10 @@ Repository `.acp-mcp.json` files can define project-safe policy such as:
 - model-size mappings
 - built-in Antigravity implementation selection
 
-They cannot inject arbitrary `command`, `args`, or `env` values. Put launch
-configuration in the trusted home config or an explicit `--config` file.
+They cannot introduce or replace `command`, `args`, `env`, or `acpProtocol`.
+Keep launch configuration in the trusted home config or an exact `--config`
+file. This prevents entering a repository from making its executable definitions
+trusted.
 
 ## Model policy
 
@@ -430,6 +442,8 @@ Examples:
 ```text
 Codex exposes through max:       ultra -> max
 OpenCode model exposes through high: xhigh -> high
+only medium, high available:     off -> medium; low -> medium; xhigh -> high
+only low, high available:        medium -> low
 model has no off:                off -> lowest available level
 available low, high:             medium -> low
 ```
