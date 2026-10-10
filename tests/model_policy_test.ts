@@ -2,6 +2,8 @@ import {
   type AgentModelPolicy,
   filterModels,
   resolveModelSelection,
+  THINKING_EFFORTS,
+  type ThinkingEffort,
   validateModelPolicy,
 } from "../src/models/policy.ts";
 import type { DiscoveredModel } from "../src/models/discovery.ts";
@@ -27,6 +29,68 @@ function assertThrows(action: () => unknown, expected: string): void {
   throw new Error(`Expected error containing ${expected}`);
 }
 
+function assertProjection(
+  available: ThinkingEffort[],
+  requested: ThinkingEffort,
+  expected: ThinkingEffort,
+): void {
+  const encodedModels = available.map((effort) => model(`family-${effort}`));
+  const encodedPolicy: AgentModelPolicy = {
+    modelSizes: {
+      large: {
+        modelsByThinkingEffort: Object.fromEntries(
+          available.map((effort) => [effort, `family-${effort}`]),
+        ) as Partial<Record<ThinkingEffort, string>>,
+      },
+    },
+  };
+  const encoded = resolveModelSelection(encodedModels, [], encodedPolicy, {
+    modelSize: "large",
+    thinkingEffort: requested,
+  });
+  if (
+    encoded.model?.id !== `family-${expected}` ||
+    encoded.thinkingEffort !== expected
+  ) {
+    throw new Error(
+      `Encoded effort ${requested} over ${
+        available.join("/")
+      } resolved to ${encoded.model?.id}/${encoded.thinkingEffort}, expected ${expected}`,
+    );
+  }
+
+  const separatePolicy: AgentModelPolicy = {
+    default: { model: "separate-model" },
+    thinkingEffort: {
+      configOption: "effort",
+      values: Object.fromEntries(
+        THINKING_EFFORTS.map((effort) => [effort, effort]),
+      ) as Partial<Record<ThinkingEffort, string>>,
+    },
+  };
+  const options = [{
+    id: "effort",
+    type: "select",
+    options: available.map((effort) => ({ value: effort, name: effort })),
+  }];
+  const separate = resolveModelSelection(
+    [model("separate-model", true)],
+    options,
+    separatePolicy,
+    { thinkingEffort: requested },
+  );
+  if (
+    separate.thinkingEffort !== expected ||
+    separate.thinkingConfigValue !== expected
+  ) {
+    throw new Error(
+      `Separate effort ${requested} over ${
+        available.join("/")
+      } resolved to ${separate.thinkingEffort}/${separate.thinkingConfigValue}, expected ${expected}`,
+    );
+  }
+}
+
 Deno.test("model policy validates the public sizes and effort vocabulary strictly", () => {
   const valid = validateModelPolicy(
     {
@@ -34,7 +98,7 @@ Deno.test("model policy validates the public sizes and effort vocabulary strictl
       modelSizes: { large: { model: "exact" } },
       thinkingEffort: {
         configOption: "reasoning_effort",
-        values: { xhigh: "x-high" },
+        values: { off: "disabled", xhigh: "x-high" },
       },
     },
     "agent",
@@ -44,7 +108,16 @@ Deno.test("model policy validates the public sizes and effort vocabulary strictl
     throw new Error("valid size rejected");
   }
   for (
-    const value of ["xl", "x-large", "extra_high", "extra-high", "maximum"]
+    const value of [
+      "xl",
+      "x-large",
+      "extra_high",
+      "extra-high",
+      "maximum",
+      "u",
+      "xh",
+      "0",
+    ]
   ) {
     assertThrows(() =>
       validateModelPolicy(
@@ -52,6 +125,14 @@ Deno.test("model policy validates the public sizes and effort vocabulary strictl
         "agent",
         "fixture.json",
       ), "unsupported value");
+  }
+  const off = validateModelPolicy(
+    { default: { modelSize: "large", thinkingEffort: "off" } },
+    "agent",
+    "fixture.json",
+  );
+  if (off.default?.thinkingEffort !== "off") {
+    throw new Error("normalized off effort was rejected");
   }
   assertThrows(
     () =>
@@ -148,54 +229,49 @@ Deno.test("effort encoded model IDs preserve exact IDs and saturate max and ultr
       },
     },
   };
-  for (const effort of ["low", "medium", "high"] as const) {
-    const resolved = resolveModelSelection(catalog, [], policy, {
-      modelSize: "large",
-      thinkingEffort: effort,
-    });
-    if (resolved.thinkingEffort !== effort) {
-      throw new Error(`concrete effort ${effort} was not preserved`);
-    }
-  }
-  for (const requested of ["max", "ultra"] as const) {
+  const projected: Array<
+    [
+      "off" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra",
+      "low" | "medium" | "high",
+    ]
+  > = [
+    ["off", "low"],
+    ["low", "low"],
+    ["medium", "medium"],
+    ["high", "high"],
+    ["xhigh", "high"],
+    ["max", "high"],
+    ["ultra", "high"],
+  ];
+  for (const [requested, expected] of projected) {
     const resolved = resolveModelSelection(catalog, [], policy, {
       modelSize: "large",
       thinkingEffort: requested,
     });
     if (
-      resolved.model?.id !== "claude-opus-high" ||
-      resolved.thinkingEffort !== "high"
-    ) throw new Error(`${requested} did not saturate`);
+      resolved.model?.id !== `claude-opus-${expected}` ||
+      resolved.thinkingEffort !== expected
+    ) throw new Error(`${requested} did not project to ${expected}`);
   }
-  assertThrows(
-    () =>
-      resolveModelSelection(catalog, [], policy, {
-        modelSize: "large",
-        thinkingEffort: "xhigh",
-      }),
-    "thinking effort",
-  );
   const exact = resolveModelSelection(catalog, [], policy, {
     model: "claude-opus-medium",
+    thinkingEffort: "ultra",
   });
   if (
     exact.model?.id !== "claude-opus-medium" ||
     exact.thinkingEffort !== "medium"
-  ) throw new Error("exact model ID changed");
-  assertThrows(
-    () =>
-      resolveModelSelection(catalog, [], {
-        ...policy,
-        deniedModels: ["claude-opus-high"],
-      }, {
-        modelSize: "large",
-        thinkingEffort: "high",
-      }),
-    "denied",
-  );
+  ) throw new Error("exact model ID changed or its effort was not projected");
+  const deniedEffort = resolveModelSelection(catalog, [], {
+    ...policy,
+    deniedModels: ["claude-opus-high"],
+  }, { modelSize: "large", thinkingEffort: "high" });
+  if (
+    deniedEffort.model?.id !== "claude-opus-medium" ||
+    deniedEffort.thinkingEffort !== "medium"
+  ) throw new Error("denied encoded effort was not removed before projection");
 });
 
-Deno.test("separate effort config options use live advertised choices and saturate", () => {
+Deno.test("separate effort config options project across live advertised choices", () => {
   const catalog = [model("opus", true)];
   const options = [{
     id: "reasoning_effort",
@@ -211,6 +287,7 @@ Deno.test("separate effort config options use live advertised choices and satura
     thinkingEffort: {
       configOption: "reasoning_effort",
       values: {
+        off: "off",
         low: "low",
         medium: "medium",
         high: "high",
@@ -221,7 +298,15 @@ Deno.test("separate effort config options use live advertised choices and satura
     },
   };
   for (
-    const [requested, expected] of [["max", "max"], ["ultra", "max"]] as const
+    const [requested, expected] of [
+      ["off", "low"],
+      ["low", "low"],
+      ["medium", "medium"],
+      ["high", "high"],
+      ["xhigh", "xhigh"],
+      ["max", "max"],
+      ["ultra", "max"],
+    ] as const
   ) {
     const resolved = resolveModelSelection(catalog, options, policy, {
       thinkingEffort: requested,
@@ -241,13 +326,13 @@ Deno.test("separate effort config options use live advertised choices and satura
   if (capped.thinkingEffort !== "high") {
     throw new Error("max did not cap at live high choice");
   }
-  assertThrows(
-    () =>
-      resolveModelSelection(catalog, cappedOptions, policy, {
-        thinkingEffort: "xhigh",
-      }),
-    "not supported",
-  );
+  const projected = resolveModelSelection(catalog, cappedOptions, policy, {
+    thinkingEffort: "xhigh",
+  });
+  if (
+    projected.thinkingEffort !== "high" ||
+    projected.thinkingConfigValue !== "high"
+  ) throw new Error("xhigh did not project down to live high choice");
 });
 
 Deno.test("literal downstream ultra remains selectable when advertised", () => {
@@ -266,6 +351,75 @@ Deno.test("literal downstream ultra remains selectable when advertised", () => {
     resolved.model?.id !== "effort-ultra" || resolved.thinkingEffort !== "ultra"
   ) {
     throw new Error("literal advertised ultra was not preserved");
+  }
+});
+
+Deno.test("normalized effort projects across the complete live scale in both ACP shapes", () => {
+  const matrix: Array<[
+    ThinkingEffort[],
+    Partial<Record<ThinkingEffort, ThinkingEffort>>,
+  ]> = [
+    [
+      [...THINKING_EFFORTS],
+      Object.fromEntries(THINKING_EFFORTS.map((effort) => [effort, effort])),
+    ],
+    [
+      ["low", "medium", "high", "xhigh", "max"],
+      { off: "low", ultra: "max" },
+    ],
+    [
+      ["low", "medium", "high"],
+      {
+        off: "low",
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "high",
+        max: "high",
+        ultra: "high",
+      },
+    ],
+    [
+      ["medium", "high"],
+      {
+        off: "medium",
+        low: "medium",
+        medium: "medium",
+        high: "high",
+        xhigh: "high",
+        max: "high",
+        ultra: "high",
+      },
+    ],
+    [
+      ["low", "high"],
+      {
+        off: "low",
+        low: "low",
+        medium: "low",
+        high: "high",
+        xhigh: "high",
+        max: "high",
+        ultra: "high",
+      },
+    ],
+    [
+      ["high"],
+      {
+        off: "high",
+        low: "high",
+        medium: "high",
+        high: "high",
+        xhigh: "high",
+        max: "high",
+        ultra: "high",
+      },
+    ],
+  ];
+  for (const [available, expectations] of matrix) {
+    for (const [requested, expected] of Object.entries(expectations)) {
+      assertProjection(available, requested as ThinkingEffort, expected!);
+    }
   }
 });
 

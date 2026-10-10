@@ -4,6 +4,7 @@ export const MODEL_SIZES = ["small", "medium", "large", "xlarge"] as const;
 export type ModelSize = typeof MODEL_SIZES[number];
 
 export const THINKING_EFFORTS = [
+  "off",
   "low",
   "medium",
   "high",
@@ -343,12 +344,21 @@ function compareEffort(a: ThinkingEffort, b: ThinkingEffort): number {
   return THINKING_EFFORTS.indexOf(a) - THINKING_EFFORTS.indexOf(b);
 }
 
-function highestEffort(
+export function resolveThinkingEffort(
+  requested: ThinkingEffort,
   available: ThinkingEffort[],
   cap?: ThinkingEffort,
 ): ThinkingEffort | undefined {
-  return available.filter((effort) => !cap || compareEffort(effort, cap) <= 0)
-    .sort(compareEffort).at(-1);
+  const supported = THINKING_EFFORTS.filter((effort) =>
+    available.includes(effort) && (!cap || compareEffort(effort, cap) <= 0)
+  );
+  if (!supported.length) return undefined;
+  if (supported.includes(requested)) return requested;
+  if (requested === "off") return supported[0];
+  const requestedIndex = THINKING_EFFORTS.indexOf(requested);
+  return supported.filter((effort) =>
+    THINKING_EFFORTS.indexOf(effort) <= requestedIndex
+  ).at(-1) ?? supported[0];
 }
 
 export function policyFilteredModels(
@@ -429,42 +439,19 @@ export function resolveModelSelection(
       ) as Array<[ThinkingEffort, string]>;
       const requestedVariantEffort = request.thinkingEffort ??
         policy.default?.thinkingEffort;
-      if (
-        requestedVariantEffort && requestedVariantEffort !== "max" &&
-        requestedVariantEffort !== "ultra"
-      ) {
-        const requestedVariant = variants.find(([effort]) =>
-          effort === requestedVariantEffort
-        );
-        if (
-          requestedVariant &&
-          advertised.some((model) => model.id === requestedVariant[1]) &&
-          !isModelAllowed(policy, requestedVariant[1])
-        ) {
-          throw new Error(
-            `Mapped model '${requestedVariant[1]}' is denied by model policy`,
-          );
-        }
-      }
-      const available = variants.filter(([effort, id]) =>
+      const available = variants.filter(([, id]) =>
         advertised.some((model) => model.id === id) &&
-        isModelAllowed(policy, id) &&
-        (!request.thinkingEffort && !policy.default?.thinkingEffort ||
-          (request.thinkingEffort ?? policy.default?.thinkingEffort) ===
-            "max" ||
-          (request.thinkingEffort ?? policy.default?.thinkingEffort) ===
-            "ultra" ||
-          effort === (request.thinkingEffort ?? policy.default?.thinkingEffort))
+        isModelAllowed(policy, id)
       );
-      const wanted = request.thinkingEffort ?? policy.default?.thinkingEffort;
       const currentVariant = available.find(([, id]) =>
         advertised.some((model) => model.id === id && model.selected)
       );
-      const chosenEffort = !wanted
-        ? currentVariant?.[0]
-        : wanted === "max" || wanted === "ultra"
-        ? highestEffort(available.map(([effort]) => effort))
-        : available.find(([effort]) => effort === wanted)?.[0];
+      const chosenEffort = requestedVariantEffort
+        ? resolveThinkingEffort(
+          requestedVariantEffort,
+          available.map(([effort]) => effort),
+        )
+        : currentVariant?.[0];
       const selected = chosenEffort
         ? variants.find(([effort]) => effort === chosenEffort)
         : undefined;
@@ -504,14 +491,6 @@ export function resolveModelSelection(
   let thinkingConfigValue: string | undefined;
   if (requestedEffort && selectedModel) {
     if (mappedEffort) {
-      if (
-        requestedEffort !== "max" && requestedEffort !== "ultra" &&
-        requestedEffort !== mappedEffort
-      ) {
-        throw new Error(
-          `Exact model '${selectedModel.id}' encodes thinking effort '${mappedEffort}', not '${requestedEffort}'`,
-        );
-      }
       effectiveEffort = mappedEffort;
     } else {
       const mapping = policy.thinkingEffort;
@@ -536,12 +515,11 @@ export function resolveModelSelection(
       const sizeCap = modelSize
         ? policy.modelSizes?.[modelSize]?.maxThinkingEffort
         : undefined;
-      const chosen = requestedEffort === "max" || requestedEffort === "ultra"
-        ? highestEffort(available, sizeCap)
-        : available.includes(requestedEffort) &&
-            (!sizeCap || compareEffort(requestedEffort, sizeCap) <= 0)
-        ? requestedEffort
-        : undefined;
+      const chosen = resolveThinkingEffort(
+        requestedEffort,
+        available,
+        sizeCap,
+      );
       if (!chosen) {
         throw new Error(
           `Thinking effort '${requestedEffort}' is not supported by model '${selectedModel.id}'`,

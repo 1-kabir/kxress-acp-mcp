@@ -163,16 +163,15 @@ async function waitForThinkingChoice(
   sessionId: string,
   options: Array<Record<string, unknown>>,
   agent: AgentDefinition,
-  requestedEffort: ModelSelectionRequest["thinkingEffort"],
 ) {
   const mapping = agent.models?.thinkingEffort;
-  if (!mapping || !requestedEffort) return options;
-  const wanted = mapping.values[requestedEffort];
+  if (!mapping) return options;
+  const mappedValues = new Set(Object.values(mapping.values));
   const hasChoice = (current: Array<Record<string, unknown>>) => {
     const option = current.find((item) => item.id === mapping.configOption);
     if (!option || option.type !== "select") return false;
     const values = advertisedOptionValues(option);
-    return wanted ? values.includes(wanted) : values.length > 0;
+    return values.some((value) => mappedValues.has(value));
   };
   if (hasChoice(options)) return options;
   return await manager.waitForConfigOptions(
@@ -282,7 +281,6 @@ async function applyRequestSelection(
       sessionId,
       options,
       agent,
-      requestedEffort,
     );
   }
 
@@ -311,7 +309,6 @@ async function applyRequestSelection(
         sessionId,
         options,
         agent,
-        requestedEffort,
       );
     }
     advertised = discoverAdvertisedModels(options, agent);
