@@ -99,8 +99,23 @@ The `antigravity` profile has three explicit implementations. Omit
 | Selector | Implementation | What to expect |
 | --- | --- | --- |
 | `official` | Google's `agy_acp_server` | Default, official ACP baseline. Its advertised catalog can differ from the `agy` CLI catalog. |
-| `refined` | `simonepri/refined-antigravity-acp` | Explicit wrapper around the official ACP backend; live validated with Gemini model choices and `thought_level`, but did not advertise Opus in the tested setup. |
-| `agy` | `shubzkothekar/antigravity-acp` v1.2.0 | Explicit community adapter that uses the existing authenticated `agy` CLI. Opus was advertised and validated in the tested account/catalog. |
+| `refined` | `simonepri/refined-antigravity-acp` | Explicit wrapper around Google's ACP server; ACP v1 was live validated. The tested catalog had Gemini models and `thought_level`, but no Opus. |
+| `agy` | `shubzkothekar/antigravity-acp` v1.2.0 | Explicit community adapter using the existing authenticated `agy` CLI. It discovers the dynamic `agy models` catalog; Opus was advertised and validated in the tested account. |
+
+Select the implementation in a home or exact config. Omit the field (or use
+`official`) for Google's server:
+
+```json
+{ "agents": { "antigravity": { "implementation": "official" } } }
+```
+
+```json
+{ "agents": { "antigravity": { "implementation": "refined" } } }
+```
+
+```json
+{ "agents": { "antigravity": { "implementation": "agy" } } }
+```
 
 For example, put this in a trusted home config to select the community adapter:
 
@@ -121,7 +136,7 @@ The `agy` adapter is not official Google software. It uses the user's existing
 `agy` authentication. The pinned adapter invokes `agy` with
 `--dangerously-skip-permissions` and does not expose normal `agy` approval
 requests through ACP, so acp-mcp cannot mediate those operations with
-`permissionPolicy`. Choose it explicitly with that tradeoff in mind. Its live
+`permissionPolicy`. It remains opt-in for that reason. Its live
 catalog depends on the adapter, CLI, account, and entitlements; Opus is not
 available to every account. acp-mcp uses the choices advertised by the selected
 ACP implementation and does not merge in CLI-only models.
@@ -161,6 +176,10 @@ merge recursively, scalar values replace earlier values, and arrays replace
 earlier arrays. The nearest project file wins where it sets a value. An
 operation's `cwd` determines project discovery; session configuration is
 captured when that session starts or loads.
+
+The older `%APPDATA%\acp-mcp\config.json` location is not loaded implicitly.
+If that file uses the current schema, you can still select it explicitly with
+`--config <path>`.
 
 For example, a home file can set an exact default model, while a repository
 file changes that default for the project. Replace these illustrative IDs with
@@ -319,7 +338,9 @@ An exact model and a model size cannot be supplied together. `allowedModels`
 filters the live catalog when present; `deniedModels` then removes matching
 IDs, so deny always wins. Patterns support exact IDs and simple case-sensitive
 `*` wildcards. Explicit tool arguments do not bypass policy. There is no
-automatic model fallback.
+automatic model fallback. The only automatic reduction is `max` or `ultra`
+thinking effort saturating at the selected model's highest available effort.
+Selecting a model that is unadvertised or denied by policy fails explicitly.
 
 `list_models` reports advertised choices after policy filtering and marks the
 effective configured default where it can be resolved. For a session, selection
@@ -397,7 +418,26 @@ workspace state. It is local, offline, and secret-safe. Use
 Doctor does not log in, inspect credentials, contact providers to test health,
 or verify that a model is available to your account. It also cannot inspect an
 MCP host's registration or predict what environment that host will pass to
-acp-mcp.
+acp-mcp. Its JSON report includes the effective cwd and configuration sources.
+
+## Claude Agent ACP through Codex
+
+If Claude Agent ACP uses an externally configured Anthropic-compatible route,
+Codex must explicitly forward the environment variable names to its MCP
+subprocess. Add these to the Codex server registration:
+
+```toml
+[mcp_servers.acp_mcp]
+command = 'C:\Tools\acp-mcp\acp-mcp.exe'
+args = []
+env_vars = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"]
+```
+
+The variables must already be present in the Codex process environment.
+Codex forwards their values to acp-mcp; acp-mcp then inherits and passes the
+environment to its ACP child through normal process launch. acp-mcp does not
+read Windows user-scope environment settings itself. Do not put secret values
+in the host config.
 
 ## Important boundaries
 
@@ -426,7 +466,9 @@ downstream agent must support the chosen version.
 
 ## Development and platform status
 
-The repository uses Deno and mise for development. For example:
+The repository pins Deno 2.9.6 in `mise.toml`. mise is a convenient development
+tool for installing and invoking that version, not a product runtime
+dependency. For example:
 
 ```powershell
 mise exec -- deno task check
@@ -444,7 +486,8 @@ Packaged release target:
 - Windows x86_64.
 
 Runtime smoke:
-- Windows and Linux/WSL.
+- Windows.
+- Native Linux under Debian 13 / WSL2, including a Codex-hosted MCP smoke.
 
-Linux/WSL runtime validation does not mean a packaged Linux release is
-available.
+Linux/WSL runtime validation does not provide a packaged Linux release or
+establish support for other Linux distributions.
