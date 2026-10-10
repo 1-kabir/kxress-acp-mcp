@@ -47,6 +47,7 @@ function serverFor(
             ...(id === "bad" ? ["--session-fail"] : []),
             ...(id === "slow" ? ["--session-delay-ms=150"] : []),
             ...(id === "async-models" ? ["--async-models"] : []),
+            ...(id === "async-effort" ? ["--async-effort"] : []),
             ...(id === "bool" ? ["--advertise-bool"] : []),
           ],
         }),
@@ -57,7 +58,9 @@ function serverFor(
           modelEnrichment: "opencode_catalog" as const,
         }
         : {}),
-      ...(id === "async-models" ? { modelConfigId: "model" } : {}),
+      ...(id === "async-models" || id === "async-effort"
+        ? { modelConfigId: "model" }
+        : {}),
     },
   ]));
   const manager = new SessionManager(agents);
@@ -281,6 +284,192 @@ Deno.test("asynchronous ACP config updates drive model discovery and selection",
     await mcp.close();
     await manager.closeAll();
     await server.close();
+  }
+});
+
+Deno.test("late config_option_update supplies a separately configured thinking effort", async () => {
+  const definition = {
+    command: Deno.execPath(),
+    args: [
+      "run",
+      "--allow-env",
+      "--allow-read",
+      "tests/fixtures/fake_acp_agent.ts",
+      "--async-effort",
+    ],
+    modelConfigId: "model",
+  };
+  const agents = { effort: definition };
+  const manager = new SessionManager(agents);
+  const effective = {
+    ...definition,
+    models: {
+      default: { model: "claude-opus-5-5", thinkingEffort: "max" as const },
+      thinkingEffort: {
+        configOption: "thought_level",
+        values: { low: "low", medium: "medium", high: "high" },
+      },
+    },
+  };
+  const server = createMcpServer(agents, manager, {
+    resolveConfiguration: () =>
+      Promise.resolve({
+        agents: { effort: effective },
+        sources: [],
+        cwd: Deno.cwd(),
+        explicit: false,
+      }),
+  });
+  const mcp = await connectMcp(server);
+  try {
+    const result = parseToolResult(
+      await mcp.callTool("start_session", {
+        agentId: "effort",
+      }).response,
+    );
+    const id = result.sessionId as string;
+    const session = manager.getSessionSnapshot(id);
+    const effort = session.configOptions.find((option) =>
+      option.id === "thought_level"
+    );
+    if (
+      effort?.currentValue !== "high" ||
+      session.modelSelection?.thinkingEffort !== "high" ||
+      !manager.getEvents(id).events.some((event) =>
+        event.kind === "config_option_update"
+      )
+    ) throw new Error("late effort advertisement was not observed and applied");
+    await mcp.callTool("close_session", { sessionId: id }).response;
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+  }
+});
+
+Deno.test("operation policy resolves model sizes per cwd and snapshots them in sessions", async () => {
+  const temp = await Deno.makeTempDir({ prefix: "acp-mcp project cwd-" });
+  const cwdOne = `${temp} one`;
+  const cwdTwo = `${temp} two`;
+  await Deno.mkdir(cwdOne);
+  await Deno.mkdir(cwdTwo);
+  const fixturePath =
+    new URL("./fixtures/fake_acp_agent.ts", import.meta.url).pathname;
+  const absoluteFixturePath = Deno.build.os === "windows"
+    ? decodeURIComponent(fixturePath.replace(/^\//, ""))
+    : fixturePath;
+  const agents = {
+    policy: {
+      command: Deno.execPath(),
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-read",
+        absoluteFixturePath,
+        "--advertise-models",
+      ],
+    },
+  };
+  const manager = new SessionManager(agents);
+  let mapping = "opencode/fledge-alpha-free";
+  const server = createMcpServer(agents, manager, {
+    resolveConfiguration: (cwd) =>
+      Promise.resolve({
+        agents: {
+          policy: {
+            ...agents.policy,
+            models: {
+              default: { modelSize: "large" as const },
+              allowedModels: [mapping],
+              modelSizes: { large: { model: mapping } },
+            },
+          },
+        },
+        sources: [{
+          kind: "project" as const,
+          path: `${cwd ?? "cwd"}/.acp-mcp.json`,
+        }],
+        cwd: cwd ?? Deno.cwd(),
+        explicit: false,
+      }),
+  });
+  const mcp = await connectMcp(server);
+  try {
+    const listed = parseToolResult(
+      await mcp.callTool("list_models", {
+        agentId: "policy",
+        cwd: cwdOne,
+      }).response,
+    );
+    const list = listed.models as Array<Record<string, unknown>>;
+    if (
+      !Array.isArray(list) || list.length !== 1 ||
+      list[0].id !== "opencode/fledge-alpha-free"
+    ) {
+      throw new Error(
+        `policy did not filter advertised models: ${JSON.stringify(listed)}`,
+      );
+    }
+    const deniedRequest = await mcp.callTool("start_session", {
+      agentId: "policy",
+      cwd: cwdOne,
+      model: "opencode/paid-model",
+    }).response as {
+      result?: { isError?: boolean; content?: Array<{ text?: string }> };
+    };
+    if (
+      !deniedRequest.result?.isError ||
+      !deniedRequest.result.content?.[0]?.text?.includes("denied")
+    ) throw new Error("explicit model request bypassed allow policy");
+    const first = parseToolResult(
+      await mcp.callTool("start_session", {
+        agentId: "policy",
+        cwd: cwdOne,
+      }).response,
+    );
+    const firstId = first.sessionId as string;
+    const firstSnapshot = manager.getSessionSnapshot(firstId);
+    if (
+      firstSnapshot.modelSelection?.model !== "opencode/fledge-alpha-free" ||
+      firstSnapshot.modelSelection?.modelSize !== "large" ||
+      firstSnapshot.models?.modelSizes?.large?.model !==
+        "opencode/fledge-alpha-free"
+    ) throw new Error("effective model policy was not resolved and retained");
+    await mcp.callTool("prompt", {
+      sessionId: firstId,
+      text: "continue on the selected model",
+    }).response;
+    if (
+      manager.getSessionSnapshot(firstId).modelSelection?.model !==
+        "opencode/fledge-alpha-free"
+    ) throw new Error("prompt continuation lost its resolved model");
+
+    mapping = "opencode/paid-model";
+    const second = parseToolResult(
+      await mcp.callTool("start_session", {
+        agentId: "policy",
+        cwd: cwdTwo,
+      }).response,
+    );
+    const secondId = second.sessionId as string;
+    if (
+      manager.getSessionSnapshot(firstId).modelSelection?.model !==
+        "opencode/fledge-alpha-free" ||
+      manager.getSessionSnapshot(secondId).modelSelection?.model !==
+        "opencode/paid-model"
+    ) {
+      throw new Error(
+        "new operation policy mutated an existing session or was not reloaded",
+      );
+    }
+    await mcp.callTool("close_session", { sessionId: firstId }).response;
+    await mcp.callTool("close_session", { sessionId: secondId }).response;
+    if (manager.sessionCount !== 0) throw new Error("policy sessions leaked");
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
+    await Deno.remove(temp, { recursive: true });
   }
 });
 

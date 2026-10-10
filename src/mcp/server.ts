@@ -1,7 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
-import type { AgentMap } from "../agents/config.ts";
+import type { AgentDefinition, AgentMap } from "../agents/config.ts";
+import type { ResolvedConfiguration } from "../config/discovery.ts";
 import {
   type AgentFailureClassifiers,
   classifyAgentFailure,
@@ -9,6 +10,14 @@ import {
 import { classifyOpenCodeFailure } from "../agents/opencode_failure_classifier.ts";
 import { findExecutablePath } from "../runtime/process.ts";
 import { discoverAdvertisedModels } from "../models/discovery.ts";
+import {
+  filterModels,
+  isModelAllowed,
+  type ModelSelectionRequest,
+  policyFilteredModels,
+  resolveModelSelection,
+} from "../models/policy.ts";
+import { MODEL_SIZES, THINKING_EFFORTS } from "../models/policy.ts";
 import {
   enrichAdvertisedModels,
   fetchOpenCodeCatalog,
@@ -25,6 +34,7 @@ type McpServerOptions = {
   loadOpenCodeCatalog?: (signal: AbortSignal) => Promise<OpenCodeCatalog>;
   failureClassifiers?: AgentFailureClassifiers;
   workspaceCleanupRemove?: typeof Deno.remove;
+  resolveConfiguration?: (cwd?: string) => Promise<ResolvedConfiguration>;
 };
 
 const defaultFailureClassifiers: AgentFailureClassifiers = {
@@ -102,6 +112,240 @@ function reasonCounts(entries: Array<{ reason?: string }>) {
   return counts;
 }
 
+async function waitForModelCatalog(
+  manager: SessionManager,
+  sessionId: string,
+  agent: AgentDefinition,
+  configOptions: Array<Record<string, unknown>>,
+): Promise<Array<Record<string, unknown>>> {
+  if (discoverAdvertisedModels(configOptions, agent).length) {
+    return configOptions;
+  }
+  return await manager.waitForConfigOptions(
+    sessionId,
+    (options) => discoverAdvertisedModels(options, agent).length > 0,
+    DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS,
+  );
+}
+
+function isModelOption(
+  option: Record<string, unknown>,
+  agent: AgentDefinition,
+): boolean {
+  return option.type === "select" &&
+    (option.category === "model" ||
+      ((option.category === undefined || option.category === null) &&
+        option.id === agent.modelConfigId));
+}
+
+function configOptionIds(configOptions: Array<Record<string, unknown>>) {
+  return new Set(
+    configOptions.flatMap((option) =>
+      typeof option.id === "string" ? [option.id] : []
+    ),
+  );
+}
+
+function advertisedOptionValues(option: Record<string, unknown>): string[] {
+  if (!Array.isArray(option.options)) return [];
+  return option.options.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    if (Array.isArray(record.options) && typeof record.value !== "string") {
+      return advertisedOptionValues(record);
+    }
+    return typeof record.value === "string" ? [record.value] : [];
+  });
+}
+
+async function waitForThinkingChoice(
+  manager: SessionManager,
+  sessionId: string,
+  options: Array<Record<string, unknown>>,
+  agent: AgentDefinition,
+  requestedEffort: ModelSelectionRequest["thinkingEffort"],
+) {
+  const mapping = agent.models?.thinkingEffort;
+  if (!mapping || !requestedEffort) return options;
+  const wanted = mapping.values[requestedEffort];
+  const hasChoice = (current: Array<Record<string, unknown>>) => {
+    const option = current.find((item) => item.id === mapping.configOption);
+    if (!option || option.type !== "select") return false;
+    const values = advertisedOptionValues(option);
+    return wanted ? values.includes(wanted) : values.length > 0;
+  };
+  if (hasChoice(options)) return options;
+  return await manager.waitForConfigOptions(
+    sessionId,
+    hasChoice,
+    DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS,
+  );
+}
+
+async function applyRequestSelection(
+  manager: SessionManager,
+  sessionId: string,
+  agent: AgentDefinition,
+  modelRequest: ModelSelectionRequest,
+  requestConfig: Record<string, string> = {},
+) {
+  const policy = agent.models ?? {};
+  let options = manager.getSessionSnapshot(sessionId).configOptions;
+  const mayNeedModel = modelRequest.model !== undefined ||
+    modelRequest.modelSize !== undefined ||
+    modelRequest.thinkingEffort !== undefined ||
+    policy.default !== undefined || policy.allowedModels !== undefined ||
+    policy.deniedModels !== undefined ||
+    Object.keys(requestConfig).length > 0;
+  if (mayNeedModel) {
+    options = await waitForModelCatalog(manager, sessionId, agent, options);
+  }
+  if (Object.keys(requestConfig).length) {
+    const ids = configOptionIds(options);
+    const missing = Object.keys(requestConfig).filter((id) => !ids.has(id));
+    if (missing.length) {
+      options = await manager.waitForConfigOptions(
+        sessionId,
+        (updated) => {
+          const updatedIds = configOptionIds(updated);
+          return missing.every((id) => updatedIds.has(id));
+        },
+        DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS,
+      );
+    }
+  }
+  const modelOptions = options.filter((option) => isModelOption(option, agent));
+  const modelConfigIds = new Set(
+    modelOptions.flatMap((option) =>
+      typeof option.id === "string" ? [option.id] : []
+    ),
+  );
+  const configuredModelEntries = Object.entries(requestConfig).filter(([id]) =>
+    modelConfigIds.has(id)
+  );
+  if (configuredModelEntries.length > 1) {
+    throw new Error(
+      "Only one ACP model config option may be selected per request",
+    );
+  }
+  let requested: ModelSelectionRequest = { ...modelRequest };
+  if (configuredModelEntries.length) {
+    const [configId, model] = configuredModelEntries[0];
+    if (requested.modelSize) {
+      throw new Error("config model and modelSize are mutually exclusive");
+    }
+    if (requested.model && requested.model !== model) {
+      throw new Error("config model conflicts with the model request");
+    }
+    requested = { ...requested, model };
+    requestConfig = Object.fromEntries(
+      Object.entries(requestConfig).filter(([id]) => id !== configId),
+    );
+  }
+
+  const effortMapping = policy.thinkingEffort;
+  if (effortMapping && effortMapping.configOption in requestConfig) {
+    const raw = requestConfig[effortMapping.configOption];
+    const normalized = Object.entries(effortMapping.values).find(([, value]) =>
+      value === raw
+    )?.[0];
+    if (!normalized) {
+      throw new Error(
+        `Config value '${raw}' is not mapped by normalized thinkingEffort policy`,
+      );
+    }
+    if (requested.thinkingEffort && requested.thinkingEffort !== normalized) {
+      throw new Error(
+        "config thinking effort conflicts with thinkingEffort request",
+      );
+    }
+    requested = {
+      ...requested,
+      thinkingEffort: normalized as ModelSelectionRequest["thinkingEffort"],
+    };
+    requestConfig = Object.fromEntries(
+      Object.entries(requestConfig).filter(([id]) =>
+        id !== effortMapping.configOption
+      ),
+    );
+  }
+
+  for (const [id, value] of Object.entries(requestConfig)) {
+    options = await manager.setConfigOption(sessionId, id, value);
+  }
+
+  const requestedEffort = requested.thinkingEffort ??
+    policy.default?.thinkingEffort;
+  if (requestedEffort) {
+    options = await waitForThinkingChoice(
+      manager,
+      sessionId,
+      options,
+      agent,
+      requestedEffort,
+    );
+  }
+
+  let advertised = discoverAdvertisedModels(options, agent);
+  let selection = resolveModelSelection(
+    advertised,
+    options,
+    policy,
+    requested,
+  );
+  const currentModelValue = options.find((option) =>
+    option.id === selection.configId
+  )?.currentValue;
+  if (
+    selection.configId && selection.configValue !== undefined &&
+    currentModelValue !== selection.configValue
+  ) {
+    options = await manager.setConfigOption(
+      sessionId,
+      selection.configId,
+      selection.configValue,
+    );
+    if (requestedEffort) {
+      options = await waitForThinkingChoice(
+        manager,
+        sessionId,
+        options,
+        agent,
+        requestedEffort,
+      );
+    }
+    advertised = discoverAdvertisedModels(options, agent);
+    selection = resolveModelSelection(advertised, options, policy, requested);
+  }
+  const currentThinkingValue = options.find((option) =>
+    option.id === selection.thinkingConfigId
+  )?.currentValue;
+  if (
+    selection.thinkingConfigId &&
+    selection.thinkingConfigValue !== undefined &&
+    currentThinkingValue !== selection.thinkingConfigValue
+  ) {
+    options = await manager.setConfigOption(
+      sessionId,
+      selection.thinkingConfigId,
+      selection.thinkingConfigValue,
+    );
+  }
+  manager.recordModelSelection(
+    sessionId,
+    selection.model
+      ? {
+        model: selection.model.id,
+        ...(selection.modelSize ? { modelSize: selection.modelSize } : {}),
+        ...(selection.thinkingEffort
+          ? { thinkingEffort: selection.thinkingEffort }
+          : {}),
+      }
+      : undefined,
+  );
+  return { selection, configOptions: options };
+}
+
 export function createMcpServer(
   agents: AgentMap,
   manager: SessionManager,
@@ -114,6 +358,16 @@ export function createMcpServer(
     ...defaultFailureClassifiers,
     ...options.failureClassifiers,
   };
+  const resolveOperationConfig = options.resolveConfiguration ??
+    ((cwd?: string): Promise<ResolvedConfiguration> =>
+      Promise.resolve({
+        agents,
+        sources: [],
+        cwd: cwd ?? Deno.cwd(),
+        explicit: false,
+      }));
+  const launchOptions = (agentDefinition: AgentDefinition) =>
+    options.resolveConfiguration ? { agentDefinition } : {};
   server.registerTool("list_stale_workspaces", {
     description:
       "Inspect acp-mcp-owned disposable workspaces eligible for stale cleanup. This never deletes workspaces. The default age threshold is 24 hours.",
@@ -232,10 +486,11 @@ export function createMcpServer(
       idempotentHint: true,
       openWorldHint: false,
     },
-    inputSchema: z.object({}),
-  }, async (): Promise<CallToolResult> => {
+    inputSchema: z.object({ cwd: z.string().optional() }),
+  }, async ({ cwd }): Promise<CallToolResult> => {
+    const resolved = await resolveOperationConfig(cwd);
     const listedAgents = await Promise.all(
-      Object.entries(agents).map(async ([id, agent]) => ({
+      Object.entries(resolved.agents).map(async ([id, agent]) => ({
         id,
         displayName: agent.displayName ?? id,
         ...(agent.implementation
@@ -243,6 +498,15 @@ export function createMcpServer(
           : {}),
         acpProtocol: agent.acpProtocol ?? "v1",
         supportedProtocols: agent.supportedProtocols,
+        ...(agent.models
+          ? {
+            modelPolicy: {
+              default: agent.models.default,
+              allowedModels: agent.models.allowedModels,
+              deniedModels: agent.models.deniedModels,
+            },
+          }
+          : {}),
         commandFound: !!await findExecutablePath(agent.command),
         installHint: agent.installHint,
       })),
@@ -254,61 +518,89 @@ export function createMcpServer(
       }],
     };
   });
-  server.registerTool("start_session", {
-    description: "Start an ACP session and optionally send an initial prompt",
-    annotations: {
-      title: "Start ACP session",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
+  server.registerTool(
+    "start_session",
+    {
+      description: "Start an ACP session and optionally send an initial prompt",
+      annotations: {
+        title: "Start ACP session",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      inputSchema: {
+        agentId: z.string(),
+        cwd: z.string().optional(),
+        config: z.record(z.string(), z.string()).optional(),
+        model: z.string().optional(),
+        modelSize: z.enum(MODEL_SIZES).optional(),
+        thinkingEffort: z.enum(THINKING_EFFORTS).optional(),
+        modeId: z.string().optional(),
+        permissionPolicy: z.enum([
+          "read_only",
+          "operator",
+          "allow_all",
+          "deny_all",
+        ]).optional(),
+        prompt: z.string().optional(),
+      },
     },
-    inputSchema: {
-      agentId: z.string(),
-      cwd: z.string().optional(),
-      config: z.record(z.string(), z.string()).optional(),
-      modeId: z.string().optional(),
-      permissionPolicy: z.enum([
-        "read_only",
-        "operator",
-        "allow_all",
-        "deny_all",
-      ]).optional(),
-      prompt: z.string().optional(),
-    },
-  }, async ({ agentId, cwd, config, modeId, permissionPolicy, prompt }) => {
-    try {
-      const session = await manager.start(
+    async (
+      {
         agentId,
         cwd,
         config,
+        model,
+        modelSize,
+        thinkingEffort,
         modeId,
         permissionPolicy,
-      );
+        prompt,
+      },
+    ) => {
       try {
-        const result = prompt
-          ? await manager.prompt(session.id, prompt)
-          : undefined;
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              sessionId: session.id,
-              acpSessionId: session.acpSessionId,
-              agentId,
-              acpProtocol: session.acpProtocol,
-              result,
-            }),
-          }],
-        };
+        const resolved = await resolveOperationConfig(cwd);
+        const agent = resolved.agents[agentId];
+        if (!agent) throw new Error(`Unknown agent: ${agentId}`);
+        const session = await manager.start(
+          agentId,
+          cwd,
+          {},
+          modeId,
+          permissionPolicy,
+          launchOptions(agent),
+        );
+        try {
+          await applyRequestSelection(manager, session.id, agent, {
+            model,
+            modelSize,
+            thinkingEffort,
+          }, config);
+          const result = prompt
+            ? await manager.prompt(session.id, prompt)
+            : undefined;
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                sessionId: session.id,
+                acpSessionId: session.acpSessionId,
+                agentId,
+                acpProtocol: session.acpProtocol,
+                result,
+              }),
+            }],
+          };
+        } catch (e) {
+          await manager.close(session.id);
+          throw e;
+        }
       } catch (e) {
-        await manager.close(session.id);
-        throw e;
+        return { isError: true, content: [{ type: "text", text: String(e) }] };
       }
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: String(e) }] };
-    }
-  });
+    },
+  );
   server.registerTool(
     "run_task",
     {
@@ -331,6 +623,15 @@ export function createMcpServer(
         ),
         config: z.record(z.string(), z.string()).optional().describe(
           "Generic ACP configuration options, such as a model ID",
+        ),
+        model: z.string().optional().describe(
+          "Exact model ID advertised by the agent",
+        ),
+        modelSize: z.enum(MODEL_SIZES).optional().describe(
+          "Configured model-size mapping",
+        ),
+        thinkingEffort: z.enum(THINKING_EFFORTS).optional().describe(
+          "Normalized thinking-effort request",
         ),
         modeId: z.string().optional(),
         permissionPolicy: z.enum([
@@ -357,6 +658,9 @@ export function createMcpServer(
         task: text,
         cwd,
         config,
+        model,
+        modelSize,
+        thinkingEffort,
         modeId,
         permissionPolicy = "read_only",
         idleTimeoutMs = 600000,
@@ -365,6 +669,8 @@ export function createMcpServer(
       extra,
     ) => {
       let sessionId: string | undefined;
+      let effectiveAgents = agents;
+      let selectedModelForFailure: string | undefined;
       let closed = false;
       let failureStage = "session_start";
       let promptRecord: ReturnType<SessionManager["beginPrompt"]> | undefined;
@@ -377,14 +683,32 @@ export function createMcpServer(
         } catch { /* already closed */ }
       };
       try {
+        const resolved = await resolveOperationConfig(cwd);
+        effectiveAgents = resolved.agents;
+        const agent = resolved.agents[agentId];
+        if (!agent) throw new Error(`Unknown agent: ${agentId}`);
         const session = await manager.start(
           agentId,
           cwd,
-          config,
+          {},
           modeId,
           permissionPolicy,
+          launchOptions(agent),
         );
         sessionId = session.id;
+        failureStage = "model_selection";
+        const appliedSelection = await applyRequestSelection(
+          manager,
+          session.id,
+          agent,
+          {
+            model,
+            modelSize,
+            thinkingEffort,
+          },
+          config,
+        );
+        selectedModelForFailure = appliedSelection.selection.model?.id;
         failureStage = "prompt_start";
         promptRecord = manager.beginPrompt(session.id, text);
         failureStage = "prompt";
@@ -505,14 +829,15 @@ export function createMcpServer(
         }
         await close();
         const classification = classifyAgentFailure(
-          agents,
+          effectiveAgents,
           failureClassifiers,
           agentId,
           {
             agentId,
-            model: agents[agentId]?.modelConfigId
-              ? config?.[agents[agentId].modelConfigId!]
-              : undefined,
+            model: effectiveAgents[agentId]?.modelConfigId
+              ? config?.[effectiveAgents[agentId].modelConfigId!] ??
+                selectedModelForFailure
+              : selectedModelForFailure,
             stage: "prompt",
             acpCode: promptRecord.errorCode,
             errorMessage: promptRecord.error,
@@ -526,8 +851,26 @@ export function createMcpServer(
           promptRecord.errorCode,
           classification,
         );
-      } catch {
+      } catch (error) {
         await close();
+        if (failureStage === "model_selection") {
+          return {
+            isError: true,
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                status: "failed",
+                error: {
+                  kind: "model_selection",
+                  stage: "model_selection",
+                  message: error instanceof Error
+                    ? error.message
+                    : "Model selection failed",
+                },
+              }),
+            }],
+          };
+        }
         return runTaskFailure(
           "failed",
           failureStage === "session_start"
@@ -566,7 +909,8 @@ export function createMcpServer(
       { agentId, cwd, enrich = false, timeoutMs = 30000 },
       extra,
     ) => {
-      const definition = agents[agentId];
+      const resolved = await resolveOperationConfig(cwd);
+      const definition = resolved.agents[agentId];
       if (!definition) {
         return {
           isError: true,
@@ -587,6 +931,7 @@ export function createMcpServer(
           {},
           undefined,
           "read_only",
+          launchOptions(definition),
         );
         session = await abortable(startPromise, signal);
         if (extra.mcpReq.signal.aborted) {
@@ -598,11 +943,12 @@ export function createMcpServer(
             }],
           };
         }
-        let models = discoverAdvertisedModels(
-          session.configOptions,
+        let effectiveConfigOptions = session.configOptions;
+        let liveModels = discoverAdvertisedModels(
+          effectiveConfigOptions,
           definition,
         );
-        if (!models.length) {
+        if (!liveModels.length) {
           const updatedOptions = await abortable(
             manager.waitForConfigOptions(
               session.id,
@@ -613,12 +959,46 @@ export function createMcpServer(
             ),
             signal,
           );
-          models = discoverAdvertisedModels(
+          effectiveConfigOptions = updatedOptions;
+          liveModels = discoverAdvertisedModels(
             updatedOptions,
             definition,
           );
         }
-        let enrichedModels = models;
+        const policy = definition.models ?? {};
+        const models = filterModels(liveModels, policy);
+        let defaultSelection;
+        try {
+          defaultSelection = resolveModelSelection(
+            policy.default ? liveModels : models,
+            effectiveConfigOptions,
+            policy,
+            {},
+          );
+        } catch (error) {
+          return {
+            isError: true,
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                status: "failed",
+                stage: "model_policy",
+                message: error instanceof Error
+                  ? error.message
+                  : "Configured model policy could not be resolved",
+              }),
+            }],
+          };
+        }
+        let enrichedModels = policyFilteredModels(models, policy);
+        if (defaultSelection.model) {
+          enrichedModels = enrichedModels.map((model) => ({
+            ...model,
+            ...(model.id === defaultSelection.model!.id
+              ? { isDefault: true }
+              : {}),
+          }));
+        }
         let enrichment: {
           source?: string;
           status: string;
@@ -631,7 +1011,7 @@ export function createMcpServer(
         } else {
           try {
             const catalog = await loadOpenCodeCatalog(signal);
-            enrichedModels = enrichAdvertisedModels(models, catalog);
+            enrichedModels = enrichAdvertisedModels(enrichedModels, catalog);
             enrichment = {
               source: "opencode_catalog",
               status: "available",
@@ -653,7 +1033,7 @@ export function createMcpServer(
                 }],
               };
             }
-            enrichedModels = models;
+            enrichedModels = policyFilteredModels(models, policy);
             enrichment = {
               source: "opencode_catalog",
               status: "unavailable",
@@ -722,13 +1102,45 @@ export function createMcpServer(
       ]).optional(),
     },
   }, async ({ agentId, acpSessionId, cwd, permissionPolicy }) => {
+    let managedSessionId: string | undefined;
     try {
+      const resolved = await resolveOperationConfig(cwd);
+      const agent = resolved.agents[agentId];
+      if (!agent) throw new Error(`Unknown agent: ${agentId}`);
       const session = await manager.load(
         agentId,
         acpSessionId,
         cwd,
         permissionPolicy,
+        launchOptions(agent),
       );
+      managedSessionId = session.id;
+      let configOptions = session.configOptions;
+      let models = discoverAdvertisedModels(configOptions, agent);
+      if (
+        !models.some((model) => model.selected) &&
+        (agent.models?.allowedModels || agent.models?.deniedModels)
+      ) {
+        configOptions = await waitForModelCatalog(
+          manager,
+          session.id,
+          agent,
+          configOptions,
+        );
+        models = discoverAdvertisedModels(configOptions, agent);
+      }
+      const current = models.find((model) => model.selected);
+      if (
+        (agent.models?.allowedModels || agent.models?.deniedModels) &&
+        (!current || !isModelAllowed(agent.models, current.id))
+      ) {
+        await manager.close(session.id);
+        throw new Error(
+          current
+            ? `Resumed model '${current.id}' is denied by current model policy`
+            : "Cannot verify resumed model against current model policy because ACP did not identify it",
+        );
+      }
       return {
         content: [{
           type: "text",
@@ -737,12 +1149,17 @@ export function createMcpServer(
             acpSessionId: session.acpSessionId,
             agentId,
             acpProtocol: session.acpProtocol,
-            configOptions: session.configOptions,
+            configOptions,
             modes: session.modes,
           }),
         }],
       };
     } catch (e) {
+      if (managedSessionId) {
+        try {
+          await manager.close(managedSessionId);
+        } catch { /* startup or policy validation already closed it */ }
+      }
       return { isError: true, content: [{ type: "text", text: String(e) }] };
     }
   });
@@ -940,6 +1357,18 @@ export function createMcpServer(
     },
   }, async ({ sessionId, configId, value }) => {
     try {
+      const session = manager.getSessionSnapshot(sessionId);
+      const definition = {
+        command: "",
+        args: [],
+        modelConfigId: session.modelConfigId,
+      } satisfies AgentDefinition;
+      const option = session.configOptions.find((item) => item.id === configId);
+      if (option && isModelOption(option, definition)) {
+        if (!isModelAllowed(session.models ?? {}, value)) {
+          throw new Error(`Model '${value}' is denied by model policy`);
+        }
+      }
       return {
         content: [{
           type: "text",

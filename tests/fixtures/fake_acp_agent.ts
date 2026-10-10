@@ -90,6 +90,42 @@ app.onRequest("session/new", ({ params, client }) => {
     }, 40);
     return { sessionId, configOptions: initialOptions };
   }
+  if (Deno.args.includes("--async-effort")) {
+    const sessionId = crypto.randomUUID();
+    const initialOptions: SessionConfigOption[] = [{
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "claude-opus-5-5",
+      options: [{ value: "claude-opus-5-5", name: "Opus" }],
+    }];
+    const discoveredOptions: SessionConfigOption[] = [
+      ...initialOptions,
+      {
+        id: "thought_level",
+        name: "Thought level",
+        type: "select",
+        currentValue: "low",
+        options: ["low", "medium", "high"].map((value) => ({
+          value,
+          name: value,
+        })),
+      },
+    ];
+    activeConfigOptions = initialOptions;
+    setTimeout(() => {
+      activeConfigOptions = discoveredOptions;
+      void client.notify("session/update", {
+        sessionId,
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: discoveredOptions,
+        },
+      });
+    }, 40);
+    return { sessionId, configOptions: initialOptions };
+  }
   const configOptions: SessionConfigOption[] =
     Deno.args.includes("--advertise-models")
       ? [
@@ -192,7 +228,7 @@ app.onRequest("session/set_config_option", ({ params }) => {
         ? { ...option, currentValue: value } as SessionConfigOption
         : option
     );
-  } else if (configId === "model") {
+  } else {
     activeConfigOptions = activeConfigOptions.map((option) =>
       option.id === configId
         ? { ...option, currentValue: value } as SessionConfigOption

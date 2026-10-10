@@ -1,5 +1,5 @@
 import { InMemoryTransport } from "@modelcontextprotocol/server";
-import { loadAgents } from "../src/agents/config.ts";
+import { resolveConfiguration } from "../src/config/discovery.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import {
@@ -242,9 +242,20 @@ try {
 const abortController = new AbortController();
 const onInterrupt = () => abortController.abort();
 Deno.addSignalListener("SIGINT", onInterrupt);
-const agents = await loadAgents(parsed.configPath);
+const startup = await resolveConfiguration({
+  explicitConfigPath: parsed.configPath,
+  cwd: parsed.repository,
+  includeProject: false,
+});
+const agents = startup.agents;
 const manager = new SessionManager(agents);
-const server = createMcpServer(agents, manager);
+const server = createMcpServer(agents, manager, {
+  resolveConfiguration: () =>
+    resolveConfiguration({
+      explicitConfigPath: parsed.configPath,
+      cwd: parsed.repository,
+    }),
+});
 let local: Awaited<ReturnType<typeof connectLocalServer>> | undefined;
 const workspaceHandles = new Set<string>();
 try {

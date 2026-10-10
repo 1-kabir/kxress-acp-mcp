@@ -78,7 +78,7 @@ Deno.test("known config fields fail with safe actionable validation errors", asy
   const cases: Array<[unknown, string]> = [
     [null, "must contain a JSON object"],
     [{ agents: null }, "must contain an 'agents' object"],
-    [{ agents: { custom: null } }, "Agent 'custom' must be a JSON object"],
+    [{ agents: { custom: null } }, "agent 'custom' must be a JSON object"],
     [
       { agents: { custom: { command: "agent", args: "--stdio" } } },
       "args must be an array of strings",

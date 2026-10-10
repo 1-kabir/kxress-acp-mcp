@@ -67,6 +67,24 @@ asks about configured agents and models.
   `permissionPolicy` cannot mediate its actions; personal Antigravity OAuth use
   also carries the upstream-documented terms/account risk. Keep it opt-in.
 
+## Configuration and model selection
+
+- Implicit config loads `~/.acp-mcp.json`, then ancestor `.acp-mcp.json` files
+  from outermost to nearest relative to the operation cwd. Objects merge
+  recursively; arrays replace. Exact `--config <path>` disables discovery.
+- Project config may set model policy and the closed Antigravity implementation
+  selector, but cannot provide executable commands, args, or environment. Home
+  and exact explicit config are trusted launch configuration.
+- Use advertised exact model IDs. `modelSize` values are `small`, `medium`,
+  `large`, `xlarge`; normalized `thinkingEffort` values are `low`, `medium`,
+  `high`, `xhigh`, `max`, `ultra`. Size is a configured family position, not a
+  capability ranking. `max`/`ultra` cap at the highest supported effort;
+  concrete unsupported efforts fail.
+- Apply `allowedModels` and `deniedModels` to explicit requests too; deny wins.
+  Never invent a mapping, select a substitute model, or retry another choice.
+  Live ACP advertisement remains authoritative. Sessions retain policy resolved
+  at creation/load; project edits apply to later operations/sessions.
+
 ## Trust and privacy
 
 - The stdio service trusts its launching host and user; acp-mcp adds no separate
@@ -90,7 +108,8 @@ asks about configured agents and models.
 - Installed use is through the native `acp-mcp` executable. No arguments starts
   the MCP stdio server; `acp-mcp doctor` is local and offline and does not
   verify host registration, provider authentication, or live agent health.
-- `mise` and Deno tasks are for repository maintenance. `deno task test` is
+- `mise` and Deno tasks are for repository maintenance and local development.
+  They are not required by the installed product. `deno task test` is
   deterministic/offline; `mise exec -- deno task compat <agentId>` is an
   explicit live test and may use provider quota. Do not run live compatibility
   tests unless the task asks for them.

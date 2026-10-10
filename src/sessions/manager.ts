@@ -1,4 +1,9 @@
-import type { AgentMap } from "../agents/config.ts";
+import type { AgentDefinition, AgentMap } from "../agents/config.ts";
+import type {
+  AgentModelPolicy,
+  ModelSize,
+  ThinkingEffort,
+} from "../models/policy.ts";
 import { createProtocolDriver } from "../acp/driver_factory.ts";
 import type {
   AcpPermissionRequest,
@@ -11,6 +16,7 @@ import { startAgent, stopAgent } from "../runtime/process.ts";
 interface ManagedSession {
   id: string;
   agentId: string;
+  agentDefinition: AgentDefinition;
   cwd: string;
   acpSessionId: string;
   acpProtocol: AcpProtocol;
@@ -26,6 +32,11 @@ interface ManagedSession {
   nextSequence: number;
   droppedThrough: number;
   permissionPolicy: PermissionPolicy;
+  modelSelection?: {
+    model: string;
+    modelSize?: ModelSize;
+    thinkingEffort?: ThinkingEffort;
+  };
   pendingPermissions: Map<string, PendingPermission>;
   permissionLease?: ReturnType<typeof setTimeout>;
 }
@@ -63,6 +74,7 @@ export type PermissionPolicy =
 export interface SessionSnapshot {
   readonly id: string;
   readonly agentId: string;
+  readonly implementation?: string;
   readonly cwd: string;
   readonly acpSessionId: string;
   readonly acpProtocol: AcpProtocol;
@@ -72,6 +84,13 @@ export interface SessionSnapshot {
   readonly configOptions: Array<Record<string, unknown>>;
   readonly modes: Record<string, unknown> | undefined;
   readonly permissionPolicy: PermissionPolicy;
+  readonly modelConfigId?: string;
+  readonly models?: AgentModelPolicy;
+  readonly modelSelection?: {
+    readonly model: string;
+    readonly modelSize?: ModelSize;
+    readonly thinkingEffort?: ThinkingEffort;
+  };
   readonly pendingPermissions: Array<{
     id: string;
     toolCall: unknown;
@@ -100,6 +119,10 @@ export interface PromptHandle {
   readonly lastActivityAt: number;
   readonly activityVersion: number;
   readonly done: Promise<void>;
+}
+
+export interface SessionLaunchOptions {
+  agentDefinition?: AgentDefinition;
 }
 
 type PendingPermissionSnapshot = SessionSnapshot["pendingPermissions"][number];
@@ -169,6 +192,18 @@ export class SessionManager {
     return this.sessionSnapshot(this.requireSession(id));
   }
 
+  recordModelSelection(
+    sessionId: string,
+    selection: {
+      model: string;
+      modelSize?: ModelSize;
+      thinkingEffort?: ThinkingEffort;
+    } | undefined,
+  ): void {
+    const session = this.requireSession(sessionId);
+    session.modelSelection = selection ? { ...selection } : undefined;
+  }
+
   getPromptHandle(sessionId: string, promptId: string): PromptHandle {
     return this.promptHandle(this.requirePrompt(sessionId, promptId));
   }
@@ -177,6 +212,7 @@ export class SessionManager {
     return {
       id: session.id,
       agentId: session.agentId,
+      implementation: session.agentDefinition.implementation,
       cwd: session.cwd,
       acpSessionId: session.acpSessionId,
       acpProtocol: session.acpProtocol,
@@ -186,6 +222,13 @@ export class SessionManager {
       configOptions: structuredClone(session.configOptions),
       modes: structuredClone(session.modes),
       permissionPolicy: session.permissionPolicy,
+      modelConfigId: session.agentDefinition.modelConfigId,
+      models: session.agentDefinition.models
+        ? structuredClone(session.agentDefinition.models)
+        : undefined,
+      modelSelection: session.modelSelection
+        ? { ...session.modelSelection }
+        : undefined,
       pendingPermissions: [...session.pendingPermissions.values()].map((
         pending,
       ) => ({
@@ -273,10 +316,17 @@ export class SessionManager {
     config: Record<string, string> = {},
     modeId?: string,
     permissionPolicy: PermissionPolicy = "read_only",
+    options: SessionLaunchOptions = {},
   ): Promise<SessionSnapshot> {
-    return this.launch(agentId, cwd, config, modeId, permissionPolicy).then(
-      (session) => this.sessionSnapshot(session),
-    );
+    return this.launch(
+      agentId,
+      cwd,
+      config,
+      modeId,
+      permissionPolicy,
+      undefined,
+      options,
+    ).then((session) => this.sessionSnapshot(session));
   }
 
   load(
@@ -284,6 +334,7 @@ export class SessionManager {
     acpSessionId: string,
     cwd: string,
     permissionPolicy: PermissionPolicy = "read_only",
+    options: SessionLaunchOptions = {},
   ): Promise<SessionSnapshot> {
     return this.launch(
       agentId,
@@ -292,6 +343,7 @@ export class SessionManager {
       undefined,
       permissionPolicy,
       acpSessionId,
+      options,
     ).then((session) => this.sessionSnapshot(session));
   }
 
@@ -302,11 +354,12 @@ export class SessionManager {
     modeId: string | undefined,
     permissionPolicy: PermissionPolicy,
     loadSessionId?: string,
+    options: SessionLaunchOptions = {},
   ): Promise<ManagedSession> {
     if (this.sessions.size >= 8) {
       throw new Error("Active session limit (8) reached");
     }
-    const def = this.agents[agentId];
+    const def = options.agentDefinition ?? this.agents[agentId];
     if (!def) throw new Error(`Unknown agent: ${agentId}`);
     const protocol = def.acpProtocol ?? "v1";
     if (def.supportedProtocols && !def.supportedProtocols.includes(protocol)) {
@@ -448,6 +501,7 @@ export class SessionManager {
       const session: ManagedSession = {
         id: crypto.randomUUID(),
         agentId,
+        agentDefinition: def,
         cwd,
         acpSessionId: acpId,
         acpProtocol: driver.protocol,
@@ -806,6 +860,11 @@ export class SessionManager {
       value,
       option,
     );
+    if (
+      option?.category === "model" ||
+      configId === session.agentDefinition.modelConfigId ||
+      configId === session.agentDefinition.models?.thinkingEffort?.configOption
+    ) session.modelSelection = undefined;
     return structuredClone(session.configOptions);
   }
 

@@ -3,6 +3,8 @@ import {
   type DoctorDependencies,
 } from "../src/diagnostics/doctor.ts";
 import type { AgentDefinition } from "../src/agents/config.ts";
+import { resolveConfiguration } from "../src/config/discovery.ts";
+import { join } from "node:path";
 
 function staleResult(eligible = 0) {
   return {
@@ -116,8 +118,9 @@ Deno.test("doctor handles invalid and missing explicit configs as structured err
     );
     if (
       invalid.status !== "errors" ||
-      invalid.checks.find((check) => check.id === "config")?.summary !==
-        "invalid JSON or agent configuration" ||
+      !invalid.checks.find((check) => check.id === "config")?.summary.includes(
+        "invalid or unreadable configuration",
+      ) ||
       JSON.stringify(invalid).includes("opaque parse failure") ||
       missing.status !== "errors" ||
       !missing.checks.find((check) => check.id === "config")?.summary.includes(
@@ -154,6 +157,46 @@ Deno.test("doctor reports stale workspaces without requesting deletion", async (
         check.id === "workspace.stale" && check.summary.includes("2 stale")
       )
     ) throw new Error("Doctor did not safely report stale workspaces");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("doctor reports hierarchical source order and effective cwd without loading providers", async () => {
+  const root = await Deno.makeTempDir({ prefix: "acp-mcp doctor hierarchy-" });
+  const home = join(root, "home");
+  const project = join(root, "repo");
+  const nested = join(project, "nested");
+  await Deno.mkdir(home, { recursive: true });
+  await Deno.mkdir(nested, { recursive: true });
+  const homePath = await Deno.writeTextFile(
+    join(home, ".acp-mcp.json"),
+    JSON.stringify({ agents: {} }),
+  ).then(() => join(home, ".acp-mcp.json"));
+  const projectPath = await Deno.writeTextFile(
+    join(project, ".acp-mcp.json"),
+    JSON.stringify({ agents: { antigravity: { implementation: "agy" } } }),
+  ).then(() => join(project, ".acp-mcp.json"));
+  try {
+    const deps = dependencies(root, {}, {
+      resolveConfiguration: (options) =>
+        resolveConfiguration({
+          ...options,
+          homeDirectory: home,
+        }),
+    });
+    const report = await diagnose({ cwd: nested }, deps);
+    if (
+      report.effectiveCwd !== nested ||
+      report.configSources?.map((source) => source.path).join("|") !==
+        `${homePath}|${projectPath}` ||
+      report.configSources?.map((source) => source.kind).join("|") !==
+        "home|project"
+    ) {
+      throw new Error(
+        `Doctor omitted hierarchical config context: ${JSON.stringify(report)}`,
+      );
+    }
   } finally {
     await Deno.remove(root, { recursive: true });
   }

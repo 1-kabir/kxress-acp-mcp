@@ -1,8 +1,8 @@
+import { type AgentDefinition, loadAgents } from "../agents/config.ts";
 import {
-  type AgentDefinition,
-  defaultConfigPath,
-  loadAgents,
-} from "../agents/config.ts";
+  type ConfigSource,
+  resolveConfiguration,
+} from "../config/discovery.ts";
 import {
   findExecutablePath,
   getAgentEnvironmentValue,
@@ -25,12 +25,15 @@ export interface DoctorReport {
   platform: string;
   architecture: string;
   configPath: string | null;
+  effectiveCwd?: string;
+  configSources?: ConfigSource[];
   status: "healthy" | "warnings" | "errors";
   checks: DiagnosticCheck[];
 }
 
 export interface DoctorOptions {
   configPath?: string;
+  cwd?: string;
 }
 
 export interface DoctorDependencies {
@@ -41,11 +44,13 @@ export interface DoctorDependencies {
   ) => ReturnType<typeof cleanupStaleWorkspaceSnapshots>;
   workspaceRoot: () => Promise<string>;
   runVersionCommand: (path: string) => Promise<string | undefined>;
+  resolveConfiguration?: typeof resolveConfiguration;
 }
 
 const defaultDependencies: DoctorDependencies = {
   resolveExecutable: findExecutablePath,
   loadAgents,
+  resolveConfiguration,
   inspectStaleWorkspaces: (options) => cleanupStaleWorkspaceSnapshots(options),
   workspaceRoot: getWorkspaceRoot,
   async runVersionCommand(path) {
@@ -80,45 +85,6 @@ function versionAtLeast(actual: string, required: string): boolean | undefined {
     if (a[i] !== r[i]) return a[i] > r[i];
   }
   return true;
-}
-
-async function inspectConfig(
-  path: string,
-  explicit: boolean,
-  loadAgentsFn: DoctorDependencies["loadAgents"],
-): Promise<{ status: DiagnosticStatus; summary: string; detail?: string }> {
-  try {
-    const info = await Deno.stat(path);
-    if (!info.isFile) {
-      return { status: "error", summary: "config path is not a file" };
-    }
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      return explicit
-        ? {
-          status: "error",
-          summary:
-            "explicit config file does not exist; built-in profiles are used by the server when a config is absent",
-        }
-        : {
-          status: "ok",
-          summary: "not present; built-in profiles are active",
-        };
-    }
-    return { status: "error", summary: "config file cannot be accessed" };
-  }
-
-  try {
-    await loadAgentsFn(path);
-    return { status: "ok", summary: "valid" };
-  } catch {
-    return {
-      status: "error",
-      summary: "invalid JSON or agent configuration",
-      detail:
-        "The config could not be loaded. Values are omitted to avoid exposing secrets.",
-    };
-  }
 }
 
 async function agentChecks(
@@ -248,33 +214,60 @@ export async function diagnose(
 ): Promise<DoctorReport> {
   const checks: DiagnosticCheck[] = [];
   let configPath: string | null = null;
+  const effectiveCwd = options.cwd ?? Deno.cwd();
+  let configSources: ConfigSource[] = [];
+  let agents: Record<string, AgentDefinition> | undefined;
   try {
-    configPath = options.configPath ?? defaultConfigPath();
-    const configCheck = await inspectConfig(
-      configPath,
-      options.configPath !== undefined,
-      dependencies.loadAgents,
-    );
-    checks.push({ id: "config", ...configCheck });
-  } catch {
+    if (options.configPath !== undefined) {
+      configPath = options.configPath;
+      const info = await Deno.stat(options.configPath);
+      if (!info.isFile) throw new Error("Explicit config path is not a file");
+      agents = await dependencies.loadAgents(options.configPath);
+      configSources = [{ kind: "explicit", path: options.configPath }];
+    } else if (dependencies.resolveConfiguration) {
+      const resolved = await dependencies.resolveConfiguration({
+        cwd: effectiveCwd,
+      });
+      agents = resolved.agents;
+      configSources = resolved.sources;
+      configPath = configSources.at(-1)?.path ?? null;
+    } else {
+      agents = await dependencies.loadAgents();
+      configPath = null;
+    }
+    checks.push({
+      id: "config",
+      status: "ok",
+      summary: configSources.length
+        ? `valid; ${configSources.length} configuration source(s) applied`
+        : "no config files; built-in profiles are active",
+    });
+  } catch (error) {
+    const missingExplicit = options.configPath !== undefined &&
+      (error instanceof Deno.errors.NotFound ||
+        (error instanceof Error && /does not exist/i.test(error.message)));
+    const failedPath = options.configPath ??
+      (error instanceof Error
+        ? error.message.match(/(?:Config file )?'([^']+\.acp-mcp\.json)'/)?.[1]
+        : undefined);
+    configPath = failedPath ?? null;
+    if (failedPath) {
+      configSources = [{
+        kind: options.configPath !== undefined ? "explicit" : "unknown",
+        path: failedPath,
+      }];
+    }
     checks.push({
       id: "config",
       status: "error",
-      summary:
-        "config path could not be determined; set the normal user config location or pass --config",
+      summary: missingExplicit
+        ? `explicit config file does not exist: ${options.configPath}`
+        : "invalid or unreadable configuration; values are omitted to avoid exposing secrets",
     });
   }
 
-  if (
-    configPath &&
-    !checks.some((check) => check.id === "config" && check.status === "error")
-  ) {
-    try {
-      const agents = await dependencies.loadAgents(options.configPath);
-      checks.push(...await agentChecks(agents, dependencies));
-    } catch {
-      // The config check already reports the load failure without exposing values.
-    }
+  if (agents) {
+    checks.push(...await agentChecks(agents, dependencies));
   }
 
   try {
@@ -334,6 +327,8 @@ export async function diagnose(
     platform: Deno.build.os,
     architecture: Deno.build.arch,
     configPath,
+    effectiveCwd,
+    configSources,
     status: aggregate(checks),
     checks,
   };
@@ -343,6 +338,10 @@ export function formatDoctorReport(report: DoctorReport): string {
   const lines = [
     `acp-mcp doctor ${report.version} (${report.platform}/${report.architecture})`,
     `Config: ${report.configPath ?? "unavailable"}`,
+    ...(report.effectiveCwd ? [`Operation cwd: ${report.effectiveCwd}`] : []),
+    ...(report.configSources ?? []).map((source, index) =>
+      `Config source ${index + 1} (${source.kind}): ${source.path}`
+    ),
   ];
   for (const check of report.checks) {
     const label = check.status.toUpperCase().padEnd(7);

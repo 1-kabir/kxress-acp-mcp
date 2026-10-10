@@ -64,9 +64,9 @@ Doctor returns exit code `0` when there are no errors (warnings are allowed),
 does not delete stale workspaces. Use the MCP tools `list_stale_workspaces` and
 `cleanup_stale_workspaces` to inspect and explicitly remove eligible leftovers.
 
-The default user configuration is `%APPDATA%\acp-mcp\config.json` on Windows and
-`$XDG_CONFIG_HOME/acp-mcp/config.json` or `~/.config/acp-mcp/config.json`
-elsewhere. An MCP host can launch the installed command directly:
+The home configuration is `%USERPROFILE%\.acp-mcp.json` on Windows and
+`$HOME/.acp-mcp.json` on POSIX. An MCP host can launch the installed command
+directly:
 
 The stdio server trusts the host and user that launch it; acp-mcp does not add a
 separate MCP authentication or authorization layer. The host owns its server
@@ -172,7 +172,7 @@ Built-in agent IDs use their canonical ACP launch paths:
   this implementation. It is an explicit community-adapter trust and account-
   risk choice, not official Google software.
 
-Select refined explicitly in `%APPDATA%\acp-mcp\config.json` (replace the
+Select refined explicitly in `%USERPROFILE%\.acp-mcp.json` (replace the
 placeholder with the actual absolute executable path; config paths do not expand
 environment variables):
 
@@ -241,9 +241,9 @@ combinations. The Claude adapter exposes an upstream experimental v2 mode; the
 bridge enables it only when Claude is explicitly configured for v2. ACP v2
 remains a draft.
 
-Protocol selection is per agent in `%APPDATA%\acp-mcp\config.json` on Windows
-(the normal user config path on other platforms). Omitted `acpProtocol` means
-`v1`, preserving the existing default. For example:
+Protocol selection is per agent in `%USERPROFILE%\.acp-mcp.json` on Windows or
+`$HOME/.acp-mcp.json` on POSIX. Omitted `acpProtocol` means `v1`, preserving the
+existing default. For example:
 
 ```json
 {
@@ -328,7 +328,7 @@ and extract the entire archive in a user-local directory such as
 `%LOCALAPPDATA%\acp-mcp\agents\antigravity\<version>\`. Keep
 `localharness_external.exe` alongside `agy_acp_server.exe`; the server needs
 both. Then configure `agents.antigravity.command` in
-`%APPDATA%\acp-mcp\config.json` to the absolute path of `agy_acp_server.exe` and
+`%USERPROFILE%\.acp-mcp.json` to the absolute path of `agy_acp_server.exe` and
 set `args` to `[]`. For example:
 
 ```json
@@ -376,12 +376,22 @@ does not switch implementations automatically or merge their model catalogs.
 
 ## Agent configuration
 
-Pass `--config <path>` to load an explicit JSON config. On Windows the default
-is `%APPDATA%\acp-mcp\config.json`; elsewhere it is
-`$XDG_CONFIG_HOME/acp-mcp/config.json` or `~/.config/acp-mcp/config.json`. When
-the default file is absent, built-in profiles remain available. An explicit
-`--config` path must exist and be a valid config; acp-mcp reports an error
-instead of silently using built-in defaults.
+Without `--config`, acp-mcp loads `~/.acp-mcp.json` (Windows:
+`%USERPROFILE%\.acp-mcp.json`) and then discovers `.acp-mcp.json` files from the
+operation's working directory up to the filesystem root. Project files are
+applied outermost to nearest, so the nearest project setting wins. Objects merge
+recursively, arrays replace, and scalars replace. The home file is not applied
+twice if it is also an ancestor. Missing files are optional; built-in profiles
+remain available.
+
+The effective project context is resolved for each operation that accepts a
+`cwd` (`run_task`, session creation/load, `list_models`, and `list_agents`). If
+omitted, the MCP process cwd is used. A managed session keeps the configuration
+resolved when it was created or loaded; edits affect later operations/sessions.
+
+Pass `--config <path>` for deterministic exact-file configuration. This loads
+only that file: home and project discovery are disabled. A missing or invalid
+explicit file is an error and never falls back.
 
 ```json
 {
@@ -399,6 +409,106 @@ instead of silently using built-in defaults.
 Known agent fields are validated with field-specific errors. Unknown fields are
 currently allowed for forward-compatible configuration; they do not add behavior
 unless acp-mcp or that profile consumes them.
+
+Home and explicit configs are trusted launch configuration sources and may
+define executable, arguments, and environment. Auto-discovered project configs
+are restricted to model policy and closed built-in implementation choices such
+as Antigravity `official`, `refined`, or `agy`; they cannot set `command`,
+`args`, or `env`. This prevents opening a repository from launching an arbitrary
+project-selected executable.
+
+### Model policy
+
+Per-agent policy uses exact live ACP model IDs and simple `*`/`?` patterns.
+`allowedModels` limits the advertised catalog when present; `deniedModels`
+subtracts from it and always wins. An explicit model request cannot bypass these
+rules. If no configured default exists, acp-mcp leaves the downstream-selected
+model unchanged. It never invents models, silently switches models, or retries
+another choice.
+
+An exact `default.model` or abstract `default.modelSize` can be configured; the
+two are mutually exclusive. An MCP request's exact `model` or `modelSize`
+overrides that selector, and request `thinkingEffort` overrides the configured
+default effort. Policy filtering still applies. The generic `set_config_option`
+tool also enforces allow/deny policy when changing a model.
+
+`modelSize` is a user-configured family-position abstraction with exactly four
+values: `small`, `medium`, `large`, and `xlarge`. It is independent of thinking
+effort and is not a capability, quality, speed, or cost ranking. For example, a
+user may map Claude Haiku/Sonnet/Opus/Fable or OpenAI Luna/Terra/Sol/Astra to
+those positions; the runtime does not infer mappings from names.
+
+Normalized `thinkingEffort` values are `low`, `medium`, `high`, `xhigh`, `max`,
+and `ultra`. Concrete requests fail if unsupported. `max` and `ultra` saturate
+at the highest effort advertised for the selected model. For effort-encoded
+model IDs, configure each exact variant explicitly. No model-size candidate
+lists or hidden fallback are supported.
+
+For downstreams that expose effort separately, map normalized values to the
+advertised ACP config option and values, for example:
+
+```json
+{
+  "thinkingEffort": {
+    "configOption": "thought_level",
+    "values": { "low": "low", "medium": "medium", "high": "high" }
+  },
+  "modelSizes": {
+    "large": { "model": "opus", "maxThinkingEffort": "high" }
+  }
+}
+```
+
+Only values present in the live ACP advertisement can be selected. `max` and
+`ultra` cap at the highest mapped and currently advertised effort; a concrete
+unsupported effort returns an error.
+
+Example for the `agy` Antigravity ACP, whose adapter advertises exact
+effort-suffixed IDs (availability depends on the current ACP catalog and account
+entitlement):
+
+```json
+{
+  "agents": {
+    "antigravity": {
+      "implementation": "agy",
+      "models": {
+        "allowedModels": ["claude-*", "gemini-*"],
+        "deniedModels": ["gpt-oss-*"],
+        "default": { "modelSize": "large", "thinkingEffort": "max" },
+        "modelSizes": {
+          "medium": {
+            "modelsByThinkingEffort": {
+              "low": "claude-sonnet-5-5-low",
+              "medium": "claude-sonnet-5-5-medium",
+              "high": "claude-sonnet-5-5-high"
+            }
+          },
+          "large": {
+            "modelsByThinkingEffort": {
+              "low": "claude-opus-5-5-low",
+              "medium": "claude-opus-5-5-medium",
+              "high": "claude-opus-5-5-high"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Project configs can inherit home model-size mappings and override only a
+specific default. For example, a repository `.acp-mcp.json` can set
+`agents.antigravity.models.default` to
+`{ "modelSize": "medium",
+"thinkingEffort": "high" }`; a nested project dotfile
+can set it to `{ "modelSize": "large", "thinkingEffort": "ultra" }`. The more
+specific project selector wins while inherited mappings remain in effect.
+Claude-family users commonly map small/medium/large/xlarge to
+Haiku/Sonnet/Opus/Fable; OpenAI-family users may map them to
+Luna/Terra/Sol/Astra. These are user policy examples, not names inferred by
+acp-mcp.
 
 Configured agents run with the current user's OS permissions. The bridge does
 not sandbox subprocesses. ACP permission policy controls responses to

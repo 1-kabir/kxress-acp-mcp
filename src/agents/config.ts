@@ -1,3 +1,8 @@
+import {
+  type AgentModelPolicy,
+  validateModelPolicy,
+} from "../models/policy.ts";
+
 export interface AgentDefinition {
   command: string;
   args: string[];
@@ -21,6 +26,7 @@ export interface AgentDefinition {
   }>;
   /** Environment values which must resolve to executable files before launch. */
   requiredExecutableEnv?: string[];
+  models?: AgentModelPolicy;
 }
 
 export type AgentMap = Record<string, AgentDefinition>;
@@ -49,17 +55,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function defaultConfigPath(): string {
-  if (Deno.build.os === "windows") {
-    const appData = Deno.env.get("APPDATA");
-    if (!appData) throw new Error("APPDATA is not set; pass --config <path>");
-    return `${appData}\\acp-mcp\\config.json`;
+  const home = Deno.build.os === "windows"
+    ? Deno.env.get("USERPROFILE")
+    : Deno.env.get("HOME");
+  if (!home) {
+    throw new Error(
+      `${Deno.build.os === "windows" ? "USERPROFILE" : "HOME"} is not set`,
+    );
   }
-  const configHome = Deno.env.get("XDG_CONFIG_HOME") ??
-    `${Deno.env.get("HOME")}/.config`;
-  return `${configHome}/acp-mcp/config.json`;
+  return `${home}${Deno.build.os === "windows" ? "\\" : "/"}.acp-mcp.json`;
 }
 
-export async function loadAgents(configPath?: string): Promise<AgentMap> {
+export function builtInAgents(): AgentMap {
   const antigravityCommand = Deno.build.os === "windows"
     ? "agy_acp_server"
     : "agy_acp_server.par";
@@ -105,6 +112,12 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
         "Install Google Antigravity ACP from the official Agent Client Protocol Registry. Configure the executable's absolute path in the acp-mcp agent config (Windows: agy_acp_server.exe); changing PATH is not required.",
     },
   };
+  return agents;
+}
+
+function antigravityProfiles(
+  agents: AgentMap,
+): Record<"official" | "refined" | "agy", AgentDefinition> {
   const localAppData = Deno.build.os === "windows"
     ? Deno.env.get("LOCALAPPDATA")
     : undefined;
@@ -112,10 +125,7 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
       Deno.build.arch === "x86_64" && localAppData
     ? antigravityAgyAcpInstallPath(localAppData)
     : "agy-acp-windows-x64.exe";
-  const antigravityImplementations: Record<
-    "official" | "refined" | "agy",
-    AgentDefinition
-  > = {
+  return {
     official: agents.antigravity,
     refined: {
       command: "refined-antigravity-acp",
@@ -140,15 +150,125 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
       requiredExecutableEnv: ["AGY_BIN"],
     },
   };
-  const explicitConfigPath = configPath !== undefined;
-  const path = configPath ?? defaultConfigPath();
+}
+
+export function parseAgentConfig(
+  parsed: unknown,
+  path = "<configuration>",
+): AgentMap {
+  const agents = builtInAgents();
+  if (!isRecord(parsed)) {
+    throw new Error(`Config file '${path}' must contain a JSON object`);
+  }
+  if (parsed.agents === undefined) return agents;
+  if (!isRecord(parsed.agents)) {
+    throw new Error(`Config file '${path}' must contain an 'agents' object`);
+  }
+
+  const antigravityImplementations = antigravityProfiles(agents);
+  for (const [id, rawDefinition] of Object.entries(parsed.agents)) {
+    if (!isRecord(rawDefinition)) {
+      throw new Error(
+        `Config file '${path}': agent '${id}' must be a JSON object`,
+      );
+    }
+    const def = rawDefinition as Partial<AgentDefinition>;
+    if (!id) {
+      throw new Error(`Config file '${path}': agent ID must not be empty`);
+    }
+    if (def.implementation !== undefined) {
+      if (id !== "antigravity") {
+        throw new Error(
+          `Config file '${path}': agent '${id}' implementation is only valid for 'antigravity'`,
+        );
+      }
+      if (
+        def.implementation !== "official" && def.implementation !== "refined" &&
+        def.implementation !== "agy"
+      ) {
+        throw new Error(
+          `Config file '${path}': agent 'antigravity' implementation must be 'official', 'refined', or 'agy'`,
+        );
+      }
+    }
+    const builtIn = id === "antigravity"
+      ? antigravityImplementations[def.implementation ?? "official"]
+      : agents[id];
+    if (
+      def.command !== undefined &&
+      (typeof def.command !== "string" || !def.command.trim())
+    ) {
+      throw new Error(
+        `Config file '${path}': agent '${id}' command must be a non-empty string`,
+      );
+    }
+    if (def.command === undefined && !builtIn) {
+      throw new Error(
+        `Config file '${path}': agent '${id}' command must be a non-empty string`,
+      );
+    }
+    if (
+      def.args !== undefined && (!Array.isArray(def.args) ||
+        !def.args.every((x) => typeof x === "string"))
+    ) {
+      throw new Error(
+        `Config file '${path}': agent '${id}' args must be an array of strings`,
+      );
+    }
+    if (def.args === undefined && !builtIn) {
+      throw new Error(
+        `Config file '${path}': agent '${id}' args must be an array of strings`,
+      );
+    }
+    if (def.env !== undefined) {
+      if (!isRecord(def.env)) {
+        throw new Error(
+          `Config file '${path}': agent '${id}' env must be an object of string values`,
+        );
+      }
+      for (const [name, value] of Object.entries(def.env)) {
+        if (typeof value !== "string") {
+          throw new Error(
+            `Config file '${path}': agent '${id}' env value for '${name}' must be a string`,
+          );
+        }
+      }
+    }
+    if (
+      def.acpProtocol !== undefined && def.acpProtocol !== "v1" &&
+      def.acpProtocol !== "v2"
+    ) {
+      throw new Error(
+        `Config file '${path}': agent '${id}' acpProtocol must be 'v1' or 'v2'`,
+      );
+    }
+    const models = def.models === undefined
+      ? builtIn?.models
+      : validateModelPolicy(def.models, id, path);
+    agents[id] = {
+      ...builtIn,
+      ...rawDefinition,
+      models,
+      env: { ...builtIn?.env, ...def.env },
+      supportedProtocols: builtIn?.supportedProtocols ??
+        def.supportedProtocols,
+      protocolEnv: builtIn?.protocolEnv ?? def.protocolEnv,
+      acpProtocol: def.acpProtocol ?? builtIn?.acpProtocol ?? "v1",
+      implementation: builtIn?.implementation,
+      runtimePrerequisites: builtIn?.runtimePrerequisites,
+      requiredExecutableEnv: builtIn?.requiredExecutableEnv,
+    };
+  }
+  return agents;
+}
+
+export async function loadAgents(configPath?: string): Promise<AgentMap> {
+  if (configPath === undefined) return builtInAgents();
+  const path = configPath;
   let text: string;
   try {
     text = await Deno.readTextFile(path);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound && !explicitConfigPath) {
-      return agents;
-    }
     if (error instanceof Deno.errors.NotFound) {
       throw new Error(`Explicit config file does not exist: ${path}`);
     }
@@ -161,87 +281,5 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
   } catch {
     throw new Error(`Config file '${path}' is not valid JSON`);
   }
-  if (!isRecord(parsed)) {
-    throw new Error(`Config file '${path}' must contain a JSON object`);
-  }
-  if (!isRecord(parsed.agents)) {
-    throw new Error(`Config file '${path}' must contain an 'agents' object`);
-  }
-
-  for (const [id, rawDefinition] of Object.entries(parsed.agents)) {
-    if (!isRecord(rawDefinition)) {
-      throw new Error(`Agent '${id}' must be a JSON object`);
-    }
-    const def = rawDefinition as Partial<AgentDefinition>;
-    if (!id) {
-      throw new Error("Agent ID must not be empty");
-    }
-    if (def.implementation !== undefined) {
-      if (id !== "antigravity") {
-        throw new Error(
-          `Agent '${id}' implementation is only valid for 'antigravity'`,
-        );
-      }
-      if (
-        def.implementation !== "official" && def.implementation !== "refined" &&
-        def.implementation !== "agy"
-      ) {
-        throw new Error(
-          "Agent 'antigravity' implementation must be 'official', 'refined', or 'agy'",
-        );
-      }
-    }
-    const builtIn = id === "antigravity"
-      ? antigravityImplementations[def.implementation ?? "official"]
-      : agents[id];
-    if (
-      def.command !== undefined &&
-      (typeof def.command !== "string" || !def.command.trim())
-    ) {
-      throw new Error(`Agent '${id}' command must be a non-empty string`);
-    }
-    if (def.command === undefined && !builtIn) {
-      throw new Error(`Agent '${id}' command must be a non-empty string`);
-    }
-    if (
-      def.args !== undefined && (!Array.isArray(def.args) ||
-        !def.args.every((x) => typeof x === "string"))
-    ) {
-      throw new Error(`Agent '${id}' args must be an array of strings`);
-    }
-    if (def.args === undefined && !builtIn) {
-      throw new Error(`Agent '${id}' args must be an array of strings`);
-    }
-    if (def.env !== undefined) {
-      if (!isRecord(def.env)) {
-        throw new Error(`Agent '${id}' env must be an object of string values`);
-      }
-      for (const [name, value] of Object.entries(def.env)) {
-        if (typeof value !== "string") {
-          throw new Error(
-            `Agent '${id}' env value for '${name}' must be a string`,
-          );
-        }
-      }
-    }
-    if (
-      def.acpProtocol !== undefined && def.acpProtocol !== "v1" &&
-      def.acpProtocol !== "v2"
-    ) {
-      throw new Error(`Agent '${id}' acpProtocol must be 'v1' or 'v2'`);
-    }
-    agents[id] = {
-      ...builtIn,
-      ...rawDefinition,
-      env: { ...builtIn?.env, ...def.env },
-      supportedProtocols: builtIn?.supportedProtocols ??
-        def.supportedProtocols,
-      protocolEnv: builtIn?.protocolEnv ?? def.protocolEnv,
-      acpProtocol: def.acpProtocol ?? builtIn?.acpProtocol ?? "v1",
-      implementation: builtIn?.implementation,
-      runtimePrerequisites: builtIn?.runtimePrerequisites,
-      requiredExecutableEnv: builtIn?.requiredExecutableEnv,
-    };
-  }
-  return agents;
+  return parseAgentConfig(parsed, path);
 }

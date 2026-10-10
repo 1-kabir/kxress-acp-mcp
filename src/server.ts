@@ -1,13 +1,24 @@
 import process from "node:process";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
-import { loadAgents } from "./agents/config.ts";
+import { resolveConfiguration } from "./config/discovery.ts";
 import { createMcpServer } from "./mcp/server.ts";
 import { SessionManager } from "./sessions/manager.ts";
 
 export async function startMcpServer(configPath?: string): Promise<void> {
-  const agents = await loadAgents(configPath);
+  const startup = await resolveConfiguration({
+    explicitConfigPath: configPath,
+    cwd: Deno.cwd(),
+    includeProject: false,
+  });
+  const agents = startup.agents;
   const manager = new SessionManager(agents);
-  const server = createMcpServer(agents, manager);
+  const server = createMcpServer(agents, manager, {
+    resolveConfiguration: (cwd) =>
+      resolveConfiguration({
+        explicitConfigPath: configPath,
+        cwd: cwd ?? Deno.cwd(),
+      }),
+  });
   let closing: Promise<void> | undefined;
   const closeSessions = () => closing ??= manager.closeAll();
   try {
