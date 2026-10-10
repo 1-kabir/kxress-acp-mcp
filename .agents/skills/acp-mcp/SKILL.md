@@ -72,14 +72,23 @@ asks about configured agents and models.
 - Implicit config loads `~/.acp-mcp.json`, then ancestor `.acp-mcp.json` files
   from outermost to nearest relative to the operation cwd. Objects merge
   recursively; arrays replace. Exact `--config <path>` disables discovery.
+- Built-in profiles are launch presets. Trusted home or exact config may define
+  another stdio ACP agent with `agents.<id>.command`, optional structured
+  `args`/`env`, and optional `acpProtocol` (`v1` by default). Project config
+  cannot add or change executable, args, env, or protocol; it may apply safe
+  model policy to a custom agent already defined by trusted config. Use the
+  ordinary connected `acp_mcp` tools for custom agents too; no alternate
+  launcher is needed.
 - Project config may set model policy and the closed Antigravity implementation
   selector, but cannot provide executable commands, args, or environment. Home
   and exact explicit config are trusted launch configuration.
 - Use advertised exact model IDs. `modelSize` values are `small`, `medium`,
-  `large`, `xlarge`; normalized `thinkingEffort` values are `low`, `medium`,
-  `high`, `xhigh`, `max`, `ultra`. Size is a configured family position, not a
-  capability ranking. `max`/`ultra` cap at the highest supported effort;
-  concrete unsupported efforts fail.
+  `large`, `xlarge`; normalized `thinkingEffort` values are `off`, `low`,
+  `medium`, `high`, `xhigh`, `max`, `ultra`. Size is a configured family
+  position, not a capability ranking. Resolve effort against the live available
+  normalized levels: use an exact level if present, otherwise the highest level
+  no greater than requested, or the lowest available if all are higher. `off`
+  selects zero effort when available and otherwise the lowest level.
 - Apply `allowedModels` and `deniedModels` to explicit requests too; deny wins.
   Never invent a mapping, select a substitute model, or retry another choice.
   Live ACP advertisement remains authoritative. Sessions retain policy resolved
