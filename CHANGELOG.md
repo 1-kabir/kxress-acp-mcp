@@ -6,6 +6,9 @@
 
 - Support native Linux x86_64 builds, local release bundles, and user-local
   installation alongside Windows x86_64.
+- Package Windows and Linux releases with the project license, third-party
+  notices, applicable dependency license texts, archive checksums, and
+  manifests.
 - Allow trusted configuration to register arbitrary stdio ACP agents through the
   existing generic runtime.
 - Normalize thinking-effort requests across the ordered `off` through `ultra`

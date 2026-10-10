@@ -1,7 +1,16 @@
-import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../src/version.ts";
+import {
+  checksumText,
+  createReleaseArchive,
+  extractReleaseArchive,
+  type ReleaseManifest,
+  releaseNames,
+  sha256File,
+  validatePackageManifest,
+  validateReleaseManifest,
+} from "./release_package.ts";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const windows = Deno.build.os === "windows";
@@ -17,13 +26,10 @@ const optInTestVariables = [
   "ACPMCP_CLAUDE_TEST",
 ];
 
-export interface ReleaseManifest {
-  product: "acp-mcp";
-  version: string;
-  target: string;
-  commit: string;
-  sha256: string;
-}
+export type { ReleaseManifest } from "./release_package.ts";
+export { checksumText, sha256Hex } from "./release_package.ts";
+
+const validateManifest = validateReleaseManifest;
 
 export function targetId(os = Deno.build.os, arch = Deno.build.arch): string {
   if ((os !== "windows" && os !== "linux") || arch !== "x86_64") {
@@ -37,20 +43,9 @@ export function targetId(os = Deno.build.os, arch = Deno.build.arch): string {
 export function artifactName(
   version: string,
   target: string,
-  os = Deno.build.os,
+  _os = Deno.build.os,
 ): string {
-  return `acp-mcp-${version}-${target}${os === "windows" ? ".exe" : ""}`;
-}
-
-export function sha256Hex(data: Uint8Array): string {
-  return createHash("sha256").update(data).digest("hex");
-}
-
-export function checksumText(hash: string, filename: string): string {
-  if (!/^[a-f0-9]{64}$/.test(hash)) {
-    throw new Error("SHA-256 must be 64 lowercase hexadecimal characters");
-  }
-  return `${hash}  ${filename}\n`;
+  return releaseNames(version, target).archive;
 }
 
 export function assertCleanTreeStatus(status: string): void {
@@ -87,27 +82,6 @@ export async function ensureReleaseOutputRoot(
   await ensurePlainDirectory(expectedDist);
   await ensurePlainDirectory(expectedReleaseRoot);
   return expectedReleaseRoot;
-}
-
-function validateManifest(value: unknown): ReleaseManifest {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Release manifest must be a JSON object");
-  }
-  const manifest = value as Record<string, unknown>;
-  if (
-    manifest.product !== "acp-mcp" || typeof manifest.version !== "string" ||
-    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version) ||
-    typeof manifest.target !== "string" ||
-    typeof manifest.commit !== "string" ||
-    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(manifest.commit) ||
-    typeof manifest.sha256 !== "string" ||
-    !/^[a-f0-9]{64}$/.test(manifest.sha256)
-  ) {
-    throw new Error(
-      "Release manifest has invalid product, version, target, commit, or SHA-256 metadata",
-    );
-  }
-  return manifest as unknown as ReleaseManifest;
 }
 
 function parseChecksum(text: string, filename: string): string {
@@ -357,32 +331,32 @@ function offlineTestEnvironment(): Record<string, string> {
   return env;
 }
 
-async function sha256File(path: string): Promise<string> {
-  return sha256Hex(await Deno.readFile(path));
-}
-
 async function sameExistingRelease(
   finalDirectory: string,
   manifest: ReleaseManifest,
-  filename: string,
+  manifestName: string,
 ): Promise<boolean> {
   try {
     const currentManifest = validateManifest(
       JSON.parse(
-        await Deno.readTextFile(join(finalDirectory, "manifest.json")),
+        await Deno.readTextFile(join(finalDirectory, manifestName)),
       ),
     );
     const currentChecksum = await Deno.readTextFile(
-      join(finalDirectory, `${filename}.sha256`),
+      join(finalDirectory, `${manifest.archive}.sha256`),
     );
-    const currentHash = await sha256File(join(finalDirectory, filename));
+    const currentHash = await sha256File(
+      join(finalDirectory, manifest.archive),
+    );
     return currentManifest.product === manifest.product &&
       currentManifest.version === manifest.version &&
       currentManifest.target === manifest.target &&
       currentManifest.commit === manifest.commit &&
-      currentManifest.sha256 === manifest.sha256 &&
-      currentChecksum === checksumText(manifest.sha256, filename) &&
-      currentHash === manifest.sha256;
+      currentManifest.executableSha256 === manifest.executableSha256 &&
+      currentManifest.archiveSha256 === manifest.archiveSha256 &&
+      currentChecksum ===
+        checksumText(manifest.archiveSha256, manifest.archive) &&
+      currentHash === manifest.archiveSha256;
   } catch {
     return false;
   }
@@ -398,48 +372,60 @@ async function packageRelease(): Promise<void> {
       `Native target '${target}' does not match expected release target '${expectedTarget}'`,
     );
   }
-  const filename = artifactName(VERSION, target);
-  const buildHash = await sha256File(buildPath);
+  const names = releaseNames(VERSION, target);
+  const executableHash = await sha256File(buildPath);
   const stageDirectory = await Deno.makeTempDir({
     dir: releaseRoot,
     prefix: ".staging-",
   });
   const finalDirectory = join(releaseRoot, `acp-mcp-${VERSION}-${target}`);
   try {
-    const stagedArtifact = join(stageDirectory, filename);
-    await Deno.copyFile(buildPath, stagedArtifact);
-    if (!windows) await Deno.chmod(stagedArtifact, 0o755);
-    if (await sha256File(stagedArtifact) !== buildHash) {
-      throw new Error("Staged artifact hash differs from the validated build");
-    }
-    await smokeExecutable(stagedArtifact);
-    const manifest: ReleaseManifest = {
-      product: "acp-mcp",
+    const archivePath = join(stageDirectory, names.archive);
+    const manifest = await createReleaseArchive(archivePath, {
+      binaryPath: buildPath,
       version: VERSION,
-      target,
+      target: target as ReleaseManifest["target"],
       commit,
-      sha256: buildHash,
-    };
+      executableSha256: executableHash,
+      root: projectRoot,
+    });
+    const extracted = await Deno.makeTempDir({
+      prefix: "acp-mcp-release-verify-",
+    });
+    try {
+      await extractReleaseArchive(archivePath, target, extracted);
+      const stagedExecutable = join(extracted, names.executable);
+      if (await sha256File(stagedExecutable) !== executableHash) {
+        throw new Error("Packaged executable hash differs from the build");
+      }
+      await smokeExecutable(stagedExecutable);
+    } finally {
+      await Deno.remove(extracted, { recursive: true });
+    }
+    const manifestName = names.manifest;
+    const archiveHash = manifest.archiveSha256;
     await Deno.writeTextFile(
-      join(stageDirectory, `${filename}.sha256`),
-      checksumText(buildHash, filename),
+      join(stageDirectory, names.checksum),
+      checksumText(archiveHash, names.archive),
     );
     await Deno.writeTextFile(
-      join(stageDirectory, "manifest.json"),
+      join(stageDirectory, manifestName),
       `${JSON.stringify(manifest, null, 2)}\n`,
     );
     const manifestOnDisk = validateManifest(
       JSON.parse(
-        await Deno.readTextFile(join(stageDirectory, "manifest.json")),
+        await Deno.readTextFile(join(stageDirectory, manifestName)),
       ),
     );
     const checksumOnDisk = parseChecksum(
-      await Deno.readTextFile(join(stageDirectory, `${filename}.sha256`)),
-      filename,
+      await Deno.readTextFile(join(stageDirectory, names.checksum)),
+      names.archive,
     );
     if (
-      manifestOnDisk.sha256 !== buildHash || checksumOnDisk !== buildHash ||
-      await sha256File(stagedArtifact) !== buildHash
+      manifestOnDisk.archiveSha256 !== archiveHash ||
+      manifestOnDisk.executableSha256 !== executableHash ||
+      checksumOnDisk !== archiveHash ||
+      await sha256File(archivePath) !== archiveHash
     ) throw new Error("Release package verification failed");
 
     try {
@@ -449,10 +435,10 @@ async function packageRelease(): Promise<void> {
           `Release output exists but is not a plain directory: ${finalDirectory}`,
         );
       }
-      if (await sameExistingRelease(finalDirectory, manifest, filename)) {
+      if (await sameExistingRelease(finalDirectory, manifest, manifestName)) {
         await Deno.remove(stageDirectory, { recursive: true });
         console.log("Local release already exists and matches this build.");
-        printReleaseSummary(finalDirectory, filename, manifest);
+        printReleaseSummary(finalDirectory, names.archive, manifest);
         return;
       }
       throw new Error(
@@ -463,7 +449,7 @@ async function packageRelease(): Promise<void> {
     }
     await Deno.mkdir(releaseRoot, { recursive: true });
     await Deno.rename(stageDirectory, finalDirectory);
-    printReleaseSummary(finalDirectory, filename, manifest);
+    printReleaseSummary(finalDirectory, names.archive, manifest);
   } finally {
     try {
       await Deno.remove(stageDirectory, { recursive: true });
@@ -479,8 +465,9 @@ function printReleaseSummary(
   console.log(`Version: ${manifest.version}`);
   console.log(`Target: ${manifest.target}`);
   console.log(`Source commit: ${manifest.commit}`);
-  console.log(`Artifact: ${join(directory, filename)}`);
-  console.log(`SHA-256: ${manifest.sha256}`);
+  console.log(`Archive: ${join(directory, filename)}`);
+  console.log(`Archive SHA-256: ${manifest.archiveSha256}`);
+  console.log(`Executable SHA-256: ${manifest.executableSha256}`);
 }
 
 export function defaultInstallDestination(
@@ -504,14 +491,9 @@ export function defaultInstallDestination(
   );
 }
 
-async function readInstallManifest(directory: string): Promise<unknown> {
-  try {
-    return JSON.parse(
-      await Deno.readTextFile(join(directory, "manifest.json")),
-    );
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
+async function readInstallManifest(
+  directory: string,
+): Promise<ReleaseManifest> {
   const suffix = `-${targetId()}.manifest.json`;
   const matches: string[] = [];
   for await (const entry of Deno.readDir(directory)) {
@@ -522,10 +504,12 @@ async function readInstallManifest(directory: string): Promise<unknown> {
   }
   if (matches.length !== 1) {
     throw new Error(
-      `Release directory must contain manifest.json or exactly one ${targetId()} manifest`,
+      `Release directory must contain exactly one ${targetId()} manifest`,
     );
   }
-  return JSON.parse(await Deno.readTextFile(join(directory, matches[0])));
+  return validateReleaseManifest(
+    JSON.parse(await Deno.readTextFile(join(directory, matches[0]))),
+  );
 }
 
 async function validateReleaseDirectory(
@@ -533,35 +517,83 @@ async function validateReleaseDirectory(
   versionProbe: VersionProbe = probeVersion,
 ): Promise<{
   artifact: string;
+  archivePath: string;
+  temporaryDirectory: string;
   hash: string;
   manifest: ReleaseManifest;
 }> {
-  const manifest = validateManifest(await readInstallManifest(directory));
+  const manifest = await readInstallManifest(directory);
   const target = targetId();
   if (manifest.target !== target) {
     throw new Error(
       `Release target '${manifest.target}' does not match this host '${target}'`,
     );
   }
-  const filename = artifactName(manifest.version, target);
-  const artifact = join(directory, filename);
-  const info = await Deno.lstat(artifact);
+  const names = releaseNames(manifest.version, target);
+  if (manifest.archive !== names.archive) {
+    throw new Error("Release archive name does not match its manifest");
+  }
+  const archivePath = join(directory, names.archive);
+  const info = await Deno.lstat(archivePath);
   if (!info.isFile || info.isSymlink) {
-    throw new Error(`Release artifact is not a regular file: ${artifact}`);
+    throw new Error(`Release archive is not a regular file: ${archivePath}`);
   }
   const expectedHash = parseChecksum(
-    await Deno.readTextFile(join(directory, `${filename}.sha256`)),
-    filename,
+    await Deno.readTextFile(join(directory, names.checksum)),
+    names.archive,
   );
-  const actualHash = await sha256File(artifact);
-  if (manifest.sha256 !== expectedHash || actualHash !== expectedHash) {
-    throw new Error(`Release SHA-256 verification failed for '${filename}'`);
+  const actualHash = await sha256File(archivePath);
+  if (manifest.archiveSha256 !== expectedHash || actualHash !== expectedHash) {
+    throw new Error(
+      `Release SHA-256 verification failed for '${names.archive}'`,
+    );
   }
-  const version = await versionProbe(artifact, directory);
-  if (version !== `acp-mcp ${manifest.version}`) {
-    throw new Error("Release artifact version does not match its manifest");
+  const temporaryDirectory = await Deno.makeTempDir({
+    prefix: "acp-mcp-install-package-",
+  });
+  try {
+    await extractReleaseArchive(archivePath, target, temporaryDirectory);
+    const artifact = join(temporaryDirectory, names.executable);
+    const embedded = validatePackageManifest(
+      JSON.parse(
+        await Deno.readTextFile(join(temporaryDirectory, "manifest.json")),
+      ),
+    );
+    if (
+      embedded.product !== manifest.product ||
+      embedded.version !== manifest.version ||
+      embedded.target !== manifest.target ||
+      embedded.commit !== manifest.commit ||
+      embedded.executable !== manifest.executable ||
+      embedded.executableSha256 !== manifest.executableSha256
+    ) {
+      throw new Error(
+        "Embedded package manifest does not match release metadata",
+      );
+    }
+    const executableHash = await sha256File(artifact);
+    if (executableHash !== manifest.executableSha256) {
+      throw new Error(
+        "Packaged executable SHA-256 does not match its manifest",
+      );
+    }
+    const version = await versionProbe(artifact, temporaryDirectory);
+    if (version !== `acp-mcp ${manifest.version}`) {
+      throw new Error(
+        "Packaged executable version does not match its manifest",
+      );
+    }
+    return {
+      artifact,
+      archivePath,
+      temporaryDirectory,
+      hash: executableHash,
+      manifest,
+    };
+  } catch (error) {
+    await Deno.remove(temporaryDirectory, { recursive: true });
+    throw error;
   }
-  return { artifact, hash: actualHash, manifest };
 }
 
 export async function installRelease(
@@ -573,73 +605,78 @@ export async function installRelease(
     resolve(releaseDirectory),
     versionProbe,
   );
-  const resolvedDestination = resolve(destination);
-  if (
-    (windows
-      ? resolvedDestination.toLowerCase() === release.artifact.toLowerCase()
-      : resolvedDestination === release.artifact)
-  ) {
-    throw new Error(
-      "Install destination must differ from the release artifact",
-    );
-  }
-  const parent = dirname(resolvedDestination);
-  await Deno.mkdir(parent, { recursive: true });
   try {
-    const info = await Deno.lstat(resolvedDestination);
-    if (!info.isFile || info.isSymlink) {
+    const resolvedDestination = resolve(destination);
+    if (
+      (windows
+        ? resolvedDestination.toLowerCase() ===
+          release.archivePath.toLowerCase()
+        : resolvedDestination === release.archivePath)
+    ) {
       throw new Error(
-        `Install destination is not a regular file: ${resolvedDestination}`,
+        "Install destination must differ from the release archive",
       );
     }
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
-
-  const staged = join(
-    parent,
-    `.${executableName.replace(/\.exe$/i, "")}.install-${crypto.randomUUID()}${
-      windows ? ".exe" : ""
-    }`,
-  );
-  try {
-    await Deno.copyFile(release.artifact, staged);
-    if (!windows) await Deno.chmod(staged, 0o755);
-    if (await sha256File(staged) !== release.hash) {
-      throw new Error("Staged install copy failed SHA-256 verification");
-    }
-    const stagedVersion = await versionProbe(staged, parent);
-    if (stagedVersion !== `acp-mcp ${release.manifest.version}`) {
-      throw new Error("Staged install copy reports an unexpected version");
-    }
+    const parent = dirname(resolvedDestination);
+    await Deno.mkdir(parent, { recursive: true });
     try {
-      await Deno.rename(staged, resolvedDestination);
+      const info = await Deno.lstat(resolvedDestination);
+      if (!info.isFile || info.isSymlink) {
+        throw new Error(
+          `Install destination is not a regular file: ${resolvedDestination}`,
+        );
+      }
     } catch (error) {
-      throw new Error(
-        `Could not replace '${resolvedDestination}'. Close programs using acp-mcp and retry. ${
-          String(error)
-        }`,
-      );
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
     }
-    const installedHash = await sha256File(resolvedDestination);
-    if (installedHash !== release.hash) {
-      throw new Error(
-        "Installed executable SHA-256 differs from release artifact",
-      );
-    }
-    const versionText = await versionProbe(resolvedDestination, parent);
-    if (versionText !== `acp-mcp ${release.manifest.version}`) {
-      throw new Error("Installed executable version verification failed");
-    }
-    return {
-      hash: installedHash,
-      version: versionText,
-      destination: resolvedDestination,
-    };
-  } finally {
+
+    const staged = join(
+      parent,
+      `.${
+        executableName.replace(/\.exe$/i, "")
+      }.install-${crypto.randomUUID()}${windows ? ".exe" : ""}`,
+    );
     try {
-      await Deno.remove(staged);
-    } catch { /* Renamed or already removed. */ }
+      await Deno.copyFile(release.artifact, staged);
+      if (!windows) await Deno.chmod(staged, 0o755);
+      if (await sha256File(staged) !== release.hash) {
+        throw new Error("Staged install copy failed SHA-256 verification");
+      }
+      const stagedVersion = await versionProbe(staged, parent);
+      if (stagedVersion !== `acp-mcp ${release.manifest.version}`) {
+        throw new Error("Staged install copy reports an unexpected version");
+      }
+      try {
+        await Deno.rename(staged, resolvedDestination);
+      } catch (error) {
+        throw new Error(
+          `Could not replace '${resolvedDestination}'. Close programs using acp-mcp and retry. ${
+            String(error)
+          }`,
+        );
+      }
+      const installedHash = await sha256File(resolvedDestination);
+      if (installedHash !== release.hash) {
+        throw new Error(
+          "Installed executable SHA-256 differs from release artifact",
+        );
+      }
+      const versionText = await versionProbe(resolvedDestination, parent);
+      if (versionText !== `acp-mcp ${release.manifest.version}`) {
+        throw new Error("Installed executable version verification failed");
+      }
+      return {
+        hash: installedHash,
+        version: versionText,
+        destination: resolvedDestination,
+      };
+    } finally {
+      try {
+        await Deno.remove(staged);
+      } catch { /* Renamed or already removed. */ }
+    }
+  } finally {
+    await Deno.remove(release.temporaryDirectory, { recursive: true });
   }
 }
 
@@ -681,7 +718,8 @@ async function main(args: string[]): Promise<void> {
       "  deno task install --release-dir <path> [--destination <executable-path>]",
       "",
       "release builds and validates the native Windows or Linux x86_64 executable,",
-      "then packages it with SHA-256 and a deterministic manifest.",
+      "then packages it with project and third-party licenses, archive checksum,",
+      "and manifest. install consumes the archive/checksum/manifest directory.",
     ].join("\n"));
     return;
   }

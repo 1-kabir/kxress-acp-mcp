@@ -189,56 +189,65 @@ expose.
 ### Download a release
 
 The version-tagged release workflow builds native Windows x86_64 and Linux
-x86_64 executables. Each GitHub Release includes both binaries, a SHA-256
-sidecar, and a manifest for each target. The workflow publishes only when the
-tag version matches `src/version.ts`, and publishes only if both native builds
-and smoke tests pass.
+x86_64 packages. Each package contains the executable, the acp-mcp WTFPL
+license, third-party notices and applicable license texts, and an embedded
+manifest. GitHub Releases also include a SHA-256 sidecar for each archive and a
+manifest that records the archive and executable hashes. The workflow publishes
+only when the tag version matches `src/version.ts`, and only if both native
+builds and smoke tests pass.
 
 Published downloads appear under
 [GitHub Releases](https://github.com/kxress/acp-mcp/releases). SHA-256 lets you
 compare the downloaded bytes with the published checksum; it does not
 authenticate the publisher.
 
-On Windows, download the `.exe`, optionally compare its hash with the `.sha256`
-asset, then place it in a stable location. For example:
+On Windows, download the ZIP, checksum, and manifest. Verify the archive and
+extract it to a stable application directory. The extracted folder keeps the
+executable and its license material together:
 
 ```powershell
 $version = "0.2.1"
-$artifact = ".\acp-mcp-$version-windows-x86_64.exe"
-$expected = (Get-Content "$artifact.sha256").Split()[0]
-$actual = (Get-FileHash $artifact -Algorithm SHA256).Hash.ToLower()
+$archive = ".\acp-mcp-$version-windows-x86_64.zip"
+$expected = (Get-Content "${archive}.sha256").Split()[0]
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
 if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 $install = Join-Path $env:LOCALAPPDATA "Programs\acp-mcp"
-New-Item -ItemType Directory -Force $install | Out-Null
-Move-Item $artifact (Join-Path $install "acp-mcp.exe")
+Expand-Archive -LiteralPath $archive -DestinationPath $install -Force
 & (Join-Path $install "acp-mcp.exe") --version
 ```
 
 Configure your MCP host to launch that executable. An absolute executable path
 is the most predictable choice.
 
-On Linux x86_64, download the binary and checksum, then install it in your user
-bin directory:
+On Linux x86_64, download the tar.gz, checksum, and manifest. Verify and extract
+the package, then install the executable in your user-local bin directory. Keep
+the extracted package directory with its license files:
 
 ```sh
 version=0.2.1
-sha256sum -c "acp-mcp-$version-linux-x86_64.sha256"
-mkdir -p "$HOME/.local/bin"
-install -m 0755 "acp-mcp-$version-linux-x86_64" "$HOME/.local/bin/acp-mcp"
+archive="acp-mcp-$version-linux-x86_64.tar.gz"
+sha256sum -c "$archive.sha256"
+mkdir -p "$HOME/.local/share/acp-mcp/$version" "$HOME/.local/bin"
+tar -xzf "$archive" -C "$HOME/.local/share/acp-mcp/$version"
+install -m 0755 "$HOME/.local/share/acp-mcp/$version/acp-mcp" "$HOME/.local/bin/acp-mcp"
 "$HOME/.local/bin/acp-mcp" --version
 ```
 
-The repository installer also accepts a directory containing the three
-downloaded Linux release assets and installs by default to
-`$HOME/.local/bin/acp-mcp`:
+The repository installer can also install from a directory containing the
+archive, checksum, and target manifest. It verifies the archive and embedded
+executable before replacing the installed binary:
 
 ```sh
 deno task install --release-dir ./acp-mcp-release-assets
 ```
 
-This installer is repository tooling; the installed executable does not require
-Deno. If `$HOME/.local/bin` is not on `PATH`, the installer reports that and
-does not modify shell startup files.
+On Windows, run the same task from the repository checkout; it installs by
+default to `%LOCALAPPDATA%\Programs\acp-mcp`. On Linux it installs to
+`$HOME/.local/bin/acp-mcp` and reports if that directory is not on `PATH`.
+
+The package archive checksum covers the downloadable archive. Its manifest
+records the archive hash and the executable hash separately. SHA-256 allows
+byte-for-byte comparison; it does not authenticate the publisher.
 
 The installed executable is native. Deno, mise, and the source checkout are not
 required at runtime.

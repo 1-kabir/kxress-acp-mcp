@@ -43,10 +43,10 @@ jobs:
           ACPMCP_EXPECTED_RELEASE_TARGET: ${{ matrix.target }}
         run: deno task release
 
-      - name: Stage uniquely named release assets
+      - name: Stage licensed archive, checksum, and manifest
         env:
           ACPMCP_EXPECTED_RELEASE_TARGET: ${{ matrix.target }}
-        run: deno run --allow-env=ACPMCP_EXPECTED_RELEASE_TARGET --allow-read --allow-write scripts/github_release_assets.ts stage
+        run: deno run --allow-env=ACPMCP_EXPECTED_RELEASE_TARGET --allow-read --allow-write --allow-run scripts/github_release_assets.ts stage
 
       - uses: actions/upload-artifact@v4
         with:

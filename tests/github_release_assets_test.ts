@@ -1,10 +1,44 @@
 import {
   assertTagMatchesVersion,
   releaseAssetNames,
-  sha256Hex,
   stageReleaseAssets,
 } from "../scripts/github_release_assets.ts";
+import {
+  createReleaseArchive,
+  extractReleaseArchive,
+  releaseNames,
+  sha256File,
+  sha256Hex,
+} from "../scripts/release_package.ts";
 import { VERSION } from "../src/version.ts";
+
+async function fixtureBundle(
+  root: string,
+  target: "windows-x86_64" | "linux-x86_64",
+) {
+  const bundle = `${root}/bundle-${target}`;
+  await Deno.mkdir(bundle);
+  const names = releaseNames(VERSION, target);
+  const binary = `${root}/fixture-${target}`;
+  const bytes = new TextEncoder().encode(`native ${target} fixture`);
+  await Deno.writeFile(binary, bytes);
+  const manifest = await createReleaseArchive(`${bundle}/${names.archive}`, {
+    binaryPath: binary,
+    version: VERSION,
+    target,
+    commit: "a".repeat(40),
+    executableSha256: sha256Hex(bytes),
+  });
+  await Deno.writeTextFile(
+    `${bundle}/${names.checksum}`,
+    `${manifest.archiveSha256}  ${names.archive}\n`,
+  );
+  await Deno.writeTextFile(
+    `${bundle}/${names.manifest}`,
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+  return { bundle, names, manifest };
+}
 
 Deno.test("GitHub release tag must exactly match source version", () => {
   assertTagMatchesVersion(`v${VERSION}`, VERSION);
@@ -19,90 +53,81 @@ Deno.test("GitHub release tag must exactly match source version", () => {
   }
 });
 
-Deno.test("GitHub release asset names are target-specific", () => {
-  const windows = releaseAssetNames(VERSION, "windows-x86_64");
-  const linux = releaseAssetNames(VERSION, "linux-x86_64");
-  if (
-    windows.executable !== `acp-mcp-${VERSION}-windows-x86_64.exe` ||
-    windows.checksum !== `${windows.executable}.sha256` ||
-    windows.manifest !== `acp-mcp-${VERSION}-windows-x86_64.manifest.json` ||
-    linux.executable !== `acp-mcp-${VERSION}-linux-x86_64` ||
-    linux.checksum !== `${linux.executable}.sha256` ||
-    linux.manifest !== `acp-mcp-${VERSION}-linux-x86_64.manifest.json`
-  ) throw new Error("GitHub release asset names were incorrect");
-  let rejected = false;
-  try {
-    releaseAssetNames(VERSION, "macos-aarch64");
-  } catch {
-    rejected = true;
-  }
-  if (!rejected) throw new Error("Unsupported release target was accepted");
-});
-
-Deno.test("GitHub release staging verifies and preserves local manifest metadata", async () => {
+Deno.test("GitHub assets are self-contained licensed archives for both targets", async () => {
   const root = await Deno.makeTempDir({ prefix: "acp-mcp-gh-release-" });
-  const releaseDirectory = `${root}/bundle`;
-  const outputDirectory = `${root}/assets`;
-  await Deno.mkdir(releaseDirectory);
-  const names = releaseAssetNames(VERSION, "linux-x86_64");
-  const executableBytes = new TextEncoder().encode("native linux fixture");
-  const hash = sha256Hex(executableBytes);
-  const manifest = {
-    product: "acp-mcp",
-    version: VERSION,
-    target: "linux-x86_64",
-    commit: "a".repeat(40),
-    sha256: hash,
-    ignoredExtraField: "must not be published",
-  };
-  await Deno.writeFile(
-    `${releaseDirectory}/${names.executable}`,
-    executableBytes,
-  );
-  await Deno.writeTextFile(
-    `${releaseDirectory}/${names.executable}.sha256`,
-    `${hash}  ${names.executable}\n`,
-  );
-  await Deno.writeTextFile(
-    `${releaseDirectory}/manifest.json`,
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  );
   try {
-    const staged = await stageReleaseAssets(releaseDirectory, outputDirectory);
-    if (
-      staged.sort().join("\n") !== [
-        names.executable,
-        names.checksum,
-        names.manifest,
-      ].sort().join("\n")
-    ) throw new Error("Unexpected staged asset names");
-    if (
-      sha256Hex(
-          await Deno.readFile(`${outputDirectory}/${names.executable}`),
-        ) !==
-        hash ||
-      await Deno.readTextFile(`${outputDirectory}/${names.checksum}`) !==
-        `${hash}  ${names.executable}\n` ||
-      await Deno.readTextFile(`${outputDirectory}/${names.manifest}`) !==
-        `${
-          JSON.stringify(
-            {
-              product: manifest.product,
-              version: manifest.version,
-              target: manifest.target,
-              commit: manifest.commit,
-              sha256: manifest.sha256,
-            },
-            null,
-            2,
-          )
-        }\n`
-    ) throw new Error("Staged release metadata did not match the local bundle");
-    if (Deno.build.os !== "windows") {
-      const mode = (await Deno.stat(`${outputDirectory}/${names.executable}`))
-        .mode;
-      if (mode === null || (mode & 0o111) === 0) {
-        throw new Error("Staged Linux executable was not executable");
+    const targets = Deno.build.os === "windows"
+      ? ["windows-x86_64", "linux-x86_64"] as const
+      : ["linux-x86_64"] as const;
+    for (const target of targets) {
+      const fixture = await fixtureBundle(root, target);
+      const inputManifest = JSON.parse(
+        await Deno.readTextFile(`${fixture.bundle}/${fixture.names.manifest}`),
+      );
+      inputManifest.privatePath = "must-not-be-published";
+      await Deno.writeTextFile(
+        `${fixture.bundle}/${fixture.names.manifest}`,
+        JSON.stringify(inputManifest),
+      );
+      const output = `${root}/assets-${target}`;
+      const staged = await stageReleaseAssets(fixture.bundle, output);
+      const names = releaseAssetNames(VERSION, target);
+      if (
+        staged.sort().join("\n") !==
+          [names.archive, names.checksum, names.manifest].sort().join("\n")
+      ) throw new Error(`Unexpected GitHub asset set for ${target}`);
+      if (
+        await sha256File(`${output}/${names.archive}`) !==
+          fixture.manifest.archiveSha256 ||
+        await Deno.readTextFile(`${output}/${names.checksum}`) !==
+          `${fixture.manifest.archiveSha256}  ${names.archive}\n`
+      ) throw new Error(`Published archive checksum mismatch for ${target}`);
+      const publishedManifest = JSON.parse(
+        await Deno.readTextFile(`${output}/${names.manifest}`),
+      );
+      if (publishedManifest.privatePath !== undefined) {
+        throw new Error("Published manifest retained an untrusted extra field");
+      }
+
+      const extracted = `${root}/verify-${target}`;
+      await Deno.mkdir(extracted);
+      await extractReleaseArchive(
+        `${output}/${names.archive}`,
+        target,
+        extracted,
+      );
+      for (
+        const path of [
+          "LICENSE",
+          "THIRD_PARTY_NOTICES.txt",
+          "licenses/Apache-2.0.txt",
+          "licenses/MCP-SDK-MIT.txt",
+          "licenses/Zod-MIT.txt",
+          "manifest.json",
+        ]
+      ) {
+        try {
+          await Deno.stat(`${extracted}/${path}`);
+        } catch {
+          throw new Error(`${target} archive omitted ${path}`);
+        }
+      }
+      if (
+        !(await Deno.readTextFile(`${extracted}/LICENSE`)).includes(
+          "DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE",
+        ) ||
+        !(await Deno.readTextFile(`${extracted}/licenses/Apache-2.0.txt`))
+          .includes("Apache License") ||
+        !(await Deno.readTextFile(`${extracted}/licenses/MCP-SDK-MIT.txt`))
+          .includes("Copyright (c) 2024-2025 Model Context Protocol") ||
+        !(await Deno.readTextFile(`${extracted}/licenses/Zod-MIT.txt`))
+          .includes("Copyright (c) 2025 Colin McDonnell")
+      ) throw new Error(`${target} package license notices were incomplete`);
+      if (target === "linux-x86_64" && Deno.build.os === "linux") {
+        const mode = (await Deno.stat(`${extracted}/acp-mcp`)).mode;
+        if (mode === null || (mode & 0o111) === 0) {
+          throw new Error("Linux archive did not preserve executable mode");
+        }
       }
     }
   } finally {
@@ -110,59 +135,22 @@ Deno.test("GitHub release staging verifies and preserves local manifest metadata
   }
 });
 
-Deno.test("GitHub release staging rejects checksum and manifest mismatches", async () => {
+Deno.test("GitHub release staging rejects archive and manifest mismatches", async () => {
   const root = await Deno.makeTempDir({ prefix: "acp-mcp-gh-release-bad-" });
-  const releaseDirectory = `${root}/bundle`;
-  await Deno.mkdir(releaseDirectory);
-  const names = releaseAssetNames(VERSION, "windows-x86_64");
-  const bytes = new TextEncoder().encode("windows fixture");
-  const hash = sha256Hex(bytes);
-  await Deno.writeFile(`${releaseDirectory}/${names.executable}`, bytes);
-  await Deno.writeTextFile(
-    `${releaseDirectory}/${names.executable}.sha256`,
-    `${hash}  ${names.executable}\n`,
-  );
-  await Deno.writeTextFile(
-    `${releaseDirectory}/manifest.json`,
-    JSON.stringify({
-      product: "acp-mcp",
-      version: VERSION,
-      target: "windows-x86_64",
-      commit: "b".repeat(40),
-      sha256: "0".repeat(64),
-    }),
-  );
   try {
-    let rejectedManifest = false;
-    try {
-      await stageReleaseAssets(releaseDirectory, `${root}/assets`);
-    } catch (error) {
-      rejectedManifest = String(error).includes("manifest");
-    }
-    if (!rejectedManifest) {
-      throw new Error("Mismatched manifest SHA-256 was accepted");
-    }
+    const fixture = await fixtureBundle(root, "windows-x86_64");
+    const manifest = { ...fixture.manifest, archiveSha256: "0".repeat(64) };
     await Deno.writeTextFile(
-      `${releaseDirectory}/${names.executable}.sha256`,
-      `${"0".repeat(64)}  ${names.executable}\n`,
+      `${fixture.bundle}/${fixture.names.manifest}`,
+      JSON.stringify(manifest),
     );
-    await Deno.writeTextFile(
-      `${releaseDirectory}/manifest.json`,
-      JSON.stringify({
-        product: "acp-mcp",
-        version: VERSION,
-        target: "windows-x86_64",
-        commit: "b".repeat(40),
-        sha256: hash,
-      }),
-    );
-    let rejectedChecksum = false;
+    let rejected = false;
     try {
-      await stageReleaseAssets(releaseDirectory, `${root}/assets`);
+      await stageReleaseAssets(fixture.bundle, `${root}/assets`);
     } catch (error) {
-      rejectedChecksum = String(error).includes("checksum");
+      rejected = String(error).includes("checksum or manifest mismatch");
     }
-    if (!rejectedChecksum) throw new Error("Mismatched checksum was accepted");
+    if (!rejected) throw new Error("Mismatched archive manifest was accepted");
   } finally {
     await Deno.remove(root, { recursive: true });
   }

@@ -1,0 +1,37 @@
+{
+  "projectLicense": "WTFPL",
+  "dependencies": [
+    {
+      "name": "@agentclientprotocol/sdk",
+      "version": "1.7.0",
+      "license": "Apache-2.0",
+      "source": "https://github.com/agentclientprotocol/typescript-sdk/tree/605f3e0a250d1f0444b13b7c2a3b3d21b5c4b5ca",
+      "licenseFiles": ["licenses/Apache-2.0.txt"],
+      "attribution": "Copyright 2025 Zed Industries, Inc. and contributors. The published npm package contains no NOTICE file."
+    },
+    {
+      "name": "@modelcontextprotocol/server",
+      "version": "2.3.1",
+      "license": "Apache-2.0",
+      "source": "https://github.com/modelcontextprotocol/typescript-sdk",
+      "licenseFiles": ["licenses/Apache-2.0.txt", "licenses/MCP-SDK-MIT.txt"],
+      "attribution": "The package LICENSE identifies the MCP TypeScript SDK project as transitioning to Apache-2.0 and retains an MIT notice for contributions not relicensed. No separate NOTICE file is present in the published package."
+    },
+    {
+      "name": "@modelcontextprotocol/core",
+      "version": "2.3.1",
+      "license": "Apache-2.0",
+      "source": "https://github.com/modelcontextprotocol/typescript-sdk",
+      "licenseFiles": ["licenses/Apache-2.0.txt", "licenses/MCP-SDK-MIT.txt"],
+      "attribution": "The package LICENSE identifies the MCP TypeScript SDK project as transitioning to Apache-2.0 and retains an MIT notice for contributions not relicensed. No separate NOTICE file is present in the published package."
+    },
+    {
+      "name": "zod",
+      "version": "4.6.5",
+      "license": "MIT",
+      "source": "https://github.com/colinhacks/zod",
+      "licenseFiles": ["licenses/Zod-MIT.txt"],
+      "attribution": "Copyright (c) 2025 Colin McDonnell. The published npm package contains no NOTICE file."
+    }
+  ]
+}

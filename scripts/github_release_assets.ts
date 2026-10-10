@@ -1,18 +1,19 @@
-import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../src/version.ts";
+import {
+  checksumText,
+  extractReleaseArchive,
+  loadLicenseInventory,
+  releaseNames,
+  renderThirdPartyNotices,
+  sha256File,
+  validatePackageManifest,
+  validateReleaseManifest,
+} from "./release_package.ts";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const supportedTargets = ["windows-x86_64", "linux-x86_64"] as const;
-
-export interface ReleaseManifest {
-  product: "acp-mcp";
-  version: string;
-  target: (typeof supportedTargets)[number];
-  commit: string;
-  sha256: string;
-}
 
 export function assertTagMatchesVersion(tag: string, version: string): void {
   if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) {
@@ -28,59 +29,30 @@ export function assertTagMatchesVersion(tag: string, version: string): void {
 export function releaseAssetNames(
   version: string,
   target: string,
-): { executable: string; checksum: string; manifest: string } {
+): { archive: string; checksum: string; manifest: string } {
   if (!supportedTargets.includes(target as (typeof supportedTargets)[number])) {
     throw new Error(`Unsupported GitHub release target '${target}'`);
   }
-  const windows = target.startsWith("windows-");
-  const executable = `acp-mcp-${version}-${target}${windows ? ".exe" : ""}`;
-  const stem = executable.replace(/\.exe$/, "");
-  return {
-    executable,
-    checksum: `${executable}.sha256`,
-    manifest: `${stem}.manifest.json`,
-  };
-}
-
-export function sha256Hex(data: Uint8Array): string {
-  return createHash("sha256").update(data).digest("hex");
-}
-
-function validateManifest(value: unknown): ReleaseManifest {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Release manifest must be a JSON object");
-  }
-  const manifest = value as Record<string, unknown>;
-  if (
-    manifest.product !== "acp-mcp" || typeof manifest.version !== "string" ||
-    typeof manifest.target !== "string" ||
-    !supportedTargets.includes(
-      manifest.target as (typeof supportedTargets)[number],
-    ) || typeof manifest.commit !== "string" ||
-    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(manifest.commit) ||
-    typeof manifest.sha256 !== "string" ||
-    !/^[a-f0-9]{64}$/.test(manifest.sha256)
-  ) {
-    throw new Error(
-      "Release manifest has invalid product, version, target, commit, or SHA-256 metadata",
-    );
-  }
-  return {
-    product: "acp-mcp",
-    version: manifest.version,
-    target: manifest.target as ReleaseManifest["target"],
-    commit: manifest.commit,
-    sha256: manifest.sha256,
-  };
+  return releaseNames(version, target);
 }
 
 export async function stageReleaseAssets(
   releaseDirectory: string,
   outputDirectory: string,
 ): Promise<string[]> {
-  const manifest = validateManifest(
+  const manifestFiles: string[] = [];
+  for await (const entry of Deno.readDir(releaseDirectory)) {
+    if (
+      entry.isFile && entry.name.startsWith("acp-mcp-") &&
+      entry.name.endsWith(".manifest.json")
+    ) manifestFiles.push(entry.name);
+  }
+  if (manifestFiles.length !== 1) {
+    throw new Error("Release bundle must contain exactly one target manifest");
+  }
+  const manifest = validateReleaseManifest(
     JSON.parse(
-      await Deno.readTextFile(join(releaseDirectory, "manifest.json")),
+      await Deno.readTextFile(join(releaseDirectory, manifestFiles[0])),
     ),
   );
   if (manifest.version !== VERSION) {
@@ -89,34 +61,70 @@ export async function stageReleaseAssets(
     );
   }
   const names = releaseAssetNames(manifest.version, manifest.target);
-  const artifact = join(releaseDirectory, names.executable);
-  const bytes = await Deno.readFile(artifact);
-  const hash = sha256Hex(bytes);
-  if (hash !== manifest.sha256) {
-    throw new Error("Release artifact hash does not match its manifest");
+  if (
+    manifest.archive !== names.archive || manifestFiles[0] !== names.manifest
+  ) {
+    throw new Error("Release bundle names do not match its target manifest");
   }
+  const archive = join(releaseDirectory, names.archive);
+  const hash = await sha256File(archive);
   const checksum = await Deno.readTextFile(
-    join(releaseDirectory, `${names.executable}.sha256`),
+    join(releaseDirectory, names.checksum),
   );
-  if (checksum !== `${hash}  ${names.executable}\n`) {
-    throw new Error("Release checksum does not match its artifact");
+  if (
+    hash !== manifest.archiveSha256 ||
+    checksum !== checksumText(hash, names.archive)
+  ) throw new Error("Release archive checksum or manifest mismatch");
+
+  const extracted = await Deno.makeTempDir({ prefix: "acp-mcp-gh-stage-" });
+  try {
+    await extractReleaseArchive(archive, manifest.target, extracted);
+    const embedded = validatePackageManifest(
+      JSON.parse(await Deno.readTextFile(join(extracted, "manifest.json"))),
+    );
+    if (
+      embedded.product !== manifest.product ||
+      embedded.version !== manifest.version ||
+      embedded.target !== manifest.target ||
+      embedded.commit !== manifest.commit ||
+      embedded.executable !== manifest.executable ||
+      embedded.executableSha256 !== manifest.executableSha256 ||
+      await sha256File(join(extracted, embedded.executable)) !==
+        manifest.executableSha256
+    ) throw new Error("Release archive executable or manifest mismatch");
+    const inventory = await loadLicenseInventory(projectRoot);
+    if (
+      await Deno.readTextFile(join(extracted, "LICENSE")) !==
+        await Deno.readTextFile(join(projectRoot, "LICENSE")) ||
+      await Deno.readTextFile(join(extracted, "THIRD_PARTY_NOTICES.txt")) !==
+        renderThirdPartyNotices(inventory)
+    ) throw new Error("Release archive omitted license or third-party notices");
+    for (
+      const relative of new Set(
+        inventory.dependencies.flatMap((item) => item.licenseFiles),
+      )
+    ) {
+      if (
+        await Deno.readTextFile(join(extracted, relative)) !==
+          await Deno.readTextFile(join(projectRoot, relative))
+      ) throw new Error(`Release archive license text mismatch: ${relative}`);
+    }
+  } finally {
+    await Deno.remove(extracted, { recursive: true });
   }
 
   await Deno.mkdir(outputDirectory);
-  const stagedExecutable = join(outputDirectory, names.executable);
-  await Deno.copyFile(artifact, stagedExecutable);
-  if (manifest.target === "linux-x86_64") {
-    await Deno.chmod(stagedExecutable, 0o755);
+  for (const name of [names.archive, names.checksum]) {
+    await Deno.copyFile(
+      join(releaseDirectory, name),
+      join(outputDirectory, name),
+    );
   }
-  await Deno.writeTextFile(
-    join(outputDirectory, names.checksum),
-    checksum,
-  );
   await Deno.writeTextFile(
     join(outputDirectory, names.manifest),
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
-  return [names.executable, names.checksum, names.manifest];
+  return [names.archive, names.checksum, names.manifest];
 }
 
 if (import.meta.main) {
