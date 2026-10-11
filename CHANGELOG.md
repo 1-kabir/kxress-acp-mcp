@@ -1,8 +1,17 @@
 # Changelog
 
-## 0.2.2 (unreleased)
+## 0.2.3 (unreleased)
 
 ### Fixed
+
+- Make the session-capacity regression test deterministic on constrained Windows
+  CI without changing the production limit of eight sessions.
+- Add pre-tag hosted release validation for Windows and Linux.
+
+## 0.2.2 (tagged source; no binary release)
+
+The v0.2.2 tag remains in Git history, but Windows hosted release validation
+failed before publication. No GitHub Release or binary assets were published.
 
 - Fix Windows hosted release validation portability while keeping Windows and
   Linux as first-class release targets.

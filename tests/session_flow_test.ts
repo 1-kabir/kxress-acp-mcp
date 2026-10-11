@@ -1,4 +1,7 @@
-import { SessionManager } from "../src/sessions/manager.ts";
+import {
+  DEFAULT_MAX_MANAGED_SESSIONS,
+  SessionManager,
+} from "../src/sessions/manager.ts";
 
 function fakeFixturePath() {
   const path =
@@ -333,32 +336,55 @@ Deno.test("cancelling after completed prompt preserves completion", async () => 
 });
 
 Deno.test("closed sessions release capacity while active sessions are retained", async () => {
-  const manager = new SessionManager({
-    fake: {
-      command: Deno.execPath(),
-      args: ["run", "--no-check", "tests/fixtures/raw_wire_acp_agent.ts"],
+  if (DEFAULT_MAX_MANAGED_SESSIONS !== 8) {
+    throw new Error(
+      `Production session capacity changed: ${DEFAULT_MAX_MANAGED_SESSIONS}`,
+    );
+  }
+  const manager = new SessionManager(
+    {
+      fake: {
+        command: Deno.execPath(),
+        args: ["run", "--no-check", "tests/fixtures/raw_wire_acp_agent.ts"],
+      },
     },
-  });
+    undefined,
+    undefined,
+    2,
+  );
+  const sessionCount = () => manager.sessionCount;
   try {
-    const sessions = [];
-    for (let i = 0; i < 8; i++) {
-      sessions.push(await manager.start("fake", Deno.cwd()));
+    const first = await manager.start("fake", Deno.cwd());
+    const second = await manager.start("fake", Deno.cwd());
+    if (sessionCount() !== 2) {
+      throw new Error("The test session capacity was not filled");
     }
+
     let rejected = false;
     try {
-      await manager.start("fake", Deno.cwd());
+      await manager.start("missing-agent", Deno.cwd());
     } catch (error) {
-      rejected = String(error).includes("Active session limit (8) reached");
+      rejected = String(error).includes("Active session limit (2) reached");
     }
-    if (!rejected || manager.sessionCount !== 8) {
-      throw new Error("The active-session capacity was not enforced");
+    if (!rejected || sessionCount() !== 2) {
+      throw new Error(
+        "Capacity was not rejected before agent lookup/startup",
+      );
     }
-    await manager.close(sessions[0].id);
+
+    await manager.close(first.id);
+    if (sessionCount() !== 1) {
+      throw new Error("Closing a session did not release capacity");
+    }
     const replacement = await manager.start("fake", Deno.cwd());
-    if (manager.sessionCount !== 8) {
+    if (sessionCount() !== 2) {
       throw new Error("A closed session continued to consume capacity");
     }
     await manager.close(replacement.id);
+    await manager.close(second.id);
+    if (sessionCount() !== 0) {
+      throw new Error("Capacity test did not clean up all sessions");
+    }
   } finally {
     await manager.closeAll();
   }

@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -34,6 +35,7 @@ jobs:
           deno-version: 2.9.6
 
       - name: Verify tag matches source version
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: deno run --allow-read --allow-env=GITHUB_REF_NAME scripts/github_release_assets.ts check-tag
@@ -57,6 +59,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     permissions:

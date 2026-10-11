@@ -148,6 +148,7 @@ function configOptionsFromUpdate(
 export const DEFAULT_SESSION_START_TIMEOUT_MS = 30_000;
 export const DEFAULT_SESSION_CLOSE_TIMEOUT_MS = 5_000;
 export const DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS = 5_000;
+export const DEFAULT_MAX_MANAGED_SESSIONS = 8;
 
 interface PendingPermission {
   id: string;
@@ -172,6 +173,7 @@ export class SessionManager {
     private agents: AgentMap,
     private readonly startupTimeoutMs = DEFAULT_SESSION_START_TIMEOUT_MS,
     private readonly closeRequestTimeoutMs = DEFAULT_SESSION_CLOSE_TIMEOUT_MS,
+    private readonly maxSessions = DEFAULT_MAX_MANAGED_SESSIONS,
   ) {}
 
   get sessionCount(): number {
@@ -356,8 +358,8 @@ export class SessionManager {
     loadSessionId?: string,
     options: SessionLaunchOptions = {},
   ): Promise<ManagedSession> {
-    if (this.sessions.size >= 8) {
-      throw new Error("Active session limit (8) reached");
+    if (this.sessions.size >= this.maxSessions) {
+      throw new Error(`Active session limit (${this.maxSessions}) reached`);
     }
     const def = options.agentDefinition ?? this.agents[agentId];
     if (!def) throw new Error(`Unknown agent: ${agentId}`);

@@ -206,7 +206,7 @@ extract it to a stable application directory. The extracted folder keeps the
 executable and its license material together:
 
 ```powershell
-$version = "0.2.2"
+$version = "0.2.3"
 $archive = ".\acp-mcp-$version-windows-x86_64.zip"
 $expected = (Get-Content "${archive}.sha256").Split()[0]
 $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
@@ -224,7 +224,7 @@ the package, then install the executable in your user-local bin directory. Keep
 the extracted package directory with its license files:
 
 ```sh
-version=0.2.2
+version=0.2.3
 archive="acp-mcp-$version-linux-x86_64.tar.gz"
 sha256sum -c "$archive.sha256"
 mkdir -p "$HOME/.local/share/acp-mcp/$version" "$HOME/.local/bin"
