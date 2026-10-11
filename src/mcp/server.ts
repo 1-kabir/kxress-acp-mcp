@@ -383,7 +383,12 @@ export function createMcpServer(
     }),
   }, async ({ olderThanMs }) => {
     try {
-      const result = await cleanupStaleWorkspaceSnapshots({ olderThanMs });
+      const result = await cleanupStaleWorkspaceSnapshots({
+        olderThanMs,
+        ...(options.workspaceCleanupIsProcessAlive
+          ? { isProcessAlive: options.workspaceCleanupIsProcessAlive }
+          : {}),
+      });
       const candidates = result.entries.filter((entry) =>
         entry.status === "eligible"
       );
