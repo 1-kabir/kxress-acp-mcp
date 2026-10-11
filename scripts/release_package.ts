@@ -7,6 +7,11 @@ import {
   renderThirdPartyNotices,
   type RuntimeLicenseInventory,
 } from "./license_inventory.ts";
+import {
+  isReleaseTarget,
+  isWindowsTarget,
+  type ReleaseTarget,
+} from "./release_target.ts";
 
 export { renderThirdPartyNotices } from "./license_inventory.ts";
 
@@ -15,7 +20,7 @@ const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 export interface PackageManifest {
   product: "acp-mcp";
   version: string;
-  target: "windows-x86_64" | "linux-x86_64";
+  target: ReleaseTarget;
   commit: string;
   executable: string;
   executableSha256: string;
@@ -33,11 +38,16 @@ export interface ReleaseNames {
   manifest: string;
 }
 
-export function releaseNames(version: string, target: string): ReleaseNames {
-  if (target !== "windows-x86_64" && target !== "linux-x86_64") {
+export { type ReleaseTarget } from "./release_target.ts";
+
+export function releaseNames(
+  version: string,
+  target: string,
+): ReleaseNames {
+  if (!isReleaseTarget(target)) {
     throw new Error(`Unsupported release target '${target}'`);
   }
-  const windows = target.startsWith("windows-");
+  const windows = isWindowsTarget(target);
   const stem = `acp-mcp-${version}-${target}`;
   const executable = windows ? "acp-mcp.exe" : "acp-mcp";
   const archive = `${stem}${windows ? ".zip" : ".tar.gz"}`;
@@ -68,8 +78,8 @@ export function validatePackageManifest(value: unknown): PackageManifest {
   if (
     manifest.product !== "acp-mcp" || typeof manifest.version !== "string" ||
     !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version) ||
-    (manifest.target !== "windows-x86_64" &&
-      manifest.target !== "linux-x86_64") ||
+    typeof manifest.target !== "string" ||
+    !isReleaseTarget(manifest.target) ||
     typeof manifest.commit !== "string" ||
     !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(manifest.commit) ||
     typeof manifest.executable !== "string" ||
@@ -135,7 +145,7 @@ export async function packageContents(
   const inventory = await loadLicenseInventory(root);
   const executableDestination = join(packageRoot, manifest.executable);
   await Deno.copyFile(executablePath, executableDestination);
-  if (manifest.target === "linux-x86_64") {
+  if (!isWindowsTarget(manifest.target)) {
     await Deno.chmod(executableDestination, 0o755);
   }
   await Deno.copyFile(join(root, "LICENSE"), join(packageRoot, "LICENSE"));
@@ -192,7 +202,7 @@ export async function validateArchiveEntries(
   target: string,
 ): Promise<void> {
   const names = releaseNames("0.0.0", target);
-  const args = target.startsWith("linux-")
+  const args = !isWindowsTarget(target)
     ? ["-tzf", archivePath]
     : ["-tf", archivePath];
   const listing = (await runTar(args, Deno.cwd())).trim().split(/\r?\n/)
@@ -223,7 +233,7 @@ export async function validateArchiveEntries(
       entry.split(/[\\/]/).includes("..") || entry.includes("\\")
     ) throw new Error("Release archive contains an unsafe path");
   }
-  const verboseArgs = target.startsWith("linux-")
+  const verboseArgs = !isWindowsTarget(target)
     ? ["-tvzf", archivePath]
     : ["-tvf", archivePath];
   const verbose = (await runTar(verboseArgs, Deno.cwd())).trim().split(/\r?\n/);
@@ -243,7 +253,7 @@ export async function extractReleaseArchive(
   destination: string,
 ): Promise<void> {
   await validateArchiveEntries(archivePath, target);
-  const args = target.startsWith("linux-")
+  const args = !isWindowsTarget(target)
     ? ["-xzf", archivePath, "-C", destination]
     : ["-xf", archivePath, "-C", destination];
   await runTar(args, Deno.cwd());
@@ -275,7 +285,7 @@ export async function createReleaseArchive(
   input: {
     binaryPath: string;
     version: string;
-    target: "windows-x86_64" | "linux-x86_64";
+    target: ReleaseTarget;
     commit: string;
     executableSha256: string;
     root?: string;
@@ -301,8 +311,17 @@ export async function createReleaseArchive(
       packageManifest,
       input.root,
     );
-    const createArgs = input.target.startsWith("linux-") &&
-        Deno.build.os === "linux"
+    const createArgs = isWindowsTarget(input.target)
+      ? [
+        "-a",
+        "-cf",
+        archivePath,
+        "-C",
+        packageRoot,
+        names.executable,
+        ...packagedFiles,
+      ]
+      : Deno.build.os === "linux"
       ? [
         "--sort=name",
         "--mtime=@0",
@@ -317,8 +336,7 @@ export async function createReleaseArchive(
         ...packagedFiles,
       ]
       : [
-        "-a",
-        "-cf",
+        "-czf",
         archivePath,
         "-C",
         packageRoot,

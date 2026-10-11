@@ -1,4 +1,4 @@
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../src/version.ts";
 import {
@@ -11,13 +11,14 @@ import {
   validatePackageManifest,
   validateReleaseManifest,
 } from "./release_package.ts";
+import { isWindowsTarget, targetId } from "./release_target.ts";
+
+export { targetId } from "./release_target.ts";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
-const windows = Deno.build.os === "windows";
 const target = targetId();
-const executableName = target.startsWith("windows-")
-  ? "acp-mcp.exe"
-  : "acp-mcp";
+const windows = isWindowsTarget(target);
+const executableName = windows ? "acp-mcp.exe" : "acp-mcp";
 const buildPath = join(projectRoot, "dist", executableName);
 const optInTestVariables = [
   "ACPMCP_OPENCODE_TEST",
@@ -30,15 +31,6 @@ export type { ReleaseManifest } from "./release_package.ts";
 export { checksumText, sha256Hex } from "./release_package.ts";
 
 const validateManifest = validateReleaseManifest;
-
-export function targetId(os = Deno.build.os, arch = Deno.build.arch): string {
-  if ((os !== "windows" && os !== "linux") || arch !== "x86_64") {
-    throw new Error(
-      `Unsupported native release platform '${os}-${arch}'; supported targets are windows-x86_64 and linux-x86_64`,
-    );
-  }
-  return `${os}-${arch}`;
-}
 
 export function artifactName(
   version: string,
@@ -171,7 +163,7 @@ async function verifyExecutable(path: string, cwd: string): Promise<void> {
   }
 }
 
-async function smokeExecutable(path: string): Promise<void> {
+export async function smokeExecutable(path: string): Promise<void> {
   const cwd = await Deno.makeTempDir({ prefix: "acp-mcp-release-smoke-" });
   try {
     const configPath = join(cwd, "release smoke config.json");
@@ -403,6 +395,25 @@ async function packageRelease(): Promise<void> {
       if (await sha256File(stagedExecutable) !== executableHash) {
         throw new Error("Packaged executable hash differs from the build");
       }
+      if (!windows) {
+        const mode = (await Deno.stat(stagedExecutable)).mode;
+        if (mode === null || (mode & 0o111) === 0) {
+          throw new Error("Packaged POSIX executable is not executable");
+        }
+      }
+      if (target === "macos-arm64") {
+        const architecture = await capture(
+          "file",
+          [stagedExecutable],
+          extracted,
+        );
+        const description = new TextDecoder().decode(architecture.stdout);
+        if (!architecture.success || !/Mach-O.*arm64/i.test(description)) {
+          throw new Error(
+            `macOS release executable is not native ARM64 Mach-O: ${description.trim()}`,
+          );
+        }
+      }
       await smokeExecutable(stagedExecutable);
     } finally {
       await Deno.remove(extracted, { recursive: true });
@@ -486,13 +497,13 @@ export function defaultInstallDestination(
     }
     return join(localAppData, "Programs", "acp-mcp", "acp-mcp.exe");
   }
-  if (os === "linux") {
+  if (os === "linux" || os === "darwin") {
     const home = env.HOME;
     if (!home) throw new Error("HOME is not set; pass --destination <path>");
-    return join(home, ".local", "bin", "acp-mcp");
+    return posix.join(home, ".local", "bin", "acp-mcp");
   }
   throw new Error(
-    `Unsupported install platform '${os}'; supported targets are windows-x86_64 and linux-x86_64`,
+    `Unsupported install platform '${os}'; supported targets are windows-x86_64, linux-x86_64, and macos-arm64`,
   );
 }
 
@@ -685,13 +696,26 @@ export async function installRelease(
   }
 }
 
+export function installDirectoryOnPath(
+  destination: string,
+  pathValue: string,
+  os = Deno.build.os,
+): boolean {
+  const pathApi = os === "windows" ? win32 : posix;
+  const separator = os === "windows" ? ";" : ":";
+  const normalize = (path: string) => {
+    const resolved = pathApi.resolve(path);
+    return os === "windows" ? resolved.toLowerCase() : resolved;
+  };
+  const installDirectory = normalize(pathApi.dirname(destination));
+  return pathValue.split(separator).filter(Boolean).map(normalize)
+    .includes(installDirectory);
+}
+
 function warnIfInstallDirectoryNotOnPath(destination: string): void {
-  if (Deno.build.os !== "linux") return;
-  const installDirectory = resolve(dirname(destination));
-  const pathEntries = (Deno.env.get("PATH") ?? "").split(":")
-    .filter((entry) => entry.length > 0)
-    .map((entry) => resolve(entry));
-  if (!pathEntries.includes(installDirectory)) {
+  if (Deno.build.os !== "linux" && Deno.build.os !== "darwin") return;
+  const installDirectory = posix.resolve(posix.dirname(destination));
+  if (!installDirectoryOnPath(destination, Deno.env.get("PATH") ?? "")) {
     console.error(
       `Install directory '${installDirectory}' is not on PATH. Add it to your shell PATH to run acp-mcp by name.`,
     );
@@ -722,7 +746,7 @@ async function main(args: string[]): Promise<void> {
       "  deno task release",
       "  deno task install --release-dir <path> [--destination <executable-path>]",
       "",
-      "release builds and validates the native Windows or Linux x86_64 executable,",
+      "release builds and validates the native Windows x86_64, Linux x86_64, or macOS ARM64 executable,",
       "then packages it with project and third-party licenses, archive checksum,",
       "and manifest. install consumes the archive/checksum/manifest directory.",
     ].join("\n"));

@@ -4,6 +4,7 @@ import {
   checksumText,
   defaultInstallDestination,
   ensureReleaseOutputRoot,
+  installDirectoryOnPath,
   installRelease,
   sha256Hex,
   targetId,
@@ -12,6 +13,7 @@ import { VERSION } from "../src/version.ts";
 import {
   createReleaseArchive,
   releaseNames,
+  type ReleaseTarget,
 } from "../scripts/release_package.ts";
 import {
   assertRuntimeLicenseInventoryMatchesLock,
@@ -22,23 +24,41 @@ import {
 Deno.test("release target and artifact names encode native platform/version", () => {
   if (
     targetId("windows", "x86_64") !== "windows-x86_64" ||
-    artifactName("0.2.0", "windows-x86_64", "windows") !==
-      "acp-mcp-0.2.0-windows-x86_64.zip" ||
-    artifactName("0.2.0", "linux-x86_64", "linux") !==
-      "acp-mcp-0.2.0-linux-x86_64.tar.gz"
+    targetId("linux", "x86_64") !== "linux-x86_64" ||
+    targetId("darwin", "aarch64") !== "macos-arm64" ||
+    artifactName("0.2.4", "windows-x86_64", "windows") !==
+      "acp-mcp-0.2.4-windows-x86_64.zip" ||
+    artifactName("0.2.4", "linux-x86_64", "linux") !==
+      "acp-mcp-0.2.4-linux-x86_64.tar.gz" ||
+    artifactName("0.2.4", "macos-arm64", "darwin") !==
+      "acp-mcp-0.2.4-macos-arm64.tar.gz" ||
+    releaseNames("0.2.4", "macos-arm64").executable !== "acp-mcp" ||
+    releaseNames("0.2.4", "macos-arm64").checksum !==
+      "acp-mcp-0.2.4-macos-arm64.tar.gz.sha256" ||
+    releaseNames("0.2.4", "macos-arm64").manifest !==
+      "acp-mcp-0.2.4-macos-arm64.manifest.json"
   ) throw new Error("Release naming did not match the native target");
-  let unsupportedRejected = false;
-  try {
-    targetId("darwin", "x86_64");
-  } catch (error) {
-    unsupportedRejected = String(error).includes("supported targets");
-  }
-  if (!unsupportedRejected) {
-    throw new Error("An unsupported native target was accepted");
+  for (
+    const [os, arch] of [
+      ["darwin", "x86_64"],
+      ["linux", "aarch64"],
+      ["windows", "aarch64"],
+    ]
+  ) {
+    let unsupportedRejected = false;
+    try {
+      targetId(os, arch);
+    } catch (error) {
+      unsupportedRejected = String(error).includes("supported targets") &&
+        String(error).includes("macos-arm64");
+    }
+    if (!unsupportedRejected) {
+      throw new Error(`Unsupported native target was accepted: ${os}-${arch}`);
+    }
   }
 });
 
-Deno.test("default install locations are user-local on both native targets", () => {
+Deno.test("default install locations are user-local on all supported targets", () => {
   if (Deno.build.os === "windows") {
     const windows = defaultInstallDestination("windows", {
       LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local",
@@ -54,6 +74,34 @@ Deno.test("default install locations are user-local on both native targets", () 
       throw new Error(`Unexpected Linux install destination: ${linux}`);
     }
   }
+  const mac = defaultInstallDestination("darwin", { HOME: "/Users/example" });
+  if (mac !== "/Users/example/.local/bin/acp-mcp") {
+    throw new Error(`Unexpected macOS install destination: ${mac}`);
+  }
+  let missingHomeRejected = false;
+  try {
+    defaultInstallDestination("darwin", {});
+  } catch (error) {
+    missingHomeRejected = String(error).includes("HOME is not set");
+  }
+  if (!missingHomeRejected) {
+    throw new Error("macOS install accepted missing HOME");
+  }
+});
+
+Deno.test("POSIX installer PATH warning checks HOME local bin without edits", () => {
+  if (
+    !installDirectoryOnPath(
+      "/Users/example/.local/bin/acp-mcp",
+      "/usr/bin:/Users/example/.local/bin",
+      "darwin",
+    ) ||
+    installDirectoryOnPath(
+      "/Users/example/.local/bin/acp-mcp",
+      "/usr/bin:/bin",
+      "darwin",
+    )
+  ) throw new Error("macOS local-bin PATH detection was incorrect");
 });
 
 Deno.test("release refuses dirty trees and formats stable checksums", () => {
@@ -236,7 +284,7 @@ Deno.test("install verifies licensed archive before atomically replacing destina
     const manifest = await createReleaseArchive(archive, {
       binaryPath: fixtureBinary,
       version: VERSION,
-      target: target as "windows-x86_64" | "linux-x86_64",
+      target: target as ReleaseTarget,
       commit: "a".repeat(40),
       executableSha256: hash,
     });

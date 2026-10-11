@@ -1,13 +1,11 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { targetId } from "./release.ts";
+import { isWindowsTarget, targetId } from "./release_target.ts";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const outputDirectory = join(projectRoot, "dist");
 const target = targetId();
-const executableName = target.startsWith("windows-")
-  ? "acp-mcp.exe"
-  : "acp-mcp";
+const executableName = isWindowsTarget(target) ? "acp-mcp.exe" : "acp-mcp";
 const outputPath = join(outputDirectory, executableName);
 
 await Deno.mkdir(outputDirectory, { recursive: true });

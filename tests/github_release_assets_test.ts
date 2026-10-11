@@ -7,14 +7,16 @@ import {
   createReleaseArchive,
   extractReleaseArchive,
   releaseNames,
+  type ReleaseTarget,
   sha256File,
   sha256Hex,
+  validatePackageManifest,
 } from "../scripts/release_package.ts";
 import { VERSION } from "../src/version.ts";
 
 async function fixtureBundle(
   root: string,
-  target: "windows-x86_64" | "linux-x86_64",
+  target: ReleaseTarget,
 ) {
   const bundle = `${root}/bundle-${target}`;
   await Deno.mkdir(bundle);
@@ -53,12 +55,43 @@ Deno.test("GitHub release tag must exactly match source version", () => {
   }
 });
 
-Deno.test("GitHub assets are self-contained licensed archives for both targets", async () => {
+Deno.test("macOS ARM64 has a closed canonical manifest and archive name", () => {
+  const names = releaseNames("0.2.4", "macos-arm64");
+  const manifest = validatePackageManifest({
+    product: "acp-mcp",
+    version: "0.2.4",
+    target: "macos-arm64",
+    commit: "a".repeat(40),
+    executable: "acp-mcp",
+    executableSha256: "b".repeat(64),
+  });
+  if (
+    names.executable !== "acp-mcp" ||
+    names.archive !== "acp-mcp-0.2.4-macos-arm64.tar.gz" ||
+    manifest.target !== "macos-arm64"
+  ) throw new Error("macOS ARM64 release metadata was incorrect");
+  let unknownTargetRejected = false;
+  try {
+    validatePackageManifest({
+      ...manifest,
+      target: "darwin-aarch64",
+    });
+  } catch {
+    unknownTargetRejected = true;
+  }
+  if (!unknownTargetRejected) {
+    throw new Error("An unknown release target was accepted");
+  }
+});
+
+Deno.test("GitHub assets are self-contained licensed archives for all targets", async () => {
   const root = await Deno.makeTempDir({ prefix: "acp-mcp-gh-release-" });
   try {
-    const targets = Deno.build.os === "windows"
-      ? ["windows-x86_64", "linux-x86_64"] as const
-      : ["linux-x86_64"] as const;
+    const targets: ReleaseTarget[] = [
+      "windows-x86_64",
+      "linux-x86_64",
+      "macos-arm64",
+    ];
     for (const target of targets) {
       const fixture = await fixtureBundle(root, target);
       const inputManifest = JSON.parse(
@@ -123,10 +156,10 @@ Deno.test("GitHub assets are self-contained licensed archives for both targets",
         !(await Deno.readTextFile(`${extracted}/licenses/Zod-MIT.txt`))
           .includes("Copyright (c) 2025 Colin McDonnell")
       ) throw new Error(`${target} package license notices were incomplete`);
-      if (target === "linux-x86_64" && Deno.build.os === "linux") {
+      if (target !== "windows-x86_64" && Deno.build.os !== "windows") {
         const mode = (await Deno.stat(`${extracted}/acp-mcp`)).mode;
         if (mode === null || (mode & 0o111) === 0) {
-          throw new Error("Linux archive did not preserve executable mode");
+          throw new Error(`${target} archive did not preserve executable mode`);
         }
       }
     }

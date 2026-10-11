@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.2.3 (unreleased)
+## 0.2.4 (unreleased)
+
+### Added
+
+- Add first-class native macOS ARM64 support.
+- Extend release validation to Windows x86_64, Linux x86_64, and macOS ARM64.
+
+## 0.2.3 (released)
 
 ### Fixed
 

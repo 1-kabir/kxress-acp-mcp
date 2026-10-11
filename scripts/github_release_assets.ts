@@ -11,9 +11,10 @@ import {
   validatePackageManifest,
   validateReleaseManifest,
 } from "./release_package.ts";
+import { RELEASE_TARGETS, targetId } from "./release_target.ts";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
-const supportedTargets = ["windows-x86_64", "linux-x86_64"] as const;
+const supportedTargets = RELEASE_TARGETS;
 
 export function assertTagMatchesVersion(tag: string, version: string): void {
   if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) {
@@ -135,7 +136,7 @@ if (import.meta.main) {
     assertTagMatchesVersion(tag, VERSION);
     console.log(`Release tag ${tag} matches source version ${VERSION}`);
   } else if (command === "stage") {
-    const target = `${Deno.build.os}-${Deno.build.arch}`;
+    const target = targetId();
     if (args.length !== 0) throw new Error("stage takes no arguments");
     const expectedTarget = Deno.env.get("ACPMCP_EXPECTED_RELEASE_TARGET");
     if (expectedTarget && expectedTarget !== target) {

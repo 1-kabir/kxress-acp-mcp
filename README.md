@@ -188,12 +188,12 @@ expose.
 
 ### Download a release
 
-The version-tagged release workflow builds native Windows x86_64 and Linux
-x86_64 packages. Each package contains the executable, the acp-mcp WTFPL
-license, third-party notices and applicable license texts, and an embedded
+The version-tagged release workflow builds native Windows x86_64, Linux x86_64,
+and macOS ARM64 packages. Each package contains the executable, the acp-mcp
+WTFPL license, third-party notices and applicable license texts, and an embedded
 manifest. GitHub Releases also include a SHA-256 sidecar for each archive and a
 manifest that records the archive and executable hashes. The workflow publishes
-only when the tag version matches `src/version.ts`, and only if both native
+only when the tag version matches `src/version.ts`, and only if all three native
 builds and smoke tests pass.
 
 Published downloads appear under
@@ -206,7 +206,7 @@ extract it to a stable application directory. The extracted folder keeps the
 executable and its license material together:
 
 ```powershell
-$version = "0.2.3"
+$version = "0.2.4"
 $archive = ".\acp-mcp-$version-windows-x86_64.zip"
 $expected = (Get-Content "${archive}.sha256").Split()[0]
 $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
@@ -224,7 +224,7 @@ the package, then install the executable in your user-local bin directory. Keep
 the extracted package directory with its license files:
 
 ```sh
-version=0.2.3
+version=0.2.4
 archive="acp-mcp-$version-linux-x86_64.tar.gz"
 sha256sum -c "$archive.sha256"
 mkdir -p "$HOME/.local/share/acp-mcp/$version" "$HOME/.local/bin"
@@ -243,7 +243,25 @@ deno task install --release-dir ./acp-mcp-release-assets
 
 On Windows, run the same task from the repository checkout; it installs by
 default to `%LOCALAPPDATA%\Programs\acp-mcp`. On Linux it installs to
-`$HOME/.local/bin/acp-mcp` and reports if that directory is not on `PATH`.
+`$HOME/.local/bin/acp-mcp` and reports if that directory is not on `PATH`. On
+macOS ARM64 it installs to `$HOME/.local/bin/acp-mcp` and gives the same `PATH`
+warning without changing shell configuration.
+
+On macOS ARM64 (Apple Silicon), download the tar.gz, checksum, and manifest.
+Verify and extract the package, then install the executable in your user-local
+bin directory. Keep the extracted package directory with its license files:
+
+```sh
+version=0.2.4
+archive="acp-mcp-$version-macos-arm64.tar.gz"
+shasum -a 256 -c "$archive.sha256"
+mkdir -p "$HOME/.local/share/acp-mcp/$version" "$HOME/.local/bin"
+tar -xzf "$archive" -C "$HOME/.local/share/acp-mcp/$version"
+install -m 0755 "$HOME/.local/share/acp-mcp/$version/acp-mcp" "$HOME/.local/bin/acp-mcp"
+"$HOME/.local/bin/acp-mcp" --version
+```
+
+The macOS command-line binary is unsigned and not notarized.
 
 The package archive checksum covers the downloadable archive. Its manifest
 records the archive hash and the executable hash separately. SHA-256 allows
@@ -788,12 +806,10 @@ Packaged release targets:
 
 - Windows x86_64
 - Linux x86_64
+- macOS ARM64 (Apple Silicon)
 
-Both targets use native executables and the same local release format. Linux is
-also validated natively on Debian 13 / WSL2, including Codex-hosted MCP. The
-GitHub release workflow builds Linux on Ubuntu; WSL2 is one tested Linux
-environment, not a separate platform target. Other Linux distributions have not
-been individually tested.
+Each target uses a native executable and self-contained release package. The
+macOS target is Apple Silicon ARM64; Intel macOS is not included.
 
 ## License
 
