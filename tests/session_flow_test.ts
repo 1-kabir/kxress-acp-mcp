@@ -1,5 +1,6 @@
 import {
   DEFAULT_MAX_MANAGED_SESSIONS,
+  DEFAULT_SESSION_START_TIMEOUT_MS,
   SessionManager,
 } from "../src/sessions/manager.ts";
 
@@ -404,7 +405,7 @@ Deno.test("a hung ACP session/close cannot block child cleanup", async () => {
         ],
       },
     },
-    100,
+    DEFAULT_SESSION_START_TIMEOUT_MS,
     40,
   );
   try {
