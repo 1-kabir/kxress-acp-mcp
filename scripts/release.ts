@@ -60,7 +60,12 @@ export function assertCleanTreeStatus(status: string): void {
 export async function ensureReleaseOutputRoot(
   projectRoot: string,
 ): Promise<string> {
-  const expectedDist = resolve(projectRoot, "dist");
+  // Canonicalize the trusted checkout root first. On Windows, the supplied
+  // path may use an ordinary 8.3 alias; resolve() does not expand it, while
+  // realPath() does. Build the guarded output paths from that canonical root
+  // so only redirects below the checkout are treated as links.
+  const canonicalProjectRoot = resolve(await Deno.realPath(projectRoot));
+  const expectedDist = resolve(canonicalProjectRoot, "dist");
   const expectedReleaseRoot = resolve(expectedDist, "releases");
   const ensurePlainDirectory = async (path: string): Promise<void> => {
     try {

@@ -86,10 +86,12 @@ Deno.test("runtime dependency license inventory matches the complete lock graph"
   );
   assertRuntimeLicenseInventoryMatchesLock(lockText, configText, inventory);
   const notices = renderThirdPartyNotices(inventory);
+  const checkedInNotices = await Deno.readTextFile(
+    new URL("../THIRD_PARTY_NOTICES.txt", import.meta.url),
+  );
+  const normalizeLineEndings = (text: string) => text.replace(/\r\n/g, "\n");
   if (
-    await Deno.readTextFile(
-      new URL("../THIRD_PARTY_NOTICES.txt", import.meta.url),
-    ) !== notices
+    normalizeLineEndings(checkedInNotices) !== normalizeLineEndings(notices)
   ) throw new Error("Checked-in third-party notices are out of date");
   for (
     const licensePath of new Set(
@@ -153,6 +155,7 @@ Deno.test("runtime dependency license inventory matches the complete lock graph"
 
 Deno.test("release output root rejects a symlink or junction", async () => {
   const root = await Deno.makeTempDir({ prefix: "acp-mcp-release-root-" });
+  const canonicalRoot = await Deno.realPath(root);
   const outside = await Deno.makeTempDir({
     prefix: "acp-mcp-release-outside-",
   });
@@ -161,6 +164,7 @@ Deno.test("release output root rejects a symlink or junction", async () => {
   }releases`;
   try {
     await ensureReleaseOutputRoot(root);
+    await ensureReleaseOutputRoot(canonicalRoot);
     await Deno.remove(releases);
     if (Deno.build.os === "windows") {
       const linked = await new Deno.Command("powershell.exe", {

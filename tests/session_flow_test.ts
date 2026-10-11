@@ -336,7 +336,7 @@ Deno.test("closed sessions release capacity while active sessions are retained",
   const manager = new SessionManager({
     fake: {
       command: Deno.execPath(),
-      args: ["run", "--allow-env", "--allow-read", fakeFixturePath()],
+      args: ["run", "--no-check", "tests/fixtures/raw_wire_acp_agent.ts"],
     },
   });
   try {
