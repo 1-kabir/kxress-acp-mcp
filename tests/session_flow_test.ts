@@ -28,7 +28,11 @@ Deno.test("requested cwd is shared by the ACP session and child process", async 
           ?.currentValue,
       ),
     ) as { processCwd: string; sessionCwd: string };
-    if (report.processCwd !== cwd || report.sessionCwd !== cwd) {
+    const requestedRealPath = await Deno.realPath(cwd);
+    if (
+      await Deno.realPath(report.processCwd) !== requestedRealPath ||
+      await Deno.realPath(report.sessionCwd) !== requestedRealPath
+    ) {
       throw new Error(
         `Requested cwd diverged: ${JSON.stringify(report)}`,
       );

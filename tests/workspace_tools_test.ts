@@ -62,10 +62,14 @@ async function withWorkspaceRoot<T>(fn: () => Promise<T>): Promise<T> {
 
 function connectWorkspaceTools(
   remove?: typeof Deno.remove,
+  isProcessAlive?: (pid: number) => boolean | Promise<boolean>,
 ) {
   const manager = new SessionManager({});
   const server = createMcpServer({}, manager, {
     ...(remove ? { workspaceCleanupRemove: remove } : {}),
+    ...(isProcessAlive
+      ? { workspaceCleanupIsProcessAlive: isProcessAlive }
+      : {}),
   });
   return connectMcp(server).then((mcp) => ({
     manager,
@@ -126,7 +130,10 @@ Deno.test("MCP workspace tools inspect, explicitly clean, and repeat safely", as
         if (!result.success) throw new Error("Could not create test junction");
       }
 
-      ({ manager, server, mcp } = await connectWorkspaceTools());
+      ({ manager, server, mcp } = await connectWorkspaceTools(
+        undefined,
+        () => false,
+      ));
       const toolsReply = await mcp.listTools().response as {
         result?: { tools?: Array<Record<string, unknown>> };
       };
@@ -246,7 +253,10 @@ Deno.test("MCP cleanup reports per-workspace failure and continues", async () =>
     try {
       await markStale(first.cwd);
       await markStale(second.cwd);
-      ({ manager, server, mcp } = await connectWorkspaceTools(remove));
+      ({ manager, server, mcp } = await connectWorkspaceTools(
+        remove,
+        () => false,
+      ));
       const result = parseToolResult(
         await mcp.callTool("cleanup_stale_workspaces", {}).response,
       );

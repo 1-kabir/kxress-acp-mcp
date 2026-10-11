@@ -577,6 +577,7 @@ Deno.test("legacy manifests use their file timestamp and remain eligible", async
       await Deno.utime(manifestPath, old, old);
       const result = await cleanupStaleWorkspaceSnapshots({
         olderThanMs: 24 * 60 * 60 * 1000,
+        isProcessAlive: () => false,
       });
       if (
         result.eligible !== 1 || result.entries[0]?.kind !== "legacy" ||

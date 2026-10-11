@@ -34,6 +34,7 @@ type McpServerOptions = {
   loadOpenCodeCatalog?: (signal: AbortSignal) => Promise<OpenCodeCatalog>;
   failureClassifiers?: AgentFailureClassifiers;
   workspaceCleanupRemove?: typeof Deno.remove;
+  workspaceCleanupIsProcessAlive?: (pid: number) => boolean | Promise<boolean>;
   resolveConfiguration?: (cwd?: string) => Promise<ResolvedConfiguration>;
 };
 
@@ -438,6 +439,9 @@ export function createMcpServer(
         delete: true,
         ...(options.workspaceCleanupRemove
           ? { remove: options.workspaceCleanupRemove }
+          : {}),
+        ...(options.workspaceCleanupIsProcessAlive
+          ? { isProcessAlive: options.workspaceCleanupIsProcessAlive }
           : {}),
       });
       const failures = workspaceEntrySummaries(
