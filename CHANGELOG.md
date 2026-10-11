@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.2.1 (unreleased)
+## 0.2.2 (unreleased)
+
+### Fixed
+
+- Fix Windows hosted release validation portability while keeping Windows and
+  Linux as first-class release targets.
+
+## 0.2.1 (tagged source; no binary release)
+
+The v0.2.1 tag remains in Git history, but Windows hosted release validation
+failed before publication. No GitHub Release or binary assets were published.
+
+The v0.2.1 changes follow below.
 
 ### Added
 
