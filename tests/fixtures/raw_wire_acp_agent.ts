@@ -3,7 +3,11 @@ const decoder = new TextDecoder();
 let buffer = "";
 
 async function write(value: unknown) {
-  await Deno.stdout.write(encoder.encode(`${JSON.stringify(value)}\n`));
+  const bytes = encoder.encode(`${JSON.stringify(value)}\n`);
+  let offset = 0;
+  while (offset < bytes.length) {
+    offset += await Deno.stdout.write(bytes.subarray(offset));
+  }
 }
 
 async function handle(line: string) {
