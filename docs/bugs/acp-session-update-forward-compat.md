@@ -46,15 +46,14 @@ known message chunk. The unknown notification contains:
 The existing session-flow regression confirms that:
 
 - journal events retain arrival order and the unknown `future_update` kind;
-- raw params, unknown fields, and `_meta` remain in the journal;
+- raw params, unknown fields, and `_meta` remain in the journal and survive MCP
+  `get_events(includeRaw: true)` unchanged;
 - the final text is `raw reply` and the prompt completes with `end_turn`;
 - a second prompt completes using the same runtime and downstream ACP session;
 - mutating a returned manager snapshot does not change the journal.
 
-A separate native MCP stdio smoke check on 14 October 2026 also verified raw
-params and `_meta` through `get_events(includeRaw: true)`, successful prompt
-completion, and a second prompt in the same ACP session. This is runtime
-validation, rather than a duplicate of the committed regression test.
+A separate native MCP stdio smoke check on 14 October 2026 also verified
+successful prompt completion and a second prompt in the same ACP session.
 
 Run the focused regression with:
 

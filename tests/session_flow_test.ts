@@ -3,6 +3,8 @@ import {
   DEFAULT_SESSION_START_TIMEOUT_MS,
   SessionManager,
 } from "../src/sessions/manager.ts";
+import { createMcpServer } from "../src/mcp/server.ts";
+import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
 function fakeFixturePath() {
   const path =
@@ -86,6 +88,8 @@ function rawFixtureManager() {
 
 Deno.test("journals unknown raw updates in order and keeps the connection usable", async () => {
   const manager = rawFixtureManager();
+  const server = createMcpServer({}, manager);
+  const mcp = await connectMcp(server);
   try {
     const session = await manager.start("raw", Deno.cwd());
     const response = await manager.prompt(session.id, "raw wire");
@@ -124,6 +128,17 @@ Deno.test("journals unknown raw updates in order and keeps the connection usable
         "Original raw params, unknown detail, or metadata changed",
       );
     }
+    const replay = parseToolResult(
+      await mcp.callTool("get_events", {
+        sessionId: session.id,
+        includeRaw: true,
+      }).response,
+    );
+    if (JSON.stringify(replay.events) !== JSON.stringify(events)) {
+      throw new Error(
+        "MCP changed journal contents, update order, or raw metadata",
+      );
+    }
     (events[1].update as { detail: { retained: boolean } }).detail.retained =
       false;
     const reread = manager.getEvents(session.id).events[1].update as {
@@ -139,7 +154,9 @@ Deno.test("journals unknown raw updates in order and keeps the connection usable
       );
     }
   } finally {
+    await mcp.close();
     await manager.closeAll();
+    await server.close();
   }
 });
 
