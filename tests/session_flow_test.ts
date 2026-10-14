@@ -3,6 +3,8 @@ import {
   DEFAULT_SESSION_START_TIMEOUT_MS,
   SessionManager,
 } from "../src/sessions/manager.ts";
+import { createMcpServer } from "../src/mcp/server.ts";
+import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
 function fakeFixturePath() {
   const path =
@@ -71,7 +73,11 @@ Deno.test("session query APIs return detached snapshots", async () => {
 });
 
 function rawFixtureManager() {
-  return new SessionManager({
+  return new SessionManager(rawFixtureAgents());
+}
+
+function rawFixtureAgents() {
+  return {
     raw: {
       command: Deno.execPath(),
       args: [
@@ -81,7 +87,7 @@ function rawFixtureManager() {
         "tests/fixtures/raw_wire_acp_agent.ts",
       ],
     },
-  });
+  };
 }
 
 Deno.test("journals unknown raw updates in order and keeps the connection usable", async () => {
@@ -132,8 +138,91 @@ Deno.test("journals unknown raw updates in order and keeps the connection usable
     if (!reread.detail.retained) {
       throw new Error("Mutating an event query changed the manager journal");
     }
+    const followup = await manager.prompt(session.id, "followup");
+    if (
+      followup.text !== "raw reply" || followup.stopReason !== "end_turn" ||
+      manager.getEvents(session.id).events.length !== 6
+    ) {
+      throw new Error(
+        "Unknown update disrupted the next prompt in the same session",
+      );
+    }
   } finally {
     await manager.closeAll();
+  }
+});
+
+Deno.test("MCP preserves unknown update params and metadata across successive prompts", async () => {
+  const manager = rawFixtureManager();
+  const server = createMcpServer(rawFixtureAgents(), manager);
+  const mcp = await connectMcp(server);
+  try {
+    const started = parseToolResult(
+      await mcp.callTool("start_session", {
+        agentId: "raw",
+        cwd: Deno.cwd(),
+      }).response,
+    );
+    const sessionId = String(started.sessionId);
+    for (let turn = 0; turn < 2; turn++) {
+      const prompt = parseToolResult(
+        await mcp.callTool("prompt", {
+          sessionId,
+          text: `raw turn ${turn}`,
+          wait: true,
+        }).response,
+      );
+      if (
+        prompt.state !== "completed" || prompt.text !== "raw reply" ||
+        prompt.stopReason !== "end_turn"
+      ) {
+        throw new Error(
+          `Prompt failed after an unknown update: ${JSON.stringify(prompt)}`,
+        );
+      }
+      const page = parseToolResult(
+        await mcp.callTool("get_events", {
+          sessionId,
+          afterSequence: turn * 3,
+          includeRaw: true,
+        }).response,
+      );
+      const events = page.events as Array<
+        { sequence: number; kind: string; update: unknown; raw: unknown }
+      >;
+      if (
+        events.map((event) => event.kind).join(",") !==
+          "agent_message_chunk,future_update,agent_message_chunk" ||
+        events.map((event) => event.sequence).join(",") !==
+          [turn * 3 + 1, turn * 3 + 2, turn * 3 + 3].join(",") ||
+        JSON.stringify(events[1].raw) !== JSON.stringify({
+            sessionId: started.acpSessionId,
+            update: {
+              sessionUpdate: "future_update",
+              detail: { retained: true },
+            },
+            _meta: { fixture: "raw-wire", ordinal: 2 },
+            ordinal: 2,
+          })
+      ) {
+        throw new Error(
+          "MCP lost the unknown tag, raw params, metadata, or update order",
+        );
+      }
+      const snapshot = parseToolResult(
+        await mcp.callTool("get_session", { sessionId }).response,
+      );
+      if (
+        snapshot.acpSessionId !== started.acpSessionId ||
+        snapshot.id !== sessionId
+      ) {
+        throw new Error("Follow-up prompt changed the ACP session");
+      }
+    }
+  } finally {
+    await mcp.close();
+    await manager.closeAll();
+    await server.close();
   }
 });
 
