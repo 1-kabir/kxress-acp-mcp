@@ -1,3 +1,4 @@
+import { deepStrictEqual as equal } from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
@@ -51,14 +52,6 @@ async function withSession(check: (session: Session) => Promise<void>) {
     await mcp.close();
     await manager.closeAll();
     await server.close();
-  }
-}
-
-function equal(actual: unknown, expected: unknown) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(
-      `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
-    );
   }
 }
 
