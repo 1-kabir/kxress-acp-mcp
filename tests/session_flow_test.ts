@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import {
   DEFAULT_MAX_MANAGED_SESSIONS,
   DEFAULT_SESSION_START_TIMEOUT_MS,
@@ -134,11 +135,11 @@ Deno.test("journals unknown raw updates in order and keeps the connection usable
         includeRaw: true,
       }).response,
     );
-    if (JSON.stringify(replay.events) !== JSON.stringify(events)) {
-      throw new Error(
-        "MCP changed journal contents, update order, or raw metadata",
-      );
-    }
+    deepStrictEqual(
+      replay.events,
+      events,
+      "MCP changed journal contents, update order, or raw metadata",
+    );
     (events[1].update as { detail: { retained: boolean } }).detail.retained =
       false;
     const reread = manager.getEvents(session.id).events[1].update as {
