@@ -125,7 +125,7 @@ const MAX_CANDIDATES = 20;
 function modelPrivacy(model: PlanningModel): Record<string, unknown> | null {
   const value = model.metadata?.privacy;
   return value && typeof value === "object"
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -140,8 +140,10 @@ function privacyAllowed(
 
 function costAllowed(model: PlanningModel, policy: PlanningCostPolicy) {
   const metadata = model.metadata ?? {};
-  return (!policy.freeOnly || metadata.free === true) &&
-    (!policy.noSubscription || metadata.subscriptionRequired === false);
+  return (
+    (!policy.freeOnly || metadata.free === true) &&
+    (!policy.noSubscription || metadata.subscriptionRequired === false)
+  );
 }
 
 export interface CandidateSummaryOptions {
@@ -178,10 +180,10 @@ export function summarizeModelCandidates(
     if (
       search &&
       !`${model.id} ${model.name ?? model.metadata?.name ?? ""}`
-        .toLocaleLowerCase().includes(
-          search,
-        )
-    ) return false;
+        .toLocaleLowerCase()
+        .includes(search)
+    )
+      return false;
     return model.available;
   });
   const offset = Math.max(0, options.offset ?? 0);
@@ -189,43 +191,48 @@ export function summarizeModelCandidates(
   const candidates = eligible.slice(offset, offset + limit).map((model) => {
     const metadata = model.metadata ?? {};
     const privacy = modelPrivacy(model);
-    const pricing = metadata.pricing && typeof metadata.pricing === "object"
-      ? metadata.pricing as Record<string, unknown>
-      : undefined;
-    const hasPaidPrice = pricing && typeof pricing === "object" &&
+    const pricing =
+      metadata.pricing && typeof metadata.pricing === "object"
+        ? (metadata.pricing as Record<string, unknown>)
+        : undefined;
+    const hasPaidPrice =
+      pricing &&
+      typeof pricing === "object" &&
       ((typeof pricing.input === "number" && pricing.input > 0) ||
         (typeof pricing.output === "number" && pricing.output > 0));
-    const costStatus = metadata.free === true
-      ? "free"
-      : metadata.free === false || hasPaidPrice
-      ? "paid"
-      : "unknown";
-    const tier = metadata.underlyingCostTier &&
-        typeof metadata.underlyingCostTier === "object"
-      ? metadata.underlyingCostTier as Record<string, unknown>
-      : undefined;
+    const costStatus =
+      metadata.free === true
+        ? "free"
+        : metadata.free === false || hasPaidPrice
+          ? "paid"
+          : "unknown";
+    const tier =
+      metadata.underlyingCostTier &&
+      typeof metadata.underlyingCostTier === "object"
+        ? (metadata.underlyingCostTier as Record<string, unknown>)
+        : undefined;
     return {
       id: model.id,
       name: String(model.name ?? metadata.name ?? model.id),
       configId: model.configId,
       selected: typeof model.selected === "boolean" ? model.selected : null,
       costStatus,
-      pricingStatus: typeof metadata.pricingStatus === "string"
-        ? metadata.pricingStatus
-        : null,
-      underlyingCostTier: tier && typeof tier === "object" &&
-          typeof tier.value === "string"
-        ? tier.value
-        : null,
-      subscriptionRequired: typeof metadata.subscriptionRequired === "boolean"
-        ? metadata.subscriptionRequired
-        : null,
-      trainingUse: typeof privacy?.trainingUse === "string"
-        ? privacy.trainingUse
-        : null,
-      retention: typeof privacy?.retention === "string"
-        ? privacy.retention
-        : null,
+      pricingStatus:
+        typeof metadata.pricingStatus === "string"
+          ? metadata.pricingStatus
+          : null,
+      underlyingCostTier:
+        tier && typeof tier === "object" && typeof tier.value === "string"
+          ? tier.value
+          : null,
+      subscriptionRequired:
+        typeof metadata.subscriptionRequired === "boolean"
+          ? metadata.subscriptionRequired
+          : null,
+      trainingUse:
+        typeof privacy?.trainingUse === "string" ? privacy.trainingUse : null,
+      retention:
+        typeof privacy?.retention === "string" ? privacy.retention : null,
     } satisfies CandidateSummary;
   });
   return {
@@ -248,7 +255,8 @@ function fallbackClassificationReason(
   if (
     classification.source === "opencode" &&
     classification.evidence === "message_heuristic"
-  ) return undefined;
+  )
+    return undefined;
   return "classification_not_allowed";
 }
 
@@ -276,11 +284,15 @@ export async function runPlanningWorkflow(
     cleanupWarnings: [],
   };
   if (
-    !options.repository || !options.task || !options.selected?.agentId ||
-    !options.selected?.modelId || !options.privacyPolicy ||
+    !options.repository ||
+    !options.task ||
+    !options.selected?.agentId ||
+    !options.selected?.modelId ||
+    !options.privacyPolicy ||
     !options.costPolicy ||
     candidates.length > MAX_CANDIDATES ||
-    !Number.isInteger(maxAttempts) || maxAttempts < 1 ||
+    !Number.isInteger(maxAttempts) ||
+    maxAttempts < 1 ||
     maxAttempts > MAX_ATTEMPTS
   ) {
     result.stopReason = "invalid_workflow_options";
@@ -355,21 +367,23 @@ export async function runPlanningWorkflow(
         result.attempts.push({
           ...candidate,
           status: "skipped",
-          reason: listing.status === "timed_out"
-            ? "model_discovery_timed_out"
-            : listing.status === "cancelled"
-            ? "model_discovery_cancelled"
-            : "model_discovery_failed",
+          reason:
+            listing.status === "timed_out"
+              ? "model_discovery_timed_out"
+              : listing.status === "cancelled"
+                ? "model_discovery_cancelled"
+                : "model_discovery_failed",
         });
-        result.stopReason = listing.status === "cancelled"
-          ? "cancelled"
-          : listing.status === "timed_out"
-          ? "model_discovery_timed_out"
-          : "model_discovery_failed";
+        result.stopReason =
+          listing.status === "cancelled"
+            ? "cancelled"
+            : listing.status === "timed_out"
+              ? "model_discovery_timed_out"
+              : "model_discovery_failed";
         return result;
       }
-      const model = listing.models?.find((entry) =>
-        entry.available === true && entry.id === candidate.modelId
+      const model = listing.models?.find(
+        (entry) => entry.available === true && entry.id === candidate.modelId,
       );
       if (!model) {
         result.attempts.push({
@@ -409,12 +423,12 @@ export async function runPlanningWorkflow(
         try {
           validation = services.validateConfiguration
             ? await services.validateConfiguration({
-              ...candidate,
-              configId: model.configId,
-              config: options.config,
-              modeId: options.modeId,
-              canonicalSnapshotPath: canonical.cwd,
-            })
+                ...candidate,
+                configId: model.configId,
+                config: options.config,
+                modeId: options.modeId,
+                canonicalSnapshotPath: canonical.cwd,
+              })
             : { valid: false, reason: "config_validation_unavailable" };
         } catch {
           validation = { valid: false, reason: "config_validation_failed" };
@@ -476,17 +490,19 @@ export async function runPlanningWorkflow(
         privacy,
         ...(taskResult.error
           ? {
-            error: {
-              ...(taskResult.error.kind ? { kind: taskResult.error.kind } : {}),
-              ...(taskResult.error.stage
-                ? { stage: taskResult.error.stage }
-                : {}),
-              ...(taskResult.error.acpCode !== undefined
-                ? { acpCode: taskResult.error.acpCode }
-                : {}),
-              ...(classification ? { classification } : {}),
-            },
-          }
+              error: {
+                ...(taskResult.error.kind
+                  ? { kind: taskResult.error.kind }
+                  : {}),
+                ...(taskResult.error.stage
+                  ? { stage: taskResult.error.stage }
+                  : {}),
+                ...(taskResult.error.acpCode !== undefined
+                  ? { acpCode: taskResult.error.acpCode }
+                  : {}),
+                ...(classification ? { classification } : {}),
+              },
+            }
           : {}),
       };
       result.attempts.push(attempt);
@@ -507,11 +523,12 @@ export async function runPlanningWorkflow(
         return result;
       }
       if (taskResult.status !== "failed") {
-        result.stopReason = taskResult.status === "timed_out"
-          ? "timed_out"
-          : taskResult.status === "cancelled"
-          ? "cancelled"
-          : "permission_required";
+        result.stopReason =
+          taskResult.status === "timed_out"
+            ? "timed_out"
+            : taskResult.status === "cancelled"
+              ? "cancelled"
+              : "permission_required";
         return result;
       }
       const classificationStop = fallbackClassificationReason(classification);
@@ -530,11 +547,12 @@ export async function runPlanningWorkflow(
       }
     }
 
-    result.stopReason = attemptedCount === 0
-      ? "no_eligible_candidate"
-      : rateLimitFallbackAuthorized
-      ? "candidates_exhausted"
-      : "no_eligible_candidate";
+    result.stopReason =
+      attemptedCount === 0
+        ? "no_eligible_candidate"
+        : rateLimitFallbackAuthorized
+          ? "candidates_exhausted"
+          : "no_eligible_candidate";
     return result;
   } finally {
     if (canonical) {

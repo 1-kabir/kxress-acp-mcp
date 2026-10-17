@@ -21,9 +21,11 @@ export interface AcpPermissionRequest {
 }
 
 export type AcpPermissionResponse = {
-  outcome: { outcome: "selected"; optionId: string } | {
-    outcome: "cancelled";
-  };
+  outcome:
+    | { outcome: "selected"; optionId: string }
+    | {
+        outcome: "cancelled";
+      };
 };
 
 export interface ProtocolSessionInfo {

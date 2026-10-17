@@ -1,3 +1,4 @@
+import process from "node:process";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
@@ -33,7 +34,7 @@ import { VERSION } from "../version.ts";
 type McpServerOptions = {
   loadOpenCodeCatalog?: (signal: AbortSignal) => Promise<OpenCodeCatalog>;
   failureClassifiers?: AgentFailureClassifiers;
-  workspaceCleanupRemove?: typeof Deno.remove;
+  workspaceCleanupRemove?: typeof nodeFs.removePath;
   workspaceCleanupIsProcessAlive?: (pid: number) => boolean | Promise<boolean>;
   resolveConfiguration?: (cwd?: string) => Promise<ResolvedConfiguration>;
 };
@@ -62,18 +63,20 @@ function runTaskFailure(
   classification?: ReturnType<typeof classifyAgentFailure>,
 ) {
   return {
-    content: [{
-      type: "text" as const,
-      text: JSON.stringify({
-        status,
-        error: {
-          kind,
-          stage,
-          ...(acpCode === undefined ? {} : { acpCode }),
-          ...(classification ? { classification } : {}),
-        },
-      }),
-    }],
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({
+          status,
+          error: {
+            kind,
+            stage,
+            ...(acpCode === undefined ? {} : { acpCode }),
+            ...(classification ? { classification } : {}),
+          },
+        }),
+      },
+    ],
   };
 }
 
@@ -90,9 +93,8 @@ function workspaceEntrySummaries(
     reason?: string;
   }>,
 ) {
-  return entries.filter((entry) =>
-    /^plan-[a-z0-9]+$/i.test(workspaceId(entry.path))
-  )
+  return entries
+    .filter((entry) => /^plan-[a-z0-9]+$/i.test(workspaceId(entry.path)))
     .map((entry) => ({
       workspaceId: workspaceId(entry.path),
       status: entry.status,
@@ -133,16 +135,18 @@ function isModelOption(
   option: Record<string, unknown>,
   agent: AgentDefinition,
 ): boolean {
-  return option.type === "select" &&
+  return (
+    option.type === "select" &&
     (option.category === "model" ||
       ((option.category === undefined || option.category === null) &&
-        option.id === agent.modelConfigId));
+        option.id === agent.modelConfigId))
+  );
 }
 
 function configOptionIds(configOptions: Array<Record<string, unknown>>) {
   return new Set(
     configOptions.flatMap((option) =>
-      typeof option.id === "string" ? [option.id] : []
+      typeof option.id === "string" ? [option.id] : [],
     ),
   );
 }
@@ -191,10 +195,12 @@ async function applyRequestSelection(
 ) {
   const policy = agent.models ?? {};
   let options = manager.getSessionSnapshot(sessionId).configOptions;
-  const mayNeedModel = modelRequest.model !== undefined ||
+  const mayNeedModel =
+    modelRequest.model !== undefined ||
     modelRequest.modelSize !== undefined ||
     modelRequest.thinkingEffort !== undefined ||
-    policy.default !== undefined || policy.allowedModels !== undefined ||
+    policy.default !== undefined ||
+    policy.allowedModels !== undefined ||
     policy.deniedModels !== undefined ||
     Object.keys(requestConfig).length > 0;
   if (mayNeedModel) {
@@ -217,11 +223,11 @@ async function applyRequestSelection(
   const modelOptions = options.filter((option) => isModelOption(option, agent));
   const modelConfigIds = new Set(
     modelOptions.flatMap((option) =>
-      typeof option.id === "string" ? [option.id] : []
+      typeof option.id === "string" ? [option.id] : [],
     ),
   );
   const configuredModelEntries = Object.entries(requestConfig).filter(([id]) =>
-    modelConfigIds.has(id)
+    modelConfigIds.has(id),
   );
   if (configuredModelEntries.length > 1) {
     throw new Error(
@@ -246,8 +252,8 @@ async function applyRequestSelection(
   const effortMapping = policy.thinkingEffort;
   if (effortMapping && effortMapping.configOption in requestConfig) {
     const raw = requestConfig[effortMapping.configOption];
-    const normalized = Object.entries(effortMapping.values).find(([, value]) =>
-      value === raw
+    const normalized = Object.entries(effortMapping.values).find(
+      ([, value]) => value === raw,
     )?.[0];
     if (!normalized) {
       throw new Error(
@@ -264,8 +270,8 @@ async function applyRequestSelection(
       thinkingEffort: normalized as ModelSelectionRequest["thinkingEffort"],
     };
     requestConfig = Object.fromEntries(
-      Object.entries(requestConfig).filter(([id]) =>
-        id !== effortMapping.configOption
+      Object.entries(requestConfig).filter(
+        ([id]) => id !== effortMapping.configOption,
       ),
     );
   }
@@ -274,29 +280,20 @@ async function applyRequestSelection(
     options = await manager.setConfigOption(sessionId, id, value);
   }
 
-  const requestedEffort = requested.thinkingEffort ??
-    policy.default?.thinkingEffort;
+  const requestedEffort =
+    requested.thinkingEffort ?? policy.default?.thinkingEffort;
   if (requestedEffort) {
-    options = await waitForThinkingChoice(
-      manager,
-      sessionId,
-      options,
-      agent,
-    );
+    options = await waitForThinkingChoice(manager, sessionId, options, agent);
   }
 
   let advertised = discoverAdvertisedModels(options, agent);
-  let selection = resolveModelSelection(
-    advertised,
-    options,
-    policy,
-    requested,
-  );
-  const currentModelValue = options.find((option) =>
-    option.id === selection.configId
+  let selection = resolveModelSelection(advertised, options, policy, requested);
+  const currentModelValue = options.find(
+    (option) => option.id === selection.configId,
   )?.currentValue;
   if (
-    selection.configId && selection.configValue !== undefined &&
+    selection.configId &&
+    selection.configValue !== undefined &&
     currentModelValue !== selection.configValue
   ) {
     options = await manager.setConfigOption(
@@ -305,18 +302,13 @@ async function applyRequestSelection(
       selection.configValue,
     );
     if (requestedEffort) {
-      options = await waitForThinkingChoice(
-        manager,
-        sessionId,
-        options,
-        agent,
-      );
+      options = await waitForThinkingChoice(manager, sessionId, options, agent);
     }
     advertised = discoverAdvertisedModels(options, agent);
     selection = resolveModelSelection(advertised, options, policy, requested);
   }
-  const currentThinkingValue = options.find((option) =>
-    option.id === selection.thinkingConfigId
+  const currentThinkingValue = options.find(
+    (option) => option.id === selection.thinkingConfigId,
   )?.currentValue;
   if (
     selection.thinkingConfigId &&
@@ -333,12 +325,12 @@ async function applyRequestSelection(
     sessionId,
     selection.model
       ? {
-        model: selection.model.id,
-        ...(selection.modelSize ? { modelSize: selection.modelSize } : {}),
-        ...(selection.thinkingEffort
-          ? { thinkingEffort: selection.thinkingEffort }
-          : {}),
-      }
+          model: selection.model.id,
+          ...(selection.modelSize ? { modelSize: selection.modelSize } : {}),
+          ...(selection.thinkingEffort
+            ? { thinkingEffort: selection.thinkingEffort }
+            : {}),
+        }
       : undefined,
   );
   return { selection, configOptions: options };
@@ -350,180 +342,212 @@ export function createMcpServer(
   options: McpServerOptions = {},
 ) {
   const server = new McpServer({ name: "acp-mcp", version: VERSION });
-  const loadOpenCodeCatalog = options.loadOpenCodeCatalog ??
-    ((signal) => fetchOpenCodeCatalog(signal));
+  const loadOpenCodeCatalog =
+    options.loadOpenCodeCatalog ?? ((signal) => fetchOpenCodeCatalog(signal));
   const failureClassifiers = {
     ...defaultFailureClassifiers,
     ...options.failureClassifiers,
   };
-  const resolveOperationConfig = options.resolveConfiguration ??
+  const resolveOperationConfig =
+    options.resolveConfiguration ??
     ((cwd?: string): Promise<ResolvedConfiguration> =>
       Promise.resolve({
         agents,
         sources: [],
-        cwd: cwd ?? Deno.cwd(),
+        cwd: cwd ?? process.cwd(),
         explicit: false,
       }));
   const launchOptions = (agentDefinition: AgentDefinition) =>
     options.resolveConfiguration ? { agentDefinition } : {};
-  server.registerTool("list_stale_workspaces", {
-    description:
-      "Inspect acp-mcp-owned disposable workspaces eligible for stale cleanup. This never deletes workspaces. The default age threshold is 24 hours.",
-    annotations: {
-      title: "List stale workspaces",
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
+  server.registerTool(
+    "list_stale_workspaces",
+    {
+      description:
+        "Inspect acp-mcp-owned disposable workspaces eligible for stale cleanup. This never deletes workspaces. The default age threshold is 24 hours.",
+      annotations: {
+        title: "List stale workspaces",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: z.strictObject({
+        olderThanMs: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(
+            "Minimum workspace age in milliseconds (defaults to 86400000)",
+          ),
+      }),
     },
-    inputSchema: z.strictObject({
-      olderThanMs: z.number().int().min(1).optional().describe(
-        "Minimum workspace age in milliseconds (defaults to 86400000)",
-      ),
-    }),
-  }, async ({ olderThanMs }) => {
-    try {
-      const result = await cleanupStaleWorkspaceSnapshots({
-        olderThanMs,
-        ...(options.workspaceCleanupIsProcessAlive
-          ? { isProcessAlive: options.workspaceCleanupIsProcessAlive }
-          : {}),
-      });
-      const candidates = result.entries.filter((entry) =>
-        entry.status === "eligible"
-      );
-      const skippedEntries = result.entries.filter((entry) =>
-        entry.status === "skipped"
-      );
-      const failedEntries = result.entries.filter((entry) =>
-        entry.status === "failed"
-      );
-      const summary = {
-        status: failedEntries.length ? "failed" : "completed",
-        root: result.root,
-        olderThanMs: result.olderThanMs,
-        candidates: workspaceEntrySummaries(candidates),
-        skipped: result.skipped,
-        skippedByReason: reasonCounts(skippedEntries),
-        failed: result.failed,
-        failures: workspaceEntrySummaries(failedEntries),
-      };
-      return {
-        ...(result.failed ? { isError: true } : {}),
-        content: [{ type: "text" as const, text: JSON.stringify(summary) }],
-      };
-    } catch {
-      return {
-        isError: true,
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({ status: "failed", stage: "workspace_list" }),
-        }],
-      };
-    }
-  });
-  server.registerTool("cleanup_stale_workspaces", {
-    description:
-      "Delete all eligible stale acp-mcp-owned disposable workspaces. Only valid managed workspaces older than the threshold are removed; recent, active, unknown, and invalid entries are preserved. The default age threshold is 24 hours.",
-    annotations: {
-      title: "Clean up stale workspaces",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: z.strictObject({
-      olderThanMs: z.number().int().min(1).optional().describe(
-        "Minimum workspace age in milliseconds (defaults to 86400000)",
-      ),
-    }),
-  }, async ({ olderThanMs }) => {
-    try {
-      const result = await cleanupStaleWorkspaceSnapshots({
-        olderThanMs,
-        delete: true,
-        ...(options.workspaceCleanupRemove
-          ? { remove: options.workspaceCleanupRemove }
-          : {}),
-        ...(options.workspaceCleanupIsProcessAlive
-          ? { isProcessAlive: options.workspaceCleanupIsProcessAlive }
-          : {}),
-      });
-      const failures = workspaceEntrySummaries(
-        result.entries.filter((entry) => entry.status === "failed"),
-      );
-      const summary = {
-        status: result.failed ? "failed" : "completed",
-        root: result.root,
-        olderThanMs: result.olderThanMs,
-        removed: result.removed,
-        skipped: result.skipped,
-        skippedByReason: reasonCounts(
-          result.entries.filter((entry) => entry.status === "skipped"),
-        ),
-        failed: result.failed,
-        failures,
-        entries: workspaceEntrySummaries(result.entries),
-      };
-      return {
-        ...(result.failed ? { isError: true } : {}),
-        content: [{ type: "text" as const, text: JSON.stringify(summary) }],
-      };
-    } catch {
-      return {
-        isError: true,
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            status: "failed",
-            stage: "workspace_cleanup",
-          }),
-        }],
-      };
-    }
-  });
-  server.registerTool("list_agents", {
-    description:
-      "List configured ACP agents and whether their launch executable is present. commandFound does not verify authentication or provider access.",
-    annotations: {
-      title: "List ACP agents",
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: z.object({ cwd: z.string().optional() }),
-  }, async ({ cwd }): Promise<CallToolResult> => {
-    const resolved = await resolveOperationConfig(cwd);
-    const listedAgents = await Promise.all(
-      Object.entries(resolved.agents).map(async ([id, agent]) => ({
-        id,
-        displayName: agent.displayName ?? id,
-        ...(agent.implementation
-          ? { implementation: agent.implementation }
-          : {}),
-        acpProtocol: agent.acpProtocol ?? "v1",
-        supportedProtocols: agent.supportedProtocols,
-        ...(agent.models
-          ? {
-            modelPolicy: {
-              default: agent.models.default,
-              allowedModels: agent.models.allowedModels,
-              deniedModels: agent.models.deniedModels,
+    async ({ olderThanMs }) => {
+      try {
+        const result = await cleanupStaleWorkspaceSnapshots({
+          olderThanMs,
+          ...(options.workspaceCleanupIsProcessAlive
+            ? { isProcessAlive: options.workspaceCleanupIsProcessAlive }
+            : {}),
+        });
+        const candidates = result.entries.filter(
+          (entry) => entry.status === "eligible",
+        );
+        const skippedEntries = result.entries.filter(
+          (entry) => entry.status === "skipped",
+        );
+        const failedEntries = result.entries.filter(
+          (entry) => entry.status === "failed",
+        );
+        const summary = {
+          status: failedEntries.length ? "failed" : "completed",
+          root: result.root,
+          olderThanMs: result.olderThanMs,
+          candidates: workspaceEntrySummaries(candidates),
+          skipped: result.skipped,
+          skippedByReason: reasonCounts(skippedEntries),
+          failed: result.failed,
+          failures: workspaceEntrySummaries(failedEntries),
+        };
+        return {
+          ...(result.failed ? { isError: true } : {}),
+          content: [{ type: "text" as const, text: JSON.stringify(summary) }],
+        };
+      } catch {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                status: "failed",
+                stage: "workspace_list",
+              }),
             },
-          }
-          : {}),
-        commandFound: !!await findExecutablePath(agent.command),
-        installHint: agent.installHint,
-      })),
-    );
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify(listedAgents),
-      }],
-    };
-  });
+          ],
+        };
+      }
+    },
+  );
+  server.registerTool(
+    "cleanup_stale_workspaces",
+    {
+      description:
+        "Delete all eligible stale acp-mcp-owned disposable workspaces. Only valid managed workspaces older than the threshold are removed; recent, active, unknown, and invalid entries are preserved. The default age threshold is 24 hours.",
+      annotations: {
+        title: "Clean up stale workspaces",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: z.strictObject({
+        olderThanMs: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(
+            "Minimum workspace age in milliseconds (defaults to 86400000)",
+          ),
+      }),
+    },
+    async ({ olderThanMs }) => {
+      try {
+        const result = await cleanupStaleWorkspaceSnapshots({
+          olderThanMs,
+          delete: true,
+          ...(options.workspaceCleanupRemove
+            ? { remove: options.workspaceCleanupRemove }
+            : {}),
+          ...(options.workspaceCleanupIsProcessAlive
+            ? { isProcessAlive: options.workspaceCleanupIsProcessAlive }
+            : {}),
+        });
+        const failures = workspaceEntrySummaries(
+          result.entries.filter((entry) => entry.status === "failed"),
+        );
+        const summary = {
+          status: result.failed ? "failed" : "completed",
+          root: result.root,
+          olderThanMs: result.olderThanMs,
+          removed: result.removed,
+          skipped: result.skipped,
+          skippedByReason: reasonCounts(
+            result.entries.filter((entry) => entry.status === "skipped"),
+          ),
+          failed: result.failed,
+          failures,
+          entries: workspaceEntrySummaries(result.entries),
+        };
+        return {
+          ...(result.failed ? { isError: true } : {}),
+          content: [{ type: "text" as const, text: JSON.stringify(summary) }],
+        };
+      } catch {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                status: "failed",
+                stage: "workspace_cleanup",
+              }),
+            },
+          ],
+        };
+      }
+    },
+  );
+  server.registerTool(
+    "list_agents",
+    {
+      description:
+        "List configured ACP agents and whether their launch executable is present. commandFound does not verify authentication or provider access.",
+      annotations: {
+        title: "List ACP agents",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: z.object({ cwd: z.string().optional() }),
+    },
+    async ({ cwd }): Promise<CallToolResult> => {
+      const resolved = await resolveOperationConfig(cwd);
+      const listedAgents = await Promise.all(
+        Object.entries(resolved.agents).map(async ([id, agent]) => ({
+          id,
+          displayName: agent.displayName ?? id,
+          ...(agent.implementation
+            ? { implementation: agent.implementation }
+            : {}),
+          acpProtocol: agent.acpProtocol ?? "v1",
+          supportedProtocols: agent.supportedProtocols,
+          ...(agent.models
+            ? {
+                modelPolicy: {
+                  default: agent.models.default,
+                  allowedModels: agent.models.allowedModels,
+                  deniedModels: agent.models.deniedModels,
+                },
+              }
+            : {}),
+          commandFound: !!(await findExecutablePath(agent.command)),
+          installHint: agent.installHint,
+        })),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(listedAgents),
+          },
+        ],
+      };
+    },
+  );
   server.registerTool(
     "start_session",
     {
@@ -543,28 +567,23 @@ export function createMcpServer(
         modelSize: z.enum(MODEL_SIZES).optional(),
         thinkingEffort: z.enum(THINKING_EFFORTS).optional(),
         modeId: z.string().optional(),
-        permissionPolicy: z.enum([
-          "read_only",
-          "operator",
-          "allow_all",
-          "deny_all",
-        ]).optional(),
+        permissionPolicy: z
+          .enum(["read_only", "operator", "allow_all", "deny_all"])
+          .optional(),
         prompt: z.string().optional(),
       },
     },
-    async (
-      {
-        agentId,
-        cwd,
-        config,
-        model,
-        modelSize,
-        thinkingEffort,
-        modeId,
-        permissionPolicy,
-        prompt,
-      },
-    ) => {
+    async ({
+      agentId,
+      cwd,
+      config,
+      model,
+      modelSize,
+      thinkingEffort,
+      modeId,
+      permissionPolicy,
+      prompt,
+    }) => {
       try {
         const resolved = await resolveOperationConfig(cwd);
         const agent = resolved.agents[agentId];
@@ -578,25 +597,33 @@ export function createMcpServer(
           launchOptions(agent),
         );
         try {
-          await applyRequestSelection(manager, session.id, agent, {
-            model,
-            modelSize,
-            thinkingEffort,
-          }, config);
+          await applyRequestSelection(
+            manager,
+            session.id,
+            agent,
+            {
+              model,
+              modelSize,
+              thinkingEffort,
+            },
+            config,
+          );
           const result = prompt
             ? await manager.prompt(session.id, prompt)
             : undefined;
           return {
-            content: [{
-              type: "text",
-              text: JSON.stringify({
-                sessionId: session.id,
-                acpSessionId: session.acpSessionId,
-                agentId,
-                acpProtocol: session.acpProtocol,
-                result,
-              }),
-            }],
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  sessionId: session.id,
+                  acpSessionId: session.acpSessionId,
+                  agentId,
+                  acpProtocol: session.acpProtocol,
+                  result,
+                }),
+              },
+            ],
           };
         } catch (e) {
           await manager.close(session.id);
@@ -621,38 +648,55 @@ export function createMcpServer(
       },
       inputSchema: {
         agentId: z.string().describe("Configured ACP agent to run"),
-        task: z.string().describe(
-          "Task instructions. Repository context is read by the ACP agent; do not include file contents unless intended for its model provider.",
-        ),
-        cwd: z.string().optional().describe(
-          "Working directory the ACP agent may inspect. Files it reads may be sent to its configured model provider.",
-        ),
-        config: z.record(z.string(), z.string()).optional().describe(
-          "Generic ACP configuration options, such as a model ID",
-        ),
-        model: z.string().optional().describe(
-          "Exact model ID advertised by the agent",
-        ),
-        modelSize: z.enum(MODEL_SIZES).optional().describe(
-          "Configured model-size mapping",
-        ),
-        thinkingEffort: z.enum(THINKING_EFFORTS).optional().describe(
-          "Normalized thinking-effort request",
-        ),
+        task: z
+          .string()
+          .describe(
+            "Task instructions. Repository context is read by the ACP agent; do not include file contents unless intended for its model provider.",
+          ),
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            "Working directory the ACP agent may inspect. Files it reads may be sent to its configured model provider.",
+          ),
+        config: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe("Generic ACP configuration options, such as a model ID"),
+        model: z
+          .string()
+          .optional()
+          .describe("Exact model ID advertised by the agent"),
+        modelSize: z
+          .enum(MODEL_SIZES)
+          .optional()
+          .describe("Configured model-size mapping"),
+        thinkingEffort: z
+          .enum(THINKING_EFFORTS)
+          .optional()
+          .describe("Normalized thinking-effort request"),
         modeId: z.string().optional(),
-        permissionPolicy: z.enum([
-          "read_only",
-          "operator",
-          "allow_all",
-          "deny_all",
-        ]).optional().describe(
-          "ACP session/request_permission response policy (defaults to read_only). read_only allows agent-reported read, search, fetch, and think kinds and rejects other requested kinds. Agents may act without requesting permission; this does not sandbox the process or keep data local.",
-        ),
-        idleTimeoutMs: z.number().int().min(1).max(3600000).optional()
+        permissionPolicy: z
+          .enum(["read_only", "operator", "allow_all", "deny_all"])
+          .optional()
+          .describe(
+            "ACP session/request_permission response policy (defaults to read_only). read_only allows agent-reported read, search, fetch, and think kinds and rejects other requested kinds. Agents may act without requesting permission; this does not sandbox the process or keep data local.",
+          ),
+        idleTimeoutMs: z
+          .number()
+          .int()
+          .min(1)
+          .max(3600000)
+          .optional()
           .describe(
             "Maximum consecutive time without ACP activity (defaults to 600000); active tasks may run longer",
           ),
-        permissionLeaseMs: z.number().int().min(1).max(600000).optional()
+        permissionLeaseMs: z
+          .number()
+          .int()
+          .min(1)
+          .max(600000)
+          .optional()
           .describe(
             "How long an unresolved operator permission handoff remains available (defaults to 120000)",
           ),
@@ -686,7 +730,9 @@ export function createMcpServer(
         closed = true;
         try {
           await manager.close(sessionId);
-        } catch { /* already closed */ }
+        } catch {
+          /* already closed */
+        }
       };
       try {
         const resolved = await resolveOperationConfig(cwd);
@@ -741,31 +787,34 @@ export function createMcpServer(
             );
             if (pending) {
               const call = pending.toolCall as Record<string, unknown> | null;
-              const action = call && typeof call === "object"
-                ? Object.fromEntries(
-                  ["kind", "title", "name"].flatMap((key) =>
-                    typeof call[key] === "string" ? [[key, call[key]]] : []
-                  ),
-                )
-                : {};
+              const action =
+                call && typeof call === "object"
+                  ? Object.fromEntries(
+                      ["kind", "title", "name"].flatMap((key) =>
+                        typeof call[key] === "string" ? [[key, call[key]]] : [],
+                      ),
+                    )
+                  : {};
               return {
-                content: [{
-                  type: "text",
-                  text: JSON.stringify({
-                    status: "permission_required",
-                    sessionId,
-                    permissionId: pending.id,
-                    leaseTimeoutMs: permissionLeaseMs,
-                    action,
-                    choices: pending.options,
-                  }),
-                }],
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      status: "permission_required",
+                      sessionId,
+                      permissionId: pending.id,
+                      leaseTimeoutMs: permissionLeaseMs,
+                      action,
+                      choices: pending.options,
+                    }),
+                  },
+                ],
               };
             }
           }
           const activityVersion = promptRecord.activityVersion;
-          const remaining = idleTimeoutMs -
-            (performance.now() - promptRecord.lastActivityAt);
+          const remaining =
+            idleTimeoutMs - (performance.now() - promptRecord.lastActivityAt);
           if (remaining <= 0) {
             if (signal.aborted) {
               await manager.cancelPrompt(session.id, promptRecord.id);
@@ -775,7 +824,8 @@ export function createMcpServer(
             if (
               promptRecord.activityVersion !== activityVersion ||
               performance.now() - promptRecord.lastActivityAt < idleTimeoutMs
-            ) continue;
+            )
+              continue;
             await manager.cancelPrompt(session.id, promptRecord.id);
             await close();
             return runTaskFailure("timed_out", "timeout", "prompt");
@@ -806,7 +856,8 @@ export function createMcpServer(
             if (
               promptRecord.activityVersion !== activityVersion ||
               performance.now() - promptRecord.lastActivityAt < idleTimeoutMs
-            ) continue;
+            )
+              continue;
             await manager.cancelPrompt(session.id, promptRecord.id);
             await close();
             return runTaskFailure("timed_out", "timeout", "prompt");
@@ -841,8 +892,8 @@ export function createMcpServer(
           {
             agentId,
             model: effectiveAgents[agentId]?.modelConfigId
-              ? config?.[effectiveAgents[agentId].modelConfigId!] ??
-                selectedModelForFailure
+              ? (config?.[effectiveAgents[agentId].modelConfigId!] ??
+                selectedModelForFailure)
               : selectedModelForFailure,
             stage: "prompt",
             acpCode: promptRecord.errorCode,
@@ -862,19 +913,22 @@ export function createMcpServer(
         if (failureStage === "model_selection") {
           return {
             isError: true,
-            content: [{
-              type: "text",
-              text: JSON.stringify({
-                status: "failed",
-                error: {
-                  kind: "model_selection",
-                  stage: "model_selection",
-                  message: error instanceof Error
-                    ? error.message
-                    : "Model selection failed",
-                },
-              }),
-            }],
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "failed",
+                  error: {
+                    kind: "model_selection",
+                    stage: "model_selection",
+                    message:
+                      error instanceof Error
+                        ? error.message
+                        : "Model selection failed",
+                  },
+                }),
+              },
+            ],
           };
         }
         return runTaskFailure(
@@ -911,19 +965,21 @@ export function createMcpServer(
         timeoutMs: z.number().int().min(1).max(120000).optional(),
       },
     },
-    async (
-      { agentId, cwd, enrich = false, timeoutMs = 30000 },
-      extra,
-    ) => {
+    async ({ agentId, cwd, enrich = false, timeoutMs = 30000 }, extra) => {
       const resolved = await resolveOperationConfig(cwd);
       const definition = resolved.agents[agentId];
       if (!definition) {
         return {
           isError: true,
-          content: [{
-            type: "text",
-            text: JSON.stringify({ status: "failed", stage: "acp_discovery" }),
-          }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "failed",
+                stage: "acp_discovery",
+              }),
+            },
+          ],
         };
       }
       const timeoutSignal = AbortSignal.timeout(timeoutMs);
@@ -943,10 +999,12 @@ export function createMcpServer(
         if (extra.mcpReq.signal.aborted) {
           return {
             isError: true,
-            content: [{
-              type: "text",
-              text: JSON.stringify({ status: "failed", stage: "cancelled" }),
-            }],
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ status: "failed", stage: "cancelled" }),
+              },
+            ],
           };
         }
         let effectiveConfigOptions = session.configOptions;
@@ -966,10 +1024,7 @@ export function createMcpServer(
             signal,
           );
           effectiveConfigOptions = updatedOptions;
-          liveModels = discoverAdvertisedModels(
-            updatedOptions,
-            definition,
-          );
+          liveModels = discoverAdvertisedModels(updatedOptions, definition);
         }
         const policy = definition.models ?? {};
         const models = filterModels(liveModels, policy);
@@ -984,16 +1039,19 @@ export function createMcpServer(
         } catch (error) {
           return {
             isError: true,
-            content: [{
-              type: "text",
-              text: JSON.stringify({
-                status: "failed",
-                stage: "model_policy",
-                message: error instanceof Error
-                  ? error.message
-                  : "Configured model policy could not be resolved",
-              }),
-            }],
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "failed",
+                  stage: "model_policy",
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : "Configured model policy could not be resolved",
+                }),
+              },
+            ],
           };
         }
         let enrichedModels = policyFilteredModels(models, policy);
@@ -1030,13 +1088,15 @@ export function createMcpServer(
             if (extra.mcpReq.signal.aborted) {
               return {
                 isError: true,
-                content: [{
-                  type: "text",
-                  text: JSON.stringify({
-                    status: "failed",
-                    stage: "cancelled",
-                  }),
-                }],
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      status: "failed",
+                      stage: "cancelled",
+                    }),
+                  },
+                ],
               };
             }
             enrichedModels = policyFilteredModels(models, policy);
@@ -1051,160 +1111,178 @@ export function createMcpServer(
           }
         }
         return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              status: "completed",
-              availabilitySource: "acp",
-              models: enrichedModels,
-              enrichment,
-            }),
-          }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "completed",
+                availabilitySource: "acp",
+                models: enrichedModels,
+                enrichment,
+              }),
+            },
+          ],
         };
       } catch {
         const timedOut = timeoutSignal.aborted && !extra.mcpReq.signal.aborted;
         if (!session && startPromise) {
-          void startPromise.then((lateSession) => manager.close(lateSession.id))
+          void startPromise
+            .then((lateSession) => manager.close(lateSession.id))
             .catch(() => undefined);
         }
         return {
           isError: true,
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              status: timedOut ? "timed_out" : "failed",
-              stage: "acp_discovery",
-            }),
-          }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: timedOut ? "timed_out" : "failed",
+                stage: "acp_discovery",
+              }),
+            },
+          ],
         };
       } finally {
         if (session) {
           try {
             await manager.close(session.id);
-          } catch { /* Session may have closed during request cancellation. */ }
+          } catch {
+            /* Session may have closed during request cancellation. */
+          }
         }
       }
     },
   );
-  server.registerTool("load_session", {
-    description:
-      "Load an existing ACP session when the agent advertises session/load support",
-    annotations: {
-      title: "Load ACP session",
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
+  server.registerTool(
+    "load_session",
+    {
+      description:
+        "Load an existing ACP session when the agent advertises session/load support",
+      annotations: {
+        title: "Load ACP session",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      inputSchema: {
+        agentId: z.string(),
+        acpSessionId: z.string(),
+        cwd: z.string(),
+        permissionPolicy: z
+          .enum(["read_only", "operator", "allow_all", "deny_all"])
+          .optional(),
+      },
     },
-    inputSchema: {
-      agentId: z.string(),
-      acpSessionId: z.string(),
-      cwd: z.string(),
-      permissionPolicy: z.enum([
-        "read_only",
-        "operator",
-        "allow_all",
-        "deny_all",
-      ]).optional(),
-    },
-  }, async ({ agentId, acpSessionId, cwd, permissionPolicy }) => {
-    let managedSessionId: string | undefined;
-    try {
-      const resolved = await resolveOperationConfig(cwd);
-      const agent = resolved.agents[agentId];
-      if (!agent) throw new Error(`Unknown agent: ${agentId}`);
-      const session = await manager.load(
-        agentId,
-        acpSessionId,
-        cwd,
-        permissionPolicy,
-        launchOptions(agent),
-      );
-      managedSessionId = session.id;
-      let configOptions = session.configOptions;
-      let models = discoverAdvertisedModels(configOptions, agent);
-      if (
-        !models.some((model) => model.selected) &&
-        (agent.models?.allowedModels || agent.models?.deniedModels)
-      ) {
-        configOptions = await waitForModelCatalog(
-          manager,
-          session.id,
-          agent,
-          configOptions,
+    async ({ agentId, acpSessionId, cwd, permissionPolicy }) => {
+      let managedSessionId: string | undefined;
+      try {
+        const resolved = await resolveOperationConfig(cwd);
+        const agent = resolved.agents[agentId];
+        if (!agent) throw new Error(`Unknown agent: ${agentId}`);
+        const session = await manager.load(
+          agentId,
+          acpSessionId,
+          cwd,
+          permissionPolicy,
+          launchOptions(agent),
         );
-        models = discoverAdvertisedModels(configOptions, agent);
-      }
-      const current = models.find((model) => model.selected);
-      if (
-        (agent.models?.allowedModels || agent.models?.deniedModels) &&
-        (!current || !isModelAllowed(agent.models, current.id))
-      ) {
-        await manager.close(session.id);
-        throw new Error(
-          current
-            ? `Resumed model '${current.id}' is denied by current model policy`
-            : "Cannot verify resumed model against current model policy because ACP did not identify it",
-        );
-      }
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            sessionId: session.id,
-            acpSessionId: session.acpSessionId,
-            agentId,
-            acpProtocol: session.acpProtocol,
+        managedSessionId = session.id;
+        let configOptions = session.configOptions;
+        let models = discoverAdvertisedModels(configOptions, agent);
+        if (
+          !models.some((model) => model.selected) &&
+          (agent.models?.allowedModels || agent.models?.deniedModels)
+        ) {
+          configOptions = await waitForModelCatalog(
+            manager,
+            session.id,
+            agent,
             configOptions,
-            modes: session.modes,
-          }),
-        }],
-      };
-    } catch (e) {
-      if (managedSessionId) {
-        try {
-          await manager.close(managedSessionId);
-        } catch { /* startup or policy validation already closed it */ }
+          );
+          models = discoverAdvertisedModels(configOptions, agent);
+        }
+        const current = models.find((model) => model.selected);
+        if (
+          (agent.models?.allowedModels || agent.models?.deniedModels) &&
+          (!current || !isModelAllowed(agent.models, current.id))
+        ) {
+          await manager.close(session.id);
+          throw new Error(
+            current
+              ? `Resumed model '${current.id}' is denied by current model policy`
+              : "Cannot verify resumed model against current model policy because ACP did not identify it",
+          );
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                sessionId: session.id,
+                acpSessionId: session.acpSessionId,
+                agentId,
+                acpProtocol: session.acpProtocol,
+                configOptions,
+                modes: session.modes,
+              }),
+            },
+          ],
+        };
+      } catch (e) {
+        if (managedSessionId) {
+          try {
+            await manager.close(managedSessionId);
+          } catch {
+            /* startup or policy validation already closed it */
+          }
+        }
+        return { isError: true, content: [{ type: "text", text: String(e) }] };
       }
-      return { isError: true, content: [{ type: "text", text: String(e) }] };
-    }
-  });
-  server.registerTool("prompt", {
-    description:
-      "Send a prompt to an active ACP session; wait=false returns a prompt ID for polling",
-    annotations: {
-      title: "Prompt ACP session",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
     },
-    inputSchema: {
-      sessionId: z.string(),
-      text: z.string(),
-      wait: z.boolean().optional(),
-      waitMs: z.number().int().min(0).max(120000).optional(),
+  );
+  server.registerTool(
+    "prompt",
+    {
+      description:
+        "Send a prompt to an active ACP session; wait=false returns a prompt ID for polling",
+      annotations: {
+        title: "Prompt ACP session",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      inputSchema: {
+        sessionId: z.string(),
+        text: z.string(),
+        wait: z.boolean().optional(),
+        waitMs: z.number().int().min(0).max(120000).optional(),
+      },
     },
-  }, async ({ sessionId, text, wait = true, waitMs = 60000 }) => {
-    try {
-      const prompt = manager.beginPrompt(sessionId, text);
-      if (wait) await manager.waitPrompt(sessionId, prompt.id, waitMs);
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            promptId: prompt.id,
-            state: prompt.state,
-            text: prompt.text,
-            stopReason: prompt.stopReason,
-            error: prompt.error,
-          }),
-        }],
-      };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: String(e) }] };
-    }
-  });
+    async ({ sessionId, text, wait = true, waitMs = 60000 }) => {
+      try {
+        const prompt = manager.beginPrompt(sessionId, text);
+        if (wait) await manager.waitPrompt(sessionId, prompt.id, waitMs);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                promptId: prompt.id,
+                state: prompt.state,
+                text: prompt.text,
+                stopReason: prompt.stopReason,
+                error: prompt.error,
+              }),
+            },
+          ],
+        };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: String(e) }] };
+      }
+    },
+  );
   server.registerTool(
     "get_events",
     {
@@ -1225,247 +1303,311 @@ export function createMcpServer(
         includeThoughts: z.boolean().optional(),
       },
     },
-    async (
-      {
-        sessionId,
-        afterSequence = 0,
-        limit = 100,
-        waitMs = 0,
-        includeRaw = false,
-        includeThoughts = false,
-      },
-    ) => {
+    async ({
+      sessionId,
+      afterSequence = 0,
+      limit = 100,
+      waitMs = 0,
+      includeRaw = false,
+      includeThoughts = false,
+    }) => {
       try {
         if (
           waitMs > 0 &&
           manager.getEvents(sessionId, afterSequence, limit).events.length === 0
-        ) await new Promise((resolve) => setTimeout(resolve, waitMs));
+        )
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
         const result = manager.getEvents(sessionId, afterSequence, limit);
-        const events = result.events.filter((event) =>
-          includeThoughts || !event.kind.toLowerCase().includes("thought")
-        ).map(({ raw, ...event }) => includeRaw ? { ...event, raw } : event);
+        const events = result.events
+          .filter(
+            (event) =>
+              includeThoughts || !event.kind.toLowerCase().includes("thought"),
+          )
+          .map(({ raw, ...event }) => (includeRaw ? { ...event, raw } : event));
         return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ ...result, events }),
-          }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ ...result, events }),
+            },
+          ],
         };
       } catch (e) {
         return { isError: true, content: [{ type: "text", text: String(e) }] };
       }
     },
   );
-  server.registerTool("cancel_prompt", {
-    description: "Cancel a running prompt using ACP session/cancel",
-    annotations: {
-      title: "Cancel ACP prompt",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: true,
+  server.registerTool(
+    "cancel_prompt",
+    {
+      description: "Cancel a running prompt using ACP session/cancel",
+      annotations: {
+        title: "Cancel ACP prompt",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      inputSchema: { sessionId: z.string(), promptId: z.string() },
     },
-    inputSchema: { sessionId: z.string(), promptId: z.string() },
-  }, async ({ sessionId, promptId }) => {
-    try {
-      const p = await manager.cancelPrompt(sessionId, promptId);
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            promptId,
-            state: p.state,
-            stopReason: p.stopReason,
-          }),
-        }],
-      };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: String(e) }] };
-    }
-  });
-  server.registerTool("list_sessions", {
-    description: "List managed ACP sessions",
-    annotations: {
-      title: "List ACP sessions",
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: z.object({}),
-  }, (): Promise<CallToolResult> =>
-    Promise.resolve({
-      content: [{
-        type: "text",
-        text: JSON.stringify(
-          manager.listSessionSnapshots().map((
-            { id, agentId, cwd, acpSessionId, acpProtocol, promptActive },
-          ) => ({ id, agentId, cwd, acpSessionId, acpProtocol, promptActive })),
-        ),
-      }],
-    }));
-  server.registerTool("get_session", {
-    description: "Get capabilities and live configuration metadata",
-    annotations: {
-      title: "Get ACP session",
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: { sessionId: z.string() },
-  }, ({ sessionId }) => {
-    try {
-      const s = manager.getSessionSnapshot(sessionId);
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            id: s.id,
-            agentId: s.agentId,
-            cwd: s.cwd,
-            acpSessionId: s.acpSessionId,
-            acpProtocol: s.acpProtocol,
-            capabilities: s.capabilities,
-            authMethods: s.authMethods,
-            configOptions: s.configOptions,
-            modes: s.modes,
-            permissionPolicy: s.permissionPolicy,
-            pendingPermissions: s.pendingPermissions,
-            prompt: s.prompt
-              ? {
-                id: s.prompt.id,
-                state: s.prompt.state,
-                text: s.prompt.text,
-                stopReason: s.prompt.stopReason,
-              }
-              : undefined,
-            nextSequence: s.nextSequence - 1,
-          }),
-        }],
-      };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: String(e) }] };
-    }
-  });
-  server.registerTool("set_config_option", {
-    description: "Set an advertised ACP session configuration option",
-    annotations: {
-      title: "Set ACP config option",
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    inputSchema: {
-      sessionId: z.string(),
-      configId: z.string(),
-      value: z.string(),
-    },
-  }, async ({ sessionId, configId, value }) => {
-    try {
-      const session = manager.getSessionSnapshot(sessionId);
-      const definition = {
-        command: "",
-        args: [],
-        modelConfigId: session.modelConfigId,
-      } satisfies AgentDefinition;
-      const option = session.configOptions.find((item) => item.id === configId);
-      if (option && isModelOption(option, definition)) {
-        if (!isModelAllowed(session.models ?? {}, value)) {
-          throw new Error(`Model '${value}' is denied by model policy`);
-        }
+    async ({ sessionId, promptId }) => {
+      try {
+        const p = await manager.cancelPrompt(sessionId, promptId);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                promptId,
+                state: p.state,
+                stopReason: p.stopReason,
+              }),
+            },
+          ],
+        };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: String(e) }] };
       }
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            configOptions: await manager.setConfigOption(
-              sessionId,
-              configId,
-              value,
+    },
+  );
+  server.registerTool(
+    "list_sessions",
+    {
+      description: "List managed ACP sessions",
+      annotations: {
+        title: "List ACP sessions",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: z.object({}),
+    },
+    (): Promise<CallToolResult> =>
+      Promise.resolve({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              manager
+                .listSessionSnapshots()
+                .map(
+                  ({
+                    id,
+                    agentId,
+                    cwd,
+                    acpSessionId,
+                    acpProtocol,
+                    promptActive,
+                  }) => ({
+                    id,
+                    agentId,
+                    cwd,
+                    acpSessionId,
+                    acpProtocol,
+                    promptActive,
+                  }),
+                ),
             ),
-          }),
-        }],
-      };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: String(e) }] };
-    }
-  });
-  server.registerTool("set_mode", {
-    description: "Set an advertised ACP session mode",
-    annotations: {
-      title: "Set ACP session mode",
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
+          },
+        ],
+      }),
+  );
+  server.registerTool(
+    "get_session",
+    {
+      description: "Get capabilities and live configuration metadata",
+      annotations: {
+        title: "Get ACP session",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: { sessionId: z.string() },
     },
-    inputSchema: { sessionId: z.string(), modeId: z.string() },
-  }, async ({ sessionId, modeId }) => {
-    try {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            modes: await manager.setMode(sessionId, modeId),
-          }),
-        }],
-      };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: String(e) }] };
-    }
-  });
-  server.registerTool("resolve_permission", {
-    description:
-      "Resolve an operator permission request using one of its advertised option IDs",
-    annotations: {
-      title: "Resolve ACP permission",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
+    ({ sessionId }) => {
+      try {
+        const s = manager.getSessionSnapshot(sessionId);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                id: s.id,
+                agentId: s.agentId,
+                cwd: s.cwd,
+                acpSessionId: s.acpSessionId,
+                acpProtocol: s.acpProtocol,
+                capabilities: s.capabilities,
+                authMethods: s.authMethods,
+                configOptions: s.configOptions,
+                modes: s.modes,
+                permissionPolicy: s.permissionPolicy,
+                pendingPermissions: s.pendingPermissions,
+                prompt: s.prompt
+                  ? {
+                      id: s.prompt.id,
+                      state: s.prompt.state,
+                      text: s.prompt.text,
+                      stopReason: s.prompt.stopReason,
+                    }
+                  : undefined,
+                nextSequence: s.nextSequence - 1,
+              }),
+            },
+          ],
+        };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: String(e) }] };
+      }
     },
-    inputSchema: {
-      sessionId: z.string(),
-      permissionId: z.string(),
-      optionId: z.string(),
+  );
+  server.registerTool(
+    "set_config_option",
+    {
+      description: "Set an advertised ACP session configuration option",
+      annotations: {
+        title: "Set ACP config option",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      inputSchema: {
+        sessionId: z.string(),
+        configId: z.string(),
+        value: z.string(),
+      },
     },
-  }, ({ sessionId, permissionId, optionId }) => {
-    try {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify(
-            manager.resolvePermission(sessionId, permissionId, optionId),
-          ),
-        }],
-      };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: String(e) }] };
-    }
-  });
-  server.registerTool("close_session", {
-    description: "Close an ACP session",
-    annotations: {
-      title: "Close ACP session",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: true,
+    async ({ sessionId, configId, value }) => {
+      try {
+        const session = manager.getSessionSnapshot(sessionId);
+        const definition = {
+          command: "",
+          args: [],
+          modelConfigId: session.modelConfigId,
+        } satisfies AgentDefinition;
+        const option = session.configOptions.find(
+          (item) => item.id === configId,
+        );
+        if (option && isModelOption(option, definition)) {
+          if (!isModelAllowed(session.models ?? {}, value)) {
+            throw new Error(`Model '${value}' is denied by model policy`);
+          }
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                configOptions: await manager.setConfigOption(
+                  sessionId,
+                  configId,
+                  value,
+                ),
+              }),
+            },
+          ],
+        };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: String(e) }] };
+      }
     },
-    inputSchema: { sessionId: z.string() },
-  }, async ({ sessionId }) => {
-    try {
-      await manager.close(sessionId);
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({ closed: true, sessionId }),
-        }],
-      };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: String(e) }] };
-    }
-  });
+  );
+  server.registerTool(
+    "set_mode",
+    {
+      description: "Set an advertised ACP session mode",
+      annotations: {
+        title: "Set ACP session mode",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      inputSchema: { sessionId: z.string(), modeId: z.string() },
+    },
+    async ({ sessionId, modeId }) => {
+      try {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                modes: await manager.setMode(sessionId, modeId),
+              }),
+            },
+          ],
+        };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: String(e) }] };
+      }
+    },
+  );
+  server.registerTool(
+    "resolve_permission",
+    {
+      description:
+        "Resolve an operator permission request using one of its advertised option IDs",
+      annotations: {
+        title: "Resolve ACP permission",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      inputSchema: {
+        sessionId: z.string(),
+        permissionId: z.string(),
+        optionId: z.string(),
+      },
+    },
+    ({ sessionId, permissionId, optionId }) => {
+      try {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                manager.resolvePermission(sessionId, permissionId, optionId),
+              ),
+            },
+          ],
+        };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: String(e) }] };
+      }
+    },
+  );
+  server.registerTool(
+    "close_session",
+    {
+      description: "Close an ACP session",
+      annotations: {
+        title: "Close ACP session",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      inputSchema: { sessionId: z.string() },
+    },
+    async ({ sessionId }) => {
+      try {
+        await manager.close(sessionId);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ closed: true, sessionId }),
+            },
+          ],
+        };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: String(e) }] };
+      }
+    },
+  );
   return server;
 }

@@ -31,15 +31,13 @@ export function discoverAdvertisedModels(
   const seen = new Set<string>();
   for (const option of configOptions) {
     const configId = typeof option.id === "string" ? option.id : undefined;
-    const isModelOption = option.category === "model" ||
+    const isModelOption =
+      option.category === "model" ||
       ((option.category === undefined || option.category === null) &&
         configId === agent.modelConfigId);
-    if (
-      !configId || option.type !== "select" || !isModelOption
-    ) continue;
-    const currentValue = typeof option.currentValue === "string"
-      ? option.currentValue
-      : undefined;
+    if (!configId || option.type !== "select" || !isModelOption) continue;
+    const currentValue =
+      typeof option.currentValue === "string" ? option.currentValue : undefined;
     for (const choice of choices(option.options)) {
       const id = choice.value as string;
       const key = `${configId}\0${id}`;

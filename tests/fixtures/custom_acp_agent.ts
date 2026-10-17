@@ -1,3 +1,6 @@
+import { Readable, Writable } from "node:stream";
+import process from "node:process";
+import * as nodeFs from "#fs";
 import {
   agent,
   ndJsonStream,
@@ -31,13 +34,15 @@ const configOptions: SessionConfigOption[] = [
 ];
 
 async function writeReport(): Promise<void> {
-  const report = Deno.args.find((arg) => arg.startsWith("--report="));
+  const report = process.argv
+    .slice(2)
+    .find((arg) => arg.startsWith("--report="));
   if (!report) return;
-  await Deno.writeTextFile(
+  await nodeFs.writeText(
     report.slice("--report=".length),
     JSON.stringify({
-      args: Deno.args.filter((arg) => !arg.startsWith("--report=")),
-      env: Deno.env.get("ACPMCP_CUSTOM_TEST_SECRET"),
+      args: process.argv.slice(2).filter((arg) => !arg.startsWith("--report=")),
+      env: process.env["ACPMCP_CUSTOM_TEST_SECRET"],
       currentConfig: configOptions.map((option) => ({
         id: option.id,
         currentValue: option.currentValue,
@@ -64,8 +69,10 @@ app.onRequest("session/set_config_option", ({ params }) => {
   return { configOptions };
 });
 app.onRequest("session/prompt", async ({ params, client }) => {
-  const text = (params as { prompt: Array<{ type: string; text?: string }> })
-    .prompt.map((block) => block.type === "text" ? block.text ?? "" : "")
+  const text = (
+    params as { prompt: Array<{ type: string; text?: string }> }
+  ).prompt
+    .map((block) => (block.type === "text" ? (block.text ?? "") : ""))
     .join("");
   const answer = text.match(/Reply exactly:\s*(.+)$/)?.[1] ?? "CUSTOM_OK";
   await writeReport();
@@ -80,4 +87,6 @@ app.onRequest("session/prompt", async ({ params, client }) => {
 });
 app.onRequest("session/close", () => ({}));
 
-app.connect(ndJsonStream(Deno.stdout.writable, Deno.stdin.readable));
+app.connect(
+  ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)),
+);

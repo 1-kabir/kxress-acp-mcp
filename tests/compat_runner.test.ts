@@ -1,3 +1,4 @@
+import { test } from "node:test";
 import {
   compatHelp,
   createCompatInvocation,
@@ -32,7 +33,7 @@ async function assertRejects(
   throw new Error(`Expected ${errorClass.name} rejection`);
 }
 
-Deno.test("compat runner requires an explicit live target", async () => {
+test("compat runner requires an explicit live target", async () => {
   let invoked = false;
   assertEquals(parseCompatAgent([]), "help");
   assertEquals(parseCompatAgent(["--help"]), "help");
@@ -47,7 +48,7 @@ Deno.test("compat runner requires an explicit live target", async () => {
   assertEquals(invoked, false);
 });
 
-Deno.test("compat runner accepts known targets and rejects unknown targets", async () => {
+test("compat runner accepts known targets and rejects unknown targets", async () => {
   assertEquals(parseCompatAgent(["claude"]), {
     agent: "claude",
     protocol: "v1",
@@ -70,7 +71,7 @@ Deno.test("compat runner accepts known targets and rejects unknown targets", asy
   );
 });
 
-Deno.test("compat runner selects existing tests and isolates opt-in flags", () => {
+test("compat runner selects existing tests and isolates opt-in flags", () => {
   const invocation = createCompatInvocation("antigravity", "v1", {
     PATH: "fixture-path",
     ANTHROPIC_BASE_URL: "https://provider.invalid",
@@ -79,17 +80,14 @@ Deno.test("compat runner selects existing tests and isolates opt-in flags", () =
   });
   assertEquals(
     invocation.args.at(-1),
-    "tests/agent_compatibility_integration_test.ts",
+    "tests/agent_compatibility_integration.test.ts",
   );
   assertEquals(invocation.env.ACPMCP_ANTIGRAVITY_TEST, "1");
   assertEquals(invocation.env.ACPMCP_OPENCODE_TEST, "0");
   assertEquals(invocation.env.ACPMCP_CODEX_TEST, "0");
   assertEquals(invocation.env.ACPMCP_CLAUDE_TEST, "0");
   assertEquals(invocation.env.PATH, "fixture-path");
-  assertEquals(
-    invocation.env.ANTHROPIC_BASE_URL,
-    "https://provider.invalid",
-  );
+  assertEquals(invocation.env.ANTHROPIC_BASE_URL, "https://provider.invalid");
   assertEquals(invocation.env.OPENROUTER_API_KEY, "FAKE_SECRET_VALUE");
   assertEquals(invocation.protocol, "v1");
   assertEquals(invocation.env.ACPMCP_COMPAT_PROTOCOL, "v1");
@@ -98,13 +96,13 @@ Deno.test("compat runner selects existing tests and isolates opt-in flags", () =
     "v2",
   );
   assertEquals(createCompatInvocation("opencode").args.slice(-3), [
-    "tests/opencode_integration_test.ts",
-    "tests/opencode_idle_timeout_test.ts",
-    "tests/opencode_model_discovery_test.ts",
+    "tests/opencode_integration.test.ts",
+    "tests/opencode_idle_timeout.test.ts",
+    "tests/opencode_model_discovery.test.ts",
   ]);
 });
 
-Deno.test("compat runner propagates test process exit code", async () => {
+test("compat runner propagates test process exit code", async () => {
   let passedArgs: string[] = [];
   let passedEnv: Record<string, string> = {};
   const code = await runCompat(["claude", "--protocol", "v2"], (args, env) => {
@@ -115,7 +113,7 @@ Deno.test("compat runner propagates test process exit code", async () => {
   assertEquals(code, 7);
   assertEquals(
     passedArgs.at(-1),
-    "tests/agent_compatibility_integration_test.ts",
+    "tests/agent_compatibility_integration.test.ts",
   );
   assertEquals(passedEnv.ACPMCP_CLAUDE_TEST, "1");
   assertEquals(passedEnv.ACPMCP_COMPAT_PROTOCOL, "v2");

@@ -1,3 +1,5 @@
+import process from "node:process";
+import * as nodeFs from "#fs";
 import {
   type AgentModelPolicy,
   validateModelPolicy,
@@ -38,13 +40,12 @@ export const ANTIGRAVITY_AGY_ACP_RELEASE = {
   revision: "d10aa13c932236ef241863f2c8b3afdda2a2be12",
   target: "windows-x86_64",
   asset: "agy-acp-windows-x64.exe",
-  url:
-    "https://github.com/shubzkothekar/antigravity-acp/releases/download/v1.2.0/agy-acp-windows-x64.exe",
+  url: "https://github.com/shubzkothekar/antigravity-acp/releases/download/v1.2.0/agy-acp-windows-x64.exe",
   sha256: "fe7515f0e7de51e09f9c8b2c70c6c4ec2a9bd9f08850c21ba86a1fcbe8ff7074",
 } as const;
 
 export function antigravityAgyAcpInstallPath(
-  localAppData = Deno.env.get("LOCALAPPDATA"),
+  localAppData = process.env["LOCALAPPDATA"],
 ): string {
   if (!localAppData) {
     throw new Error("LOCALAPPDATA is not set; pass an explicit agent command");
@@ -57,21 +58,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function defaultConfigPath(): string {
-  const home = Deno.build.os === "windows"
-    ? Deno.env.get("USERPROFILE")
-    : Deno.env.get("HOME");
+  const home =
+    process.platform === "win32"
+      ? process.env["USERPROFILE"]
+      : process.env["HOME"];
   if (!home) {
     throw new Error(
-      `${Deno.build.os === "windows" ? "USERPROFILE" : "HOME"} is not set`,
+      `${process.platform === "win32" ? "USERPROFILE" : "HOME"} is not set`,
     );
   }
-  return `${home}${Deno.build.os === "windows" ? "\\" : "/"}.acp-mcp.json`;
+  return `${home}${process.platform === "win32" ? "\\" : "/"}.acp-mcp.json`;
 }
 
 export function builtInAgents(): AgentMap {
-  const antigravityCommand = Deno.build.os === "windows"
-    ? "agy_acp_server"
-    : "agy_acp_server.par";
+  const antigravityCommand =
+    process.platform === "win32" ? "agy_acp_server" : "agy_acp_server.par";
   const agents = Object.assign(Object.create(null) as AgentMap, {
     opencode: {
       command: "opencode",
@@ -106,7 +107,7 @@ export function builtInAgents(): AgentMap {
     },
     antigravity: {
       command: antigravityCommand,
-      args: Deno.build.os === "linux" ? ["--uid="] : [],
+      args: process.platform === "linux" ? ["--uid="] : [],
       implementation: "official",
       supportedProtocols: ["v1"],
       displayName: "Antigravity",
@@ -120,13 +121,12 @@ export function builtInAgents(): AgentMap {
 function antigravityProfiles(
   agents: AgentMap,
 ): Record<"official" | "refined" | "agy", AgentDefinition> {
-  const localAppData = Deno.build.os === "windows"
-    ? Deno.env.get("LOCALAPPDATA")
-    : undefined;
-  const agyAcpCommand = Deno.build.os === "windows" &&
-      Deno.build.arch === "x86_64" && localAppData
-    ? antigravityAgyAcpInstallPath(localAppData)
-    : "agy-acp-windows-x64.exe";
+  const localAppData =
+    process.platform === "win32" ? process.env["LOCALAPPDATA"] : undefined;
+  const agyAcpCommand =
+    process.platform === "win32" && process.arch === "x64" && localAppData
+      ? antigravityAgyAcpInstallPath(localAppData)
+      : "agy-acp-windows-x64.exe";
   return {
     official: agents.antigravity,
     refined: {
@@ -147,7 +147,7 @@ function antigravityProfiles(
       supportedProtocols: ["v1"],
       displayName: "Antigravity (agy ACP)",
       installHint:
-        "Provision the pinned Windows x64 adapter with 'mise exec -- deno task provision:antigravity-agy'. Set env.AGY_BIN to an existing agy executable; the adapter skips downloads when AGY_BIN is supplied.",
+        "Provision the pinned Windows x64 adapter with 'npm run provision:antigravity-agy'. Set env.AGY_BIN to an existing agy executable; the adapter skips downloads when AGY_BIN is supplied.",
       modelConfigId: "model",
       requiredExecutableEnv: ["AGY_BIN"],
     },
@@ -190,7 +190,8 @@ export function parseAgentConfig(
         );
       }
       if (
-        def.implementation !== "official" && def.implementation !== "refined" &&
+        def.implementation !== "official" &&
+        def.implementation !== "refined" &&
         def.implementation !== "agy"
       ) {
         throw new Error(
@@ -198,11 +199,12 @@ export function parseAgentConfig(
         );
       }
     }
-    const builtIn = id === "antigravity"
-      ? antigravityImplementations[def.implementation ?? "official"]
-      : Object.hasOwn(agents, id)
-      ? agents[id]
-      : undefined;
+    const builtIn =
+      id === "antigravity"
+        ? antigravityImplementations[def.implementation ?? "official"]
+        : Object.hasOwn(agents, id)
+          ? agents[id]
+          : undefined;
     if (
       def.command !== undefined &&
       (typeof def.command !== "string" || !def.command.trim())
@@ -223,7 +225,8 @@ export function parseAgentConfig(
       );
     }
     if (
-      def.args !== undefined && (!Array.isArray(def.args) ||
+      def.args !== undefined &&
+      (!Array.isArray(def.args) ||
         !def.args.every((x) => typeof x === "string"))
     ) {
       throw new Error(
@@ -245,16 +248,18 @@ export function parseAgentConfig(
       }
     }
     if (
-      def.acpProtocol !== undefined && def.acpProtocol !== "v1" &&
+      def.acpProtocol !== undefined &&
+      def.acpProtocol !== "v1" &&
       def.acpProtocol !== "v2"
     ) {
       throw new Error(
         `Config file '${path}': agent '${id}' acpProtocol must be 'v1' or 'v2'`,
       );
     }
-    const models = def.models === undefined
-      ? builtIn?.models
-      : validateModelPolicy(def.models, id, path);
+    const models =
+      def.models === undefined
+        ? builtIn?.models
+        : validateModelPolicy(def.models, id, path);
     agents[id] = {
       ...builtIn,
       ...rawDefinition,
@@ -262,10 +267,11 @@ export function parseAgentConfig(
       args: def.args ?? builtIn?.args ?? [],
       models,
       env: { ...builtIn?.env, ...def.env },
-      modelConfigId: def.modelConfigId ?? builtIn?.modelConfigId ??
+      modelConfigId:
+        def.modelConfigId ??
+        builtIn?.modelConfigId ??
         (builtIn ? undefined : "model"),
-      supportedProtocols: builtIn?.supportedProtocols ??
-        def.supportedProtocols,
+      supportedProtocols: builtIn?.supportedProtocols ?? def.supportedProtocols,
       protocolEnv: builtIn?.protocolEnv ?? def.protocolEnv,
       acpProtocol: def.acpProtocol ?? builtIn?.acpProtocol ?? "v1",
       implementation: builtIn?.implementation,
@@ -281,9 +287,9 @@ export async function loadAgents(configPath?: string): Promise<AgentMap> {
   const path = configPath;
   let text: string;
   try {
-    text = await Deno.readTextFile(path);
+    text = await nodeFs.readText(path);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if (nodeFs.isErrorCode(error, "ENOENT")) {
       throw new Error(`Explicit config file does not exist: ${path}`);
     }
     throw new Error(`Could not read config file '${path}': ${String(error)}`);

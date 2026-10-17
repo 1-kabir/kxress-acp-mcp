@@ -1,3 +1,4 @@
+import { test } from "node:test";
 import {
   type PlannerCandidate,
   type PlanningModelList,
@@ -79,12 +80,9 @@ function fakeServices(
   };
   const services: PlanningWorkflowServices = {
     createSnapshot() {
-      return Promise.resolve(make(
-        new Map([[
-          "tracked.txt",
-          "current repository contents",
-        ]]),
-      ));
+      return Promise.resolve(
+        make(new Map([["tracked.txt", "current repository contents"]])),
+      );
     },
     cloneSnapshot(source) {
       return Promise.resolve(make(snapshots.get(source) ?? new Map()));
@@ -92,22 +90,23 @@ function fakeServices(
     listModels(agentId) {
       discoveryCalls.push(agentId);
       return Promise.resolve(
-        options.models ?? modelList([
-          {
-            id: chosen.modelId,
-            privacy: {
-              trainingUse: "not_used_for_training",
-              retention: "zero",
+        options.models ??
+          modelList([
+            {
+              id: chosen.modelId,
+              privacy: {
+                trainingUse: "not_used_for_training",
+                retention: "zero",
+              },
             },
-          },
-          {
-            id: fallback.modelId,
-            privacy: {
-              trainingUse: "not_used_for_training",
-              retention: "zero",
+            {
+              id: fallback.modelId,
+              privacy: {
+                trainingUse: "not_used_for_training",
+                retention: "zero",
+              },
             },
-          },
-        ]),
+          ]),
       );
     },
     validateConfiguration(args) {
@@ -149,16 +148,18 @@ function workflowOptions(
   };
 }
 
-Deno.test("planning workflow executes the explicit model and cleans snapshots", async () => {
+test("planning workflow executes the explicit model and cleans snapshots", async () => {
   const fake = fakeServices();
   const result = await runPlanningWorkflow(workflowOptions(), fake.services);
   if (
-    result.status !== "completed" || result.response !== "PROJECT=acp-mcp" ||
+    result.status !== "completed" ||
+    result.response !== "PROJECT=acp-mcp" ||
     result.selectedModel?.modelId !== chosen.modelId ||
     fake.runCalls[0]?.config?.effort !== "low" ||
     fake.runCalls[0]?.modeId !== "plan" ||
     fake.configChecks[0] !== `${chosen.agentId}:${chosen.modelId}` ||
-    fake.runCalls.length !== 1 || fake.cleaned.length !== 3 ||
+    fake.runCalls.length !== 1 ||
+    fake.cleaned.length !== 3 ||
     fake.snapshots.size !== 0
   ) {
     throw new Error(
@@ -170,7 +171,7 @@ Deno.test("planning workflow executes the explicit model and cleans snapshots", 
   }
 });
 
-Deno.test("rate-limit fallback gets a pristine independent snapshot", async () => {
+test("rate-limit fallback gets a pristine independent snapshot", async () => {
   const fake = fakeServices({
     run: ({ cwd }) => {
       const files = fake.snapshots.get(cwd)!;
@@ -202,11 +203,13 @@ Deno.test("rate-limit fallback gets a pristine independent snapshot", async () =
     fake.services,
   );
   if (
-    result.status !== "completed" || result.response !== "fallback plan" ||
+    result.status !== "completed" ||
+    result.response !== "fallback plan" ||
     result.selectedModel?.modelId !== fallback.modelId ||
     fake.runCalls.length !== 2 ||
     fake.runCalls[0].cwd === fake.runCalls[1].cwd ||
-    fake.cleaned.length !== 4 || fake.snapshots.size !== 0
+    fake.cleaned.length !== 4 ||
+    fake.snapshots.size !== 0
   ) {
     throw new Error(
       `Fallback lifecycle was incorrect: ${JSON.stringify(result)}`,
@@ -214,7 +217,7 @@ Deno.test("rate-limit fallback gets a pristine independent snapshot", async () =
   }
   if (
     fake.timeline.indexOf(`cleaned:${fake.runCalls[0].cwd}`) >
-      fake.timeline.indexOf(`run:${fake.runCalls[1].cwd}`)
+    fake.timeline.indexOf(`run:${fake.runCalls[1].cwd}`)
   ) {
     throw new Error(
       "Fallback started before the preferred attempt was cleaned",
@@ -222,23 +225,22 @@ Deno.test("rate-limit fallback gets a pristine independent snapshot", async () =
   }
 });
 
-Deno.test("ambiguous failures and timeouts never trigger fallback", async () => {
-  for (
-    const taskResult of [
-      {
-        status: "failed",
-        error: { kind: "prompt_failed", acpCode: -32603 },
-      },
-      { status: "timed_out" },
-    ] as PlanningTaskResult[]
-  ) {
+test("ambiguous failures and timeouts never trigger fallback", async () => {
+  for (const taskResult of [
+    {
+      status: "failed",
+      error: { kind: "prompt_failed", acpCode: -32603 },
+    },
+    { status: "timed_out" },
+  ] as PlanningTaskResult[]) {
     const fake = fakeServices({ run: () => Promise.resolve(taskResult) });
     const result = await runPlanningWorkflow(
       workflowOptions({ allowRateLimitedFallback: true }),
       fake.services,
     );
     if (
-      fake.runCalls.length !== 1 || result.attempts.length !== 1 ||
+      fake.runCalls.length !== 1 ||
+      result.attempts.length !== 1 ||
       fake.cleaned.length !== 3
     ) {
       throw new Error(`Unsafe replay after ${taskResult.status}`);
@@ -246,7 +248,7 @@ Deno.test("ambiguous failures and timeouts never trigger fallback", async () => 
   }
 });
 
-Deno.test("cancellation before an attempt cleans the canonical snapshot", async () => {
+test("cancellation before an attempt cleans the canonical snapshot", async () => {
   const fake = fakeServices();
   const controller = new AbortController();
   controller.abort();
@@ -255,12 +257,15 @@ Deno.test("cancellation before an attempt cleans the canonical snapshot", async 
     fake.services,
   );
   if (
-    result.stopReason !== "cancelled" || fake.runCalls.length ||
-    fake.cleaned.length !== 1 || fake.snapshots.size
-  ) throw new Error(`Cancellation cleanup failed: ${JSON.stringify(result)}`);
+    result.stopReason !== "cancelled" ||
+    fake.runCalls.length ||
+    fake.cleaned.length !== 1 ||
+    fake.snapshots.size
+  )
+    throw new Error(`Cancellation cleanup failed: ${JSON.stringify(result)}`);
 });
 
-Deno.test("privacy rejection never substitutes the caller's selected model", async () => {
+test("privacy rejection never substitutes the caller's selected model", async () => {
   const fake = fakeServices({
     models: modelList([
       {
@@ -286,7 +291,7 @@ Deno.test("privacy rejection never substitutes the caller's selected model", asy
   }
 });
 
-Deno.test("unknown privacy is rejected by policies requiring known safe metadata", async () => {
+test("unknown privacy is rejected by policies requiring known safe metadata", async () => {
   const fake = fakeServices({
     models: modelList([{ id: chosen.modelId }]),
   });
@@ -299,7 +304,8 @@ Deno.test("unknown privacy is rejected by policies requiring known safe metadata
   );
   if (
     result.attempts[0]?.reason !== "privacy_policy_rejected" ||
-    result.attempts[0]?.privacy !== null || fake.runCalls.length
+    result.attempts[0]?.privacy !== null ||
+    fake.runCalls.length
   ) {
     throw new Error(
       `Unknown privacy was not rejected: ${JSON.stringify(result)}`,
@@ -307,7 +313,7 @@ Deno.test("unknown privacy is rejected by policies requiring known safe metadata
   }
 });
 
-Deno.test("missing or unadvertised explicit model is never called blindly", async () => {
+test("missing or unadvertised explicit model is never called blindly", async () => {
   const fake = fakeServices({ models: modelList([{ id: fallback.modelId }]) });
   const result = await runPlanningWorkflow(
     workflowOptions({ fallbacks: [fallback] }),
@@ -324,7 +330,7 @@ Deno.test("missing or unadvertised explicit model is never called blindly", asyn
   }
 });
 
-Deno.test("attempt limit bounds rate-limit retries", async () => {
+test("attempt limit bounds rate-limit retries", async () => {
   const third: PlannerCandidate = {
     agentId: "opencode",
     modelId: "opencode/space-bunny-free",
@@ -365,17 +371,19 @@ Deno.test("attempt limit bounds rate-limit retries", async () => {
     fake.services,
   );
   if (
-    fake.runCalls.length !== 2 || result.stopReason !== "attempt_limit_reached"
+    fake.runCalls.length !== 2 ||
+    result.stopReason !== "attempt_limit_reached"
   ) {
     throw new Error(`Attempt bound was exceeded: ${JSON.stringify(result)}`);
   }
 });
 
-Deno.test("cleanup failure preserves the completed planning result and leftover path", async () => {
+test("cleanup failure preserves the completed planning result and leftover path", async () => {
   const fake = fakeServices({ cleanupFailsFor: "C:\\temp\\planning-test-3" });
   const result = await runPlanningWorkflow(workflowOptions(), fake.services);
   if (
-    result.status !== "completed" || result.cleanupWarnings.length !== 1 ||
+    result.status !== "completed" ||
+    result.cleanupWarnings.length !== 1 ||
     result.cleanupWarnings[0].path !== "C:\\temp\\planning-test-3"
   ) {
     throw new Error(
@@ -384,7 +392,7 @@ Deno.test("cleanup failure preserves the completed planning result and leftover 
   }
 });
 
-Deno.test("fallback requires explicit authorization and an allowed classification", async () => {
+test("fallback requires explicit authorization and an allowed classification", async () => {
   const cases = [
     { allow: false, source: "opencode", evidence: "message_heuristic" },
     { allow: true, source: "other", evidence: "message_heuristic" },
@@ -413,7 +421,7 @@ Deno.test("fallback requires explicit authorization and an allowed classificatio
   }
 });
 
-Deno.test("missing agent or model does not choose an ACP default", async () => {
+test("missing agent or model does not choose an ACP default", async () => {
   const fake = fakeServices({
     models: modelList([{ id: "opencode/nemotron-3-ultra-free" }]),
   });
@@ -423,7 +431,8 @@ Deno.test("missing agent or model does not choose an ACP default", async () => {
   } as PlanningWorkflowOptions;
   const result = await runPlanningWorkflow(missingModel, fake.services);
   if (
-    result.stopReason !== "invalid_workflow_options" || fake.runCalls.length ||
+    result.stopReason !== "invalid_workflow_options" ||
+    fake.runCalls.length ||
     fake.snapshots.size
   ) {
     throw new Error(
@@ -440,17 +449,20 @@ Deno.test("missing agent or model does not choose an ACP default", async () => {
   );
   if (
     missingAgentResult.stopReason !== "invalid_workflow_options" ||
-    fake.runCalls.length || fake.snapshots.size
-  ) throw new Error("Missing agent was replaced with an implicit agent");
+    fake.runCalls.length ||
+    fake.snapshots.size
+  )
+    throw new Error("Missing agent was replaced with an implicit agent");
 });
 
-Deno.test("unadvertised config or reasoning values stop before execution", async () => {
+test("unadvertised config or reasoning values stop before execution", async () => {
   const fake = fakeServices({
     configValidation: { valid: false, reason: "config_value_not_advertised" },
   });
   const result = await runPlanningWorkflow(workflowOptions(), fake.services);
   if (
-    result.stopReason !== "config_value_not_advertised" || fake.runCalls.length
+    result.stopReason !== "config_value_not_advertised" ||
+    fake.runCalls.length
   ) {
     throw new Error(
       `Unadvertised config was applied: ${JSON.stringify(result)}`,
@@ -458,7 +470,7 @@ Deno.test("unadvertised config or reasoning values stop before execution", async
   }
 });
 
-Deno.test("candidate summary filters without ranking or selecting", () => {
+test("candidate summary filters without ranking or selecting", () => {
   const listing = modelList([
     {
       id: "provider/paid",
@@ -490,14 +502,16 @@ Deno.test("candidate summary filters without ranking or selecting", () => {
     limit: 1,
   });
   if (
-    summary.totalEligible !== 3 || summary.candidates.length !== 1 ||
+    summary.totalEligible !== 3 ||
+    summary.candidates.length !== 1 ||
     summary.candidates[0].id !== "provider/free-a" ||
-    summary.candidates[0].selected || !summary.truncated
+    summary.candidates[0].selected ||
+    !summary.truncated
   ) {
     throw new Error(
-      `Candidate filtering or paging ranked/selected: ${
-        JSON.stringify(summary)
-      }`,
+      `Candidate filtering or paging ranked/selected: ${JSON.stringify(
+        summary,
+      )}`,
     );
   }
   const secondPage = summarizeModelCandidates(listing.models!, {
@@ -508,15 +522,16 @@ Deno.test("candidate summary filters without ranking or selecting", () => {
   if (
     secondPage.candidates[0]?.id !== "provider/free-b" ||
     !secondPage.candidates[0]?.selected
-  ) throw new Error("Candidate order or ACP selected metadata was lost");
+  )
+    throw new Error("Candidate order or ACP selected metadata was lost");
   const combined = summarizeModelCandidates(listing.models!, {
     privacyPolicy: "require_no_training_and_zero_retention",
     costPolicy: { freeOnly: true, noSubscription: true },
   });
   if (
     combined.totalEligible !== 2 ||
-    combined.candidates.some((candidate) =>
-      candidate.subscriptionRequired !== false
+    combined.candidates.some(
+      (candidate) => candidate.subscriptionRequired !== false,
     )
   ) {
     throw new Error(
@@ -525,7 +540,7 @@ Deno.test("candidate summary filters without ranking or selecting", () => {
   }
 });
 
-Deno.test("cost policy rejects a selected model without substituting", async () => {
+test("cost policy rejects a selected model without substituting", async () => {
   const models = modelList([
     {
       id: chosen.modelId,

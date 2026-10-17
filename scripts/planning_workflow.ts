@@ -1,3 +1,4 @@
+import process from "node:process";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { resolveConfiguration } from "../src/config/discovery.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
@@ -43,8 +44,11 @@ function parseArgs(args: string[]) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (
-      ["--allow-rate-limited-fallback", "--free-only", "--no-subscription"]
-        .includes(arg)
+      [
+        "--allow-rate-limited-fallback",
+        "--free-only",
+        "--no-subscription",
+      ].includes(arg)
     ) {
       flags.add(arg);
       continue;
@@ -67,7 +71,8 @@ function parseArgs(args: string[]) {
     operation !== "configs",
   ) as PlanningPrivacyPolicy;
   if (
-    privacyPolicy && ![
+    privacyPolicy &&
+    ![
       "allow_any",
       "require_no_training",
       "require_no_training_and_zero_retention",
@@ -76,9 +81,8 @@ function parseArgs(args: string[]) {
     throw new Error(`Unknown privacy policy: ${privacyPolicy}`);
   }
   const maxAttemptsText = one("--max-attempts");
-  const maxAttempts = maxAttemptsText === undefined
-    ? undefined
-    : Number(maxAttemptsText);
+  const maxAttempts =
+    maxAttemptsText === undefined ? undefined : Number(maxAttemptsText);
   if (maxAttemptsText !== undefined && !Number.isInteger(maxAttempts)) {
     throw new Error("--max-attempts must be an integer");
   }
@@ -125,7 +129,7 @@ function parseArgs(args: string[]) {
   }
   return {
     operation,
-    repository: one("--repo") ?? Deno.cwd(),
+    repository: one("--repo") ?? process.cwd(),
     task: one("--task", operation === "run") ?? "",
     agentId,
     modelId,
@@ -164,7 +168,8 @@ async function connectLocalServer(server: ReturnType<typeof createMcpServer>) {
   const pending = new Map<number, (reply: RpcReply) => void>();
   client.onmessage = (message) => {
     if (
-      "id" in message && typeof message.id === "number" &&
+      "id" in message &&
+      typeof message.id === "number" &&
       pending.has(message.id)
     ) {
       pending.get(message.id)!(message as RpcReply);
@@ -214,10 +219,9 @@ async function connectLocalServer(server: ReturnType<typeof createMcpServer>) {
     try {
       const response = await reply;
       if (response.error) throw new Error("MCP tool request failed");
-      const text = response.result?.content?.find((item) =>
-        item.type === "text"
-      )
-        ?.text;
+      const text = response.result?.content?.find(
+        (item) => item.type === "text",
+      )?.text;
       if (!text) throw new Error("MCP tool returned no structured result");
       return JSON.parse(text) as Record<string, unknown>;
     } finally {
@@ -233,15 +237,15 @@ async function connectLocalServer(server: ReturnType<typeof createMcpServer>) {
 
 let parsed: ReturnType<typeof parseArgs>;
 try {
-  parsed = parseArgs(Deno.args);
+  parsed = parseArgs(process.argv.slice(2));
 } catch (error) {
   console.error(`${error}\n${usage()}`);
-  Deno.exit(2);
+  process.exit(2);
 }
 
 const abortController = new AbortController();
 const onInterrupt = () => abortController.abort();
-Deno.addSignalListener("SIGINT", onInterrupt);
+process.on("SIGINT", onInterrupt);
 const startup = await resolveConfiguration({
   explicitConfigPath: parsed.configPath,
   cwd: parsed.repository,
@@ -265,21 +269,26 @@ try {
     cwd: string,
     signal: AbortSignal = abortController.signal,
   ): Promise<PlanningModelList> => {
-    const value = await local!.callTool("list_models", {
-      agentId,
-      cwd,
-      enrich: true,
-    }, signal);
+    const value = await local!.callTool(
+      "list_models",
+      {
+        agentId,
+        cwd,
+        enrich: true,
+      },
+      signal,
+    );
     return {
-      status: value.status === "completed"
-        ? "completed"
-        : value.status === "timed_out"
-        ? "timed_out"
-        : value.stage === "cancelled"
-        ? "cancelled"
-        : "failed",
+      status:
+        value.status === "completed"
+          ? "completed"
+          : value.status === "timed_out"
+            ? "timed_out"
+            : value.stage === "cancelled"
+              ? "cancelled"
+              : "failed",
       models: Array.isArray(value.models)
-        ? value.models as PlanningModelList["models"]
+        ? (value.models as PlanningModelList["models"])
         : [],
     };
   };
@@ -329,7 +338,7 @@ try {
       console.log(
         JSON.stringify({ status: listing.status, agentId: parsed.agentId }),
       );
-      Deno.exitCode = 1;
+      process.exitCode = 1;
     } else {
       const summary = summarizeModelCandidates(listing.models ?? [], {
         privacyPolicy: parsed.privacyPolicy,
@@ -349,25 +358,30 @@ try {
   } else if (parsed.operation === "configs") {
     const output = await withListing(async (cwd) => {
       const listing = await listModels(parsed.agentId, cwd);
-      const selected = listing.models?.find((model) =>
-        model.available && model.id === parsed.modelId
+      const selected = listing.models?.find(
+        (model) => model.available && model.id === parsed.modelId,
       );
       if (listing.status !== "completed" || !selected) {
         return {
           status: "failed",
-          reason: listing.status === "completed"
-            ? "not_advertised"
-            : "model_discovery_failed",
+          reason:
+            listing.status === "completed"
+              ? "not_advertised"
+              : "model_discovery_failed",
           agentId: parsed.agentId,
           modelId: parsed.modelId,
         };
       }
-      const started = await local!.callTool("start_session", {
-        agentId: parsed.agentId,
-        cwd,
-        config: { [selected.configId]: selected.id },
-        permissionPolicy: "read_only",
-      }, abortController.signal);
+      const started = await local!.callTool(
+        "start_session",
+        {
+          agentId: parsed.agentId,
+          cwd,
+          config: { [selected.configId]: selected.id },
+          permissionPolicy: "read_only",
+        },
+        abortController.signal,
+      );
       if (typeof started.sessionId !== "string") {
         throw new Error(
           "ACP session could not be started for config discovery",
@@ -377,9 +391,10 @@ try {
       try {
         const session = await local!.callTool("get_session", { sessionId });
         const options = Array.isArray(session.configOptions)
-          ? session.configOptions as Array<Record<string, unknown>>
+          ? (session.configOptions as Array<Record<string, unknown>>)
           : [];
-        const configs = options.filter((option) => option.category !== "model")
+        const configs = options
+          .filter((option) => option.category !== "model")
           .map((option) => ({
             id: option.id,
             name: option.name,
@@ -387,12 +402,12 @@ try {
             currentValue: option.currentValue,
             options: Array.isArray(option.options)
               ? option.options.slice(0, 40).map((choice) => {
-                const item = choice as Record<string, unknown>;
-                return { value: item.value, name: item.name };
-              })
+                  const item = choice as Record<string, unknown>;
+                  return { value: item.value, name: item.name };
+                })
               : [],
-            optionsTruncated: Array.isArray(option.options) &&
-              option.options.length > 40,
+            optionsTruncated:
+              Array.isArray(option.options) && option.options.length > 40,
           }));
         return {
           status: "completed",
@@ -405,111 +420,131 @@ try {
       }
     });
     console.log(JSON.stringify(output));
-    if (output.status !== "completed") Deno.exitCode = 1;
+    if (output.status !== "completed") process.exitCode = 1;
   } else {
-    const workflowResult = await runPlanningWorkflow({
-      repository: parsed.repository,
-      task: parsed.task,
-      selected: parsed.selected,
-      fallbacks: parsed.fallbacks,
-      privacyPolicy: parsed.privacyPolicy,
-      costPolicy: parsed.costPolicy,
-      config: parsed.config,
-      modeId: parsed.modeId,
-      allowRateLimitedFallback: parsed.allowRateLimitedFallback,
-      ...(parsed.maxAttempts !== undefined
-        ? { maxAttempts: parsed.maxAttempts }
-        : {}),
-      signal: abortController.signal,
-    }, {
-      async createSnapshot(repository) {
-        return trackSnapshot(await createWorkspaceSnapshot(repository));
+    const workflowResult = await runPlanningWorkflow(
+      {
+        repository: parsed.repository,
+        task: parsed.task,
+        selected: parsed.selected,
+        fallbacks: parsed.fallbacks,
+        privacyPolicy: parsed.privacyPolicy,
+        costPolicy: parsed.costPolicy,
+        config: parsed.config,
+        modeId: parsed.modeId,
+        allowRateLimitedFallback: parsed.allowRateLimitedFallback,
+        ...(parsed.maxAttempts !== undefined
+          ? { maxAttempts: parsed.maxAttempts }
+          : {}),
+        signal: abortController.signal,
       },
-      async cloneSnapshot(path) {
-        return trackSnapshot(await cloneWorkspaceSnapshot(path));
-      },
-      async listModels(agentId, cwd, signal): Promise<PlanningModelList> {
-        return await listModels(agentId, cwd, signal);
-      },
-      async validateConfiguration(args) {
-        return await withClone(args.canonicalSnapshotPath, async (cwd) => {
-          const started = await local!.callTool("start_session", {
-            agentId: args.agentId,
-            cwd,
-            config: { [args.configId]: args.modelId },
-            permissionPolicy: "read_only",
-          }, abortController.signal);
-          if (typeof started.sessionId !== "string") {
-            return { valid: false, reason: "config_session_start_failed" };
-          }
-          const sessionId = started.sessionId;
-          try {
-            const session = await local!.callTool("get_session", { sessionId });
-            const options = Array.isArray(session.configOptions)
-              ? session.configOptions as Array<Record<string, unknown>>
-              : [];
-            for (const [id, value] of Object.entries(args.config ?? {})) {
-              if (id === args.configId) {
-                return {
-                  valid: false,
-                  reason: "model_config_is_selected_separately",
-                };
-              }
-              const option = options.find((entry) => entry.id === id);
-              const advertised = Array.isArray(option?.options) &&
-                option.options.some((choice) =>
-                  (choice as Record<string, unknown>).value === value
-                );
-              if (!advertised) {
-                return { valid: false, reason: "config_value_not_advertised" };
-              }
+      {
+        async createSnapshot(repository) {
+          return trackSnapshot(await createWorkspaceSnapshot(repository));
+        },
+        async cloneSnapshot(path) {
+          return trackSnapshot(await cloneWorkspaceSnapshot(path));
+        },
+        async listModels(agentId, cwd, signal): Promise<PlanningModelList> {
+          return await listModels(agentId, cwd, signal);
+        },
+        async validateConfiguration(args) {
+          return await withClone(args.canonicalSnapshotPath, async (cwd) => {
+            const started = await local!.callTool(
+              "start_session",
+              {
+                agentId: args.agentId,
+                cwd,
+                config: { [args.configId]: args.modelId },
+                permissionPolicy: "read_only",
+              },
+              abortController.signal,
+            );
+            if (typeof started.sessionId !== "string") {
+              return { valid: false, reason: "config_session_start_failed" };
             }
-            if (args.modeId) {
-              const mode = options.find((entry) =>
-                entry.category === "mode" || entry.id === "mode"
-              );
-              const advertised = Array.isArray(mode?.options) &&
-                mode.options.some((choice) =>
-                  (choice as Record<string, unknown>).value === args.modeId
-                );
-              if (!advertised) {
-                return { valid: false, reason: "mode_not_advertised" };
+            const sessionId = started.sessionId;
+            try {
+              const session = await local!.callTool("get_session", {
+                sessionId,
+              });
+              const options = Array.isArray(session.configOptions)
+                ? (session.configOptions as Array<Record<string, unknown>>)
+                : [];
+              for (const [id, value] of Object.entries(args.config ?? {})) {
+                if (id === args.configId) {
+                  return {
+                    valid: false,
+                    reason: "model_config_is_selected_separately",
+                  };
+                }
+                const option = options.find((entry) => entry.id === id);
+                const advertised =
+                  Array.isArray(option?.options) &&
+                  option.options.some(
+                    (choice) =>
+                      (choice as Record<string, unknown>).value === value,
+                  );
+                if (!advertised) {
+                  return {
+                    valid: false,
+                    reason: "config_value_not_advertised",
+                  };
+                }
               }
+              if (args.modeId) {
+                const mode = options.find(
+                  (entry) => entry.category === "mode" || entry.id === "mode",
+                );
+                const advertised =
+                  Array.isArray(mode?.options) &&
+                  mode.options.some(
+                    (choice) =>
+                      (choice as Record<string, unknown>).value === args.modeId,
+                  );
+                if (!advertised) {
+                  return { valid: false, reason: "mode_not_advertised" };
+                }
+              }
+              return { valid: true };
+            } finally {
+              await local!.callTool("close_session", { sessionId });
             }
-            return { valid: true };
-          } finally {
-            await local!.callTool("close_session", { sessionId });
-          }
-        });
+          });
+        },
+        async runTask(args): Promise<PlanningTaskResult> {
+          const config = {
+            ...(args.config ?? {}),
+            [args.configId]: args.modelId,
+          };
+          const value = await local!.callTool(
+            "run_task",
+            {
+              agentId: args.agentId,
+              task: args.task,
+              cwd: args.cwd,
+              config,
+              ...(args.modeId ? { modeId: args.modeId } : {}),
+              permissionPolicy: "read_only",
+            },
+            args.signal,
+          );
+          return value as unknown as PlanningTaskResult;
+        },
       },
-      async runTask(args): Promise<PlanningTaskResult> {
-        const config = {
-          ...(args.config ?? {}),
-          [args.configId]: args.modelId,
-        };
-        const value = await local!.callTool("run_task", {
-          agentId: args.agentId,
-          task: args.task,
-          cwd: args.cwd,
-          config,
-          ...(args.modeId ? { modeId: args.modeId } : {}),
-          permissionPolicy: "read_only",
-        }, args.signal);
-        return value as unknown as PlanningTaskResult;
-      },
-    });
+    );
     console.log(JSON.stringify(workflowResult));
-    if (workflowResult.status !== "completed") Deno.exitCode = 1;
-    if (abortController.signal.aborted) Deno.exitCode = 130;
+    if (workflowResult.status !== "completed") process.exitCode = 1;
+    if (abortController.signal.aborted) process.exitCode = 130;
   }
 } catch (error) {
   console.error(String(error));
   console.log(
     JSON.stringify({ status: "failed", reason: "workflow_setup_failed" }),
   );
-  Deno.exitCode = abortController.signal.aborted ? 130 : 1;
+  process.exitCode = abortController.signal.aborted ? 130 : 1;
 } finally {
-  Deno.removeSignalListener("SIGINT", onInterrupt);
+  process.off("SIGINT", onInterrupt);
   try {
     await local?.close();
   } finally {
@@ -517,8 +552,9 @@ try {
     await server.close();
     for (const workspace of workspaceHandles) {
       try {
-        await (await import("../src/workspaces/snapshot.ts"))
-          .cleanupWorkspaceSnapshot(workspace);
+        await (
+          await import("../src/workspaces/snapshot.ts")
+        ).cleanupWorkspaceSnapshot(workspace);
       } catch (error) {
         console.error(
           `Disposable workspace may remain at ${workspace}: ${error}`,

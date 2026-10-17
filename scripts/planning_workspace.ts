@@ -1,18 +1,21 @@
+import process from "node:process";
 import {
   cleanupWorkspaceSnapshot,
   createWorkspaceSnapshot,
 } from "../src/workspaces/snapshot.ts";
 
-const [action, path] = Deno.args;
+const [action, path] = process.argv.slice(2);
 if (action === "create" && path) {
   const snapshot = await createWorkspaceSnapshot(path);
-  console.log(JSON.stringify({
-    cwd: snapshot.cwd,
-    sourceRoot: snapshot.sourceRoot,
-    fileCount: snapshot.fileCount,
-    sizeBytes: snapshot.sizeBytes,
-    creationMs: Math.round(snapshot.creationMs),
-  }));
+  console.log(
+    JSON.stringify({
+      cwd: snapshot.cwd,
+      sourceRoot: snapshot.sourceRoot,
+      fileCount: snapshot.fileCount,
+      sizeBytes: snapshot.sizeBytes,
+      creationMs: Math.round(snapshot.creationMs),
+    }),
+  );
 } else if (action === "cleanup" && path) {
   try {
     await cleanupWorkspaceSnapshot(path);
@@ -21,11 +24,11 @@ if (action === "create" && path) {
     console.error(
       `Workspace cleanup failed; the path may remain at ${path}: ${error}`,
     );
-    Deno.exit(1);
+    process.exit(1);
   }
 } else {
   console.error(
-    "Usage: deno run --allow-env --allow-read --allow-write --allow-run scripts/planning_workspace.ts <create <repository> | cleanup <workspace>>",
+    "Usage: node scripts/planning_workspace.ts <create <repository> | cleanup <workspace>>",
   );
-  Deno.exit(2);
+  process.exit(2);
 }

@@ -1,10 +1,12 @@
+import { test } from "node:test";
+import process from "node:process";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
-Deno.test({
+test({
   name: "OpenCode planning survives the idle timeout (opt in)",
-  ignore: Deno.env.get("ACPMCP_OPENCODE_TEST") !== "1",
+  skip: process.env["ACPMCP_OPENCODE_TEST"] !== "1",
   fn: async () => {
     const agents = {
       opencode: {
@@ -17,12 +19,14 @@ Deno.test({
     const manager = new SessionManager(agents);
     const server = createMcpServer(agents, manager);
     let permissionPolicy: string | undefined;
-    let eventSummary: {
-      count: number;
-      kinds: Record<string, number>;
-      longestGapMs: number;
-      journalBytes: number;
-    } | undefined;
+    let eventSummary:
+      | {
+          count: number;
+          kinds: Record<string, number>;
+          longestGapMs: number;
+          journalBytes: number;
+        }
+      | undefined;
     const start = manager.start.bind(manager);
     manager.start = (agentId, cwd, config, modeId, policy) => {
       permissionPolicy = policy;
@@ -31,8 +35,10 @@ Deno.test({
     const close = manager.close.bind(manager);
     manager.close = async (id) => {
       const events = manager.getEvents(id).events;
-      const timestamps = events.map((event) => Date.parse(event.timestamp))
-        .filter(Number.isFinite).sort((a, b) => a - b);
+      const timestamps = events
+        .map((event) => Date.parse(event.timestamp))
+        .filter(Number.isFinite)
+        .sort((a, b) => a - b);
       const kinds: Record<string, number> = {};
       for (const event of events) {
         kinds[event.kind] = (kinds[event.kind] ?? 0) + 1;
@@ -58,18 +64,19 @@ Deno.test({
       const startedAt = performance.now();
       const wire = await mcp.callTool("run_task", {
         agentId: "opencode",
-        cwd: Deno.cwd(),
+        cwd: process.cwd(),
         config: { model: "opencode/fledge-alpha-free" },
         permissionPolicy: "read_only",
         idleTimeoutMs: 300000,
-        task:
-          "Inspect this repository yourself and produce a concise implementation plan for making run_task time out on consecutive ACP inactivity instead of total duration. Do not modify files. Mention the timeout loop, event routing, API name, cleanup, and the most important tests. Return the plan only.",
+        task: "Inspect this repository yourself and produce a concise implementation plan for making run_task time out on consecutive ACP inactivity instead of total duration. Do not modify files. Mention the timeout loop, event routing, API name, cleanup, and the most important tests. Return the plan only.",
       }).response;
       const durationMs = Math.round(performance.now() - startedAt);
       const result = parseToolResult(wire);
       if (
-        result.status !== "completed" || typeof result.response !== "string" ||
-        result.response.trim().length < 100 || result.response.length > 5000
+        result.status !== "completed" ||
+        typeof result.response !== "string" ||
+        result.response.trim().length < 100 ||
+        result.response.length > 5000
       ) {
         throw new Error(
           `OpenCode planning task failed: ${JSON.stringify(result)}`,
@@ -95,9 +102,9 @@ Deno.test({
       }
       const callerBytes = JSON.stringify(mcpResult).length;
       console.log(
-        `Fledge planning: ${durationMs}ms; ${eventSummary.count} ACP updates; longest observed update gap ${eventSummary.longestGapMs}ms; compact result ${callerBytes} bytes; internal journal ${eventSummary.journalBytes} bytes; kinds ${
-          JSON.stringify(eventSummary.kinds)
-        }`,
+        `Fledge planning: ${durationMs}ms; ${eventSummary.count} ACP updates; longest observed update gap ${eventSummary.longestGapMs}ms; compact result ${callerBytes} bytes; internal journal ${eventSummary.journalBytes} bytes; kinds ${JSON.stringify(
+          eventSummary.kinds,
+        )}`,
       );
     } finally {
       await mcp.close();

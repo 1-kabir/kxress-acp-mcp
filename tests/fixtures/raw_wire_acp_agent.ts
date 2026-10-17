@@ -1,9 +1,10 @@
+import { Readable, Writable } from "node:stream";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 let buffer = "";
 
 async function write(value: unknown) {
-  await Deno.stdout.write(encoder.encode(`${JSON.stringify(value)}\n`));
+  await process.stdout.write(encoder.encode(`${JSON.stringify(value)}\n`));
 }
 
 async function handle(line: string) {
@@ -27,7 +28,8 @@ async function handle(line: string) {
     const sessionId = message.params?.sessionId;
     const prompt =
       (message.params?.prompt as Array<{ text?: string }> | undefined)
-        ?.map((part) => part.text ?? "").join("") ?? "";
+        ?.map((part) => part.text ?? "")
+        .join("") ?? "";
     if (typeof sessionId === "string") {
       const raw = (
         sessionUpdate: unknown,
@@ -47,10 +49,12 @@ async function handle(line: string) {
         const updates = [
           {
             sessionUpdate: "available_commands_update",
-            availableCommands: [{
-              name: "scan",
-              description: "INTERNAL_TOOL_MARKER " + "y".repeat(8000),
-            }],
+            availableCommands: [
+              {
+                name: "scan",
+                description: "INTERNAL_TOOL_MARKER " + "y".repeat(8000),
+              },
+            ],
           },
           {
             sessionUpdate: "agent_thought_chunk",
@@ -65,13 +69,15 @@ async function handle(line: string) {
           {
             sessionUpdate: "tool_call_update",
             toolCallId: "internal-call",
-            content: [{
-              type: "content",
-              content: {
-                type: "text",
-                text: "TOOL_HISTORY_MARKER " + "q".repeat(8000),
+            content: [
+              {
+                type: "content",
+                content: {
+                  type: "text",
+                  text: "TOOL_HISTORY_MARKER " + "q".repeat(8000),
+                },
               },
-            }],
+            ],
           },
           {
             sessionUpdate: "usage_update",
@@ -102,14 +108,22 @@ async function handle(line: string) {
           );
         }
       } else {
-        await write(raw({
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "raw " },
-        }, { ordinal: 1 }));
         await write(
-          raw({ sessionUpdate: "future_update", detail: { retained: true } }, {
-            ordinal: 2,
-          }),
+          raw(
+            {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "raw " },
+            },
+            { ordinal: 1 },
+          ),
+        );
+        await write(
+          raw(
+            { sessionUpdate: "future_update", detail: { retained: true } },
+            {
+              ordinal: 2,
+            },
+          ),
         );
         await write({
           jsonrpc: "2.0",
@@ -137,7 +151,7 @@ async function handle(line: string) {
   await write({ jsonrpc: "2.0", id: message.id, result });
 }
 
-const reader = Deno.stdin.readable.getReader();
+const reader = Readable.toWeb(process.stdin).getReader();
 while (true) {
   const { value, done } = await reader.read();
   if (done) break;

@@ -1,3 +1,5 @@
+import process from "node:process";
+import * as nodeFs from "#fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   type AgentMap,
@@ -31,7 +33,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function identity(path: string): string {
   const normalized = resolve(path);
-  return Deno.build.os === "windows" ? normalized.toLowerCase() : normalized;
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function mergeObjects(base: unknown, overlay: unknown): unknown {
@@ -43,30 +45,31 @@ function mergeObjects(base: unknown, overlay: unknown): unknown {
     base,
   );
   for (const [key, value] of Object.entries(overlay)) {
-    result[key] = key in result && isRecord(result[key]) && isRecord(value)
-      ? mergeObjects(result[key], value)
-      : Array.isArray(value)
-      ? [...value]
-      : value;
+    result[key] =
+      key in result && isRecord(result[key]) && isRecord(value)
+        ? mergeObjects(result[key], value)
+        : Array.isArray(value)
+          ? [...value]
+          : value;
   }
   return result;
 }
 
 async function readConfig(path: string): Promise<Record<string, unknown>> {
   try {
-    const info = await Deno.stat(path);
-    if (!info.isFile) throw new Error(`Config file '${path}' is not a file`);
+    const info = await nodeFs.stat(path);
+    if (!info.isFile()) throw new Error(`Config file '${path}' is not a file`);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if (nodeFs.isErrorCode(error, "ENOENT")) {
       throw new Error(`Config file '${path}' does not exist`);
     }
     throw error;
   }
   let text: string;
   try {
-    text = await Deno.readTextFile(path);
+    text = await nodeFs.readText(path);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if (nodeFs.isErrorCode(error, "ENOENT")) {
       throw new Error(`Config file '${path}' does not exist`);
     }
     throw new Error(`Could not read config file '${path}': ${String(error)}`);
@@ -145,18 +148,18 @@ function validateProjectConfig(
 
 function homeDirectory(options: ConfigDiscoveryOptions): string | undefined {
   if (options.homeDirectory !== undefined) return options.homeDirectory;
-  return Deno.build.os === "windows"
-    ? Deno.env.get("USERPROFILE")
-    : Deno.env.get("HOME");
+  return process.platform === "win32"
+    ? process.env["USERPROFILE"]
+    : process.env["HOME"];
 }
 
 async function exists(path: string): Promise<boolean> {
   try {
-    const info = await Deno.stat(path);
-    if (!info.isFile) throw new Error(`Config path '${path}' is not a file`);
+    const info = await nodeFs.stat(path);
+    if (!info.isFile()) throw new Error(`Config path '${path}' is not a file`);
     return true;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
+    if (nodeFs.isErrorCode(error, "ENOENT")) return false;
     throw error;
   }
 }
@@ -177,7 +180,7 @@ async function projectConfigPaths(cwd: string): Promise<string[]> {
 export async function resolveConfiguration(
   options: ConfigDiscoveryOptions = {},
 ): Promise<ResolvedConfiguration> {
-  const cwd = resolve(options.cwd ?? Deno.cwd());
+  const cwd = resolve(options.cwd ?? process.cwd());
   if (options.explicitConfigPath !== undefined) {
     const path = isAbsolute(options.explicitConfigPath)
       ? options.explicitConfigPath
@@ -201,9 +204,11 @@ export async function resolveConfiguration(
   }
 
   const sources: ConfigSource[] = [];
-  const configObjects: Array<
-    { path: string; kind: "home" | "project"; value: Record<string, unknown> }
-  > = [];
+  const configObjects: Array<{
+    path: string;
+    kind: "home" | "project";
+    value: Record<string, unknown>;
+  }> = [];
   const home = homeDirectory(options);
   let homePath: string | undefined;
   if (home) {
@@ -217,11 +222,9 @@ export async function resolveConfiguration(
     }
   }
 
-  for (
-    const path of options.includeProject === false
-      ? []
-      : await projectConfigPaths(cwd)
-  ) {
+  for (const path of options.includeProject === false
+    ? []
+    : await projectConfigPaths(cwd)) {
     if (homePath && identity(path) === identity(homePath)) continue;
     const value = await readConfig(path);
     validateProjectConfig(value, path);

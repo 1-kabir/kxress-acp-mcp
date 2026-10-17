@@ -50,9 +50,9 @@ export async function connectMcp(server: McpServer) {
 }
 
 export function parseToolResult(message: unknown): Record<string, unknown> {
-  const result =
-    (message as { result?: { content?: Array<{ text?: string }> } })
-      .result;
+  const result = (
+    message as { result?: { content?: Array<{ text?: string }> } }
+  ).result;
   const text = result?.content?.find((item) => item.text)?.text;
   if (!text) throw new Error("MCP tools/call returned no text result");
   return JSON.parse(text);

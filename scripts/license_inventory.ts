@@ -16,35 +16,39 @@ export function parseRuntimeLicenseInventory(
   text: string,
 ): RuntimeLicenseInventory {
   const value = JSON.parse(text) as RuntimeLicenseInventory;
-  if (
-    value.projectLicense !== "WTFPL" || !Array.isArray(value.dependencies)
-  ) throw new Error("Runtime license inventory must preserve project WTFPL");
+  if (value.projectLicense !== "WTFPL" || !Array.isArray(value.dependencies))
+    throw new Error("Runtime license inventory must preserve project WTFPL");
   for (const dependency of value.dependencies) {
     if (
-      !dependency.name || !dependency.version || !dependency.license ||
-      !dependency.source || !dependency.attribution ||
+      !dependency.name ||
+      !dependency.version ||
+      !dependency.license ||
+      !dependency.source ||
+      !dependency.attribution ||
       !Array.isArray(dependency.licenseFiles) ||
       dependency.licenseFiles.length === 0
-    ) throw new Error("Runtime license inventory entry is incomplete");
+    )
+      throw new Error("Runtime license inventory entry is incomplete");
   }
   return value;
 }
 
-function npmPackageVersion(lockKey: string): { name: string; version: string } {
-  const match = lockKey.match(/^(@[^/]+\/[^@]+|[^@]+)@([^_]+)(?:_.*)?$/);
-  if (!match) throw new Error(`Unsupported npm lock entry '${lockKey}'`);
-  return { name: match[1], version: match[2] };
-}
-
 export function assertRuntimeLicenseInventoryMatchesLock(
   lockText: string,
-  denoConfigText: string,
+  packageText: string,
   inventory: RuntimeLicenseInventory,
 ): void {
   const lock = JSON.parse(lockText) as {
-    npm?: Record<string, unknown>;
+    packages?: Record<string, { version?: string; dev?: boolean }>;
   };
-  const locked = Object.keys(lock.npm ?? {}).map(npmPackageVersion);
+  const locked = Object.entries(lock.packages ?? {})
+    .filter(
+      ([path, item]) => path.startsWith("node_modules/") && item.dev !== true,
+    )
+    .map(([path, item]) => ({
+      name: path.slice("node_modules/".length).split("/node_modules/").at(-1)!,
+      version: item.version ?? "",
+    }));
   const inventoried = inventory.dependencies.map(({ name, version }) => ({
     name,
     version,
@@ -53,50 +57,51 @@ export function assertRuntimeLicenseInventoryMatchesLock(
     `${name}@${version}`;
   const lockedKeys = locked.map(key).sort();
   const inventoryKeys = inventoried.map(key).sort();
-  const config = JSON.parse(denoConfigText) as {
-    imports?: Record<string, string>;
+  const packageJson = JSON.parse(packageText) as {
+    dependencies?: Record<string, string>;
   };
-  const configured = new Set<string>();
-  for (const specifier of Object.values(config.imports ?? {})) {
-    if (!specifier.startsWith("npm:")) continue;
-    const match = specifier.match(
-      /^npm:(@[^/]+\/[^@/]+|[^@/]+)@([^/]+)(?:\/.*)?$/,
-    );
-    if (!match) {
-      throw new Error(`Unsupported npm runtime import '${specifier}'`);
-    }
-    configured.add(`${match[1]}@${match[2]}`);
-  }
+  const configured = new Set(
+    Object.entries(packageJson.dependencies ?? {}).map(
+      ([name, version]) => `${name}@${version}`,
+    ),
+  );
   const inventoriedNames = new Set(inventoryKeys);
-  const missingConfigured = [...configured].filter((entry) =>
-    !inventoriedNames.has(entry)
+  const missingConfigured = [...configured].filter(
+    (entry) => !inventoriedNames.has(entry),
   );
   if (missingConfigured.length) {
     throw new Error(
-      `Runtime imports are missing from license inventory: ${
-        missingConfigured.join(", ")
-      }`,
+      `Runtime imports are missing from license inventory: ${missingConfigured.join(
+        ", ",
+      )}`,
     );
   }
   if (lockedKeys.join("\n") !== inventoryKeys.join("\n")) {
     throw new Error(
-      `Runtime license inventory does not match deno.lock npm graph. Locked: ${
-        lockedKeys.join(", ")
-      }; inventoried: ${inventoryKeys.join(", ")}`,
+      `Runtime license inventory does not match package-lock.json runtime graph. Locked: ${lockedKeys.join(
+        ", ",
+      )}; inventoried: ${inventoryKeys.join(", ")}`,
     );
   }
 }
 
 export function renderThirdPartyNotices(
   inventory: RuntimeLicenseInventory,
+  options: { includeNodeRuntime?: boolean } = {},
 ): string {
   const lines = [
-    "acp-mcp includes the runtime dependencies listed below in its native release binaries.",
+    "acp-mcp bundles the runtime dependencies listed below in its release packages.",
     "",
     "The original acp-mcp source is licensed under WTFPL; this does not change the",
     "separate licenses of third-party code included in the binaries.",
     "",
   ];
+  if (options.includeNodeRuntime) {
+    lines.push(
+      "Native standalone releases embed Node.js. Its Node.js and bundled third-party license texts are in licenses/Node.js-LICENSE.txt.",
+      "",
+    );
+  }
   for (const dependency of inventory.dependencies) {
     lines.push(
       `${dependency.name} ${dependency.version}`,

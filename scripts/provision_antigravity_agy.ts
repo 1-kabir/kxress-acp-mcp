@@ -1,3 +1,5 @@
+import process from "node:process";
+import * as nodeFs from "#fs";
 import { basename, dirname, resolve } from "node:path";
 import {
   ANTIGRAVITY_AGY_ACP_RELEASE,
@@ -25,31 +27,32 @@ async function sha256(bytes: Uint8Array): Promise<string> {
   const input = new Uint8Array(bytes.byteLength);
   input.set(bytes);
   const digest = await crypto.subtle.digest("SHA-256", input.buffer);
-  return [...new Uint8Array(digest)].map((byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 async function existingHash(path: string): Promise<string | undefined> {
   try {
-    const info = await Deno.lstat(path);
-    if (info.isSymlink || !info.isFile) {
+    const info = await nodeFs.lstat(path);
+    if (info.isSymbolicLink() || !info.isFile()) {
       throw new Error(`Refusing non-regular adapter destination: ${path}`);
     }
-    return await sha256(await Deno.readFile(path));
+    return await sha256(await nodeFs.readFile(path));
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return undefined;
+    if (nodeFs.isErrorCode(error, "ENOENT")) return undefined;
     throw error;
   }
 }
 
 async function provision(): Promise<void> {
-  if (Deno.build.os !== "windows" || Deno.build.arch !== "x86_64") {
+  if (process.platform !== "win32" || process.arch !== "x64") {
     throw new Error(
       "The pinned Antigravity agy adapter is provisioned for Windows x86_64 only",
     );
   }
-  const destinationDirectory = parseDestinationDirectory(Deno.args) ??
+  const destinationDirectory =
+    parseDestinationDirectory(process.argv.slice(2)) ??
     dirname(antigravityAgyAcpInstallPath());
   const destination = resolve(
     destinationDirectory,
@@ -69,7 +72,7 @@ async function provision(): Promise<void> {
     return;
   }
 
-  await Deno.mkdir(destinationDirectory, { recursive: true });
+  await nodeFs.mkdir(destinationDirectory, { recursive: true });
   const response = await fetch(ANTIGRAVITY_AGY_ACP_RELEASE.url);
   if (!response.ok) {
     throw new Error(
@@ -84,27 +87,27 @@ async function provision(): Promise<void> {
     );
   }
 
-  const staging = await Deno.makeTempFile({
+  const staging = await nodeFs.makeTempFile({
     dir: destinationDirectory,
     prefix: ".agy-acp-",
     suffix: ".stage",
   });
   try {
-    await Deno.writeFile(staging, bytes, { create: false, append: false });
-    if (await sha256(await Deno.readFile(staging)) !== downloadedHash) {
+    await nodeFs.writeBytes(staging, bytes, { create: false, append: false });
+    if ((await sha256(await nodeFs.readFile(staging))) !== downloadedHash) {
       throw new Error("Staged adapter bytes failed SHA-256 verification");
     }
     try {
-      await Deno.link(staging, destination);
+      await nodeFs.link(staging, destination);
     } catch (error) {
       const racedHash = await existingHash(destination);
       if (racedHash !== downloadedHash) throw error;
     }
   } finally {
     try {
-      await Deno.remove(staging);
+      await nodeFs.removePath(staging);
     } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) {
+      if (!nodeFs.isErrorCode(error, "ENOENT")) {
         console.warn(`Could not remove adapter staging file: ${staging}`);
       }
     }
@@ -130,6 +133,6 @@ if (import.meta.main) {
         ? error.message
         : "Antigravity agy ACP provisioning failed",
     );
-    Deno.exitCode = 1;
+    process.exitCode = 1;
   }
 }

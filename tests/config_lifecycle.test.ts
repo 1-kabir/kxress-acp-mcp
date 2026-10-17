@@ -1,12 +1,15 @@
+import { test } from "node:test";
+import process from "node:process";
+import * as nodeFs from "#fs";
 import { loadAgents } from "../src/agents/config.ts";
 
-Deno.test("independent config loads see file changes without mutating prior runs", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-config-lifecycle-" });
+test("independent config loads see file changes without mutating prior runs", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-config-lifecycle-" });
   const configPath = `${dir}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }config.json`;
   try {
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: {
@@ -15,7 +18,7 @@ Deno.test("independent config loads see file changes without mutating prior runs
       }),
     );
     const firstRun = await loadAgents(configPath);
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: {
@@ -34,7 +37,7 @@ Deno.test("independent config loads see file changes without mutating prior runs
         "Config changes leaked between independently loaded runs",
       );
     }
-    await Deno.writeTextFile(configPath, "{ invalid json");
+    await nodeFs.writeText(configPath, "{ invalid json");
     let invalidSecondRunFailed = false;
     try {
       await loadAgents(configPath);
@@ -45,14 +48,14 @@ Deno.test("independent config loads see file changes without mutating prior runs
       throw new Error("An invalid later config changed the existing run");
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("explicit missing config fails instead of selecting built-in defaults", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-explicit-config-" });
+test("explicit missing config fails instead of selecting built-in defaults", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-explicit-config-" });
   const missing = `${dir}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }missing config.json`;
   try {
     let message = "";
@@ -68,13 +71,13 @@ Deno.test("explicit missing config fails instead of selecting built-in defaults"
       throw new Error(`Explicit missing config was not clear: ${message}`);
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("known config fields fail with safe actionable validation errors", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-config-schema-" });
-  const path = `${dir}${Deno.build.os === "windows" ? "\\" : "/"}config.json`;
+test("known config fields fail with safe actionable validation errors", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-config-schema-" });
+  const path = `${dir}${process.platform === "win32" ? "\\" : "/"}config.json`;
   const cases: Array<[unknown, string]> = [
     [null, "must contain a JSON object"],
     [{ agents: null }, "must contain an 'agents' object"],
@@ -83,9 +86,14 @@ Deno.test("known config fields fail with safe actionable validation errors", asy
       { agents: { custom: { command: "agent", args: "--stdio" } } },
       "args must be an array of strings",
     ],
-    [{
-      agents: { custom: { command: "agent", args: [], env: { TOKEN: null } } },
-    }, "env value for 'TOKEN' must be a string"],
+    [
+      {
+        agents: {
+          custom: { command: "agent", args: [], env: { TOKEN: null } },
+        },
+      },
+      "env value for 'TOKEN' must be a string",
+    ],
     [
       { agents: { custom: { command: "agent", args: [], acpProtocol: "v3" } } },
       "acpProtocol must be 'v1' or 'v2'",
@@ -93,7 +101,7 @@ Deno.test("known config fields fail with safe actionable validation errors", asy
   ];
   try {
     for (const [config, expected] of cases) {
-      await Deno.writeTextFile(path, JSON.stringify(config));
+      await nodeFs.writeText(path, JSON.stringify(config));
       let message = "";
       try {
         await loadAgents(path);
@@ -104,7 +112,7 @@ Deno.test("known config fields fail with safe actionable validation errors", asy
         throw new Error(`Expected safe '${expected}' error, got '${message}'`);
       }
     }
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       path,
       JSON.stringify({
         unknownFutureField: true,
@@ -118,16 +126,16 @@ Deno.test("known config fields fail with safe actionable validation errors", asy
       throw new Error("Unknown config fields were unexpectedly rejected");
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("config validation never serializes an environment value", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-config-canary-" });
-  const path = `${dir}${Deno.build.os === "windows" ? "\\" : "/"}config.json`;
+test("config validation never serializes an environment value", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-config-canary-" });
+  const path = `${dir}${process.platform === "win32" ? "\\" : "/"}config.json`;
   const canary = `ACP_MCP_CONFIG_CANARY_${crypto.randomUUID()}`;
   try {
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       path,
       JSON.stringify({
         agents: {
@@ -149,8 +157,9 @@ Deno.test("config validation never serializes an environment value", async () =>
     if (
       !message.includes("acpProtocol must be 'v1' or 'v2'") ||
       message.includes(canary)
-    ) throw new Error("Config validation exposed an environment value");
+    )
+      throw new Error("Config validation exposed an environment value");
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });

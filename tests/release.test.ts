@@ -1,3 +1,7 @@
+import { test } from "node:test";
+import process from "node:process";
+import { ProcessCommand } from "#proc";
+import * as nodeFs from "#fs";
 import {
   artifactName,
   assertCleanTreeStatus,
@@ -21,7 +25,7 @@ import {
   renderThirdPartyNotices,
 } from "../scripts/license_inventory.ts";
 
-Deno.test("release target and artifact names encode native platform/version", () => {
+test("release target and artifact names encode native platform/version", () => {
   if (
     targetId("windows", "x86_64") !== "windows-x86_64" ||
     targetId("linux", "x86_64") !== "linux-x86_64" ||
@@ -37,19 +41,19 @@ Deno.test("release target and artifact names encode native platform/version", ()
       "acp-mcp-0.2.4-macos-arm64.tar.gz.sha256" ||
     releaseNames("0.2.4", "macos-arm64").manifest !==
       "acp-mcp-0.2.4-macos-arm64.manifest.json"
-  ) throw new Error("Release naming did not match the native target");
-  for (
-    const [os, arch] of [
-      ["darwin", "x86_64"],
-      ["linux", "aarch64"],
-      ["windows", "aarch64"],
-    ]
-  ) {
+  )
+    throw new Error("Release naming did not match the native target");
+  for (const [os, arch] of [
+    ["darwin", "x86_64"],
+    ["linux", "aarch64"],
+    ["windows", "aarch64"],
+  ]) {
     let unsupportedRejected = false;
     try {
       targetId(os, arch);
     } catch (error) {
-      unsupportedRejected = String(error).includes("supported targets") &&
+      unsupportedRejected =
+        String(error).includes("supported targets") &&
         String(error).includes("macos-arm64");
     }
     if (!unsupportedRejected) {
@@ -58,17 +62,18 @@ Deno.test("release target and artifact names encode native platform/version", ()
   }
 });
 
-Deno.test("default install locations are user-local on all supported targets", () => {
-  if (Deno.build.os === "windows") {
+test("default install locations are user-local on all supported targets", () => {
+  if (process.platform === "win32") {
     const windows = defaultInstallDestination("windows", {
       LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local",
     });
     if (
       windows.toLowerCase() !==
-        "c:\\users\\fixture\\appdata\\local\\programs\\acp-mcp\\acp-mcp.exe"
-    ) throw new Error(`Unexpected Windows install destination: ${windows}`);
+      "c:\\users\\fixture\\appdata\\local\\programs\\acp-mcp\\acp-mcp.exe"
+    )
+      throw new Error(`Unexpected Windows install destination: ${windows}`);
   }
-  if (Deno.build.os === "linux") {
+  if (process.platform === "linux") {
     const linux = defaultInstallDestination("linux", { HOME: "/home/fixture" });
     if (linux !== "/home/fixture/.local/bin/acp-mcp") {
       throw new Error(`Unexpected Linux install destination: ${linux}`);
@@ -89,7 +94,7 @@ Deno.test("default install locations are user-local on all supported targets", (
   }
 });
 
-Deno.test("POSIX installer PATH warning checks HOME local bin without edits", () => {
+test("POSIX installer PATH warning checks HOME local bin without edits", () => {
   if (
     !installDirectoryOnPath(
       "/Users/example/.local/bin/acp-mcp",
@@ -101,10 +106,11 @@ Deno.test("POSIX installer PATH warning checks HOME local bin without edits", ()
       "/usr/bin:/bin",
       "darwin",
     )
-  ) throw new Error("macOS local-bin PATH detection was incorrect");
+  )
+    throw new Error("macOS local-bin PATH detection was incorrect");
 });
 
-Deno.test("release refuses dirty trees and formats stable checksums", () => {
+test("release refuses dirty trees and formats stable checksums", () => {
   assertCleanTreeStatus("");
   let rejected = false;
   try {
@@ -115,48 +121,43 @@ Deno.test("release refuses dirty trees and formats stable checksums", () => {
   const hash = sha256Hex(new TextEncoder().encode("release fixture"));
   if (
     !rejected ||
-    checksumText(hash, "acp-mcp-test.exe") !==
-      `${hash}  acp-mcp-test.exe\n`
-  ) throw new Error("Dirty-tree/checksum contract was incorrect");
+    checksumText(hash, "acp-mcp-test.exe") !== `${hash}  acp-mcp-test.exe\n`
+  )
+    throw new Error("Dirty-tree/checksum contract was incorrect");
 });
 
-Deno.test("runtime dependency license inventory matches the complete lock graph", async () => {
+test("runtime dependency license inventory matches the complete npm lock graph", async () => {
   const inventory = parseRuntimeLicenseInventory(
-    await Deno.readTextFile(
+    await nodeFs.readText(
       new URL("../licenses/runtime-dependencies.json", import.meta.url),
     ),
   );
-  const lockText = await Deno.readTextFile(
-    new URL("../deno.lock", import.meta.url),
+  const lockText = await nodeFs.readText(
+    new URL("../package-lock.json", import.meta.url),
   );
-  const configText = await Deno.readTextFile(
-    new URL("../deno.jsonc", import.meta.url),
+  const configText = await nodeFs.readText(
+    new URL("../package.json", import.meta.url),
   );
   assertRuntimeLicenseInventoryMatchesLock(lockText, configText, inventory);
   const notices = renderThirdPartyNotices(inventory);
-  const checkedInNotices = await Deno.readTextFile(
+  const checkedInNotices = await nodeFs.readText(
     new URL("../THIRD_PARTY_NOTICES.txt", import.meta.url),
   );
   const normalizeLineEndings = (text: string) => text.replace(/\r\n/g, "\n");
-  if (
-    normalizeLineEndings(checkedInNotices) !== normalizeLineEndings(notices)
-  ) throw new Error("Checked-in third-party notices are out of date");
-  for (
-    const licensePath of new Set(
-      inventory.dependencies.flatMap((entry) => entry.licenseFiles),
-    )
-  ) {
-    await Deno.stat(new URL(`../${licensePath}`, import.meta.url));
+  if (normalizeLineEndings(checkedInNotices) !== normalizeLineEndings(notices))
+    throw new Error("Checked-in third-party notices are out of date");
+  for (const licensePath of new Set(
+    inventory.dependencies.flatMap((entry) => entry.licenseFiles),
+  )) {
+    await nodeFs.stat(new URL(`../${licensePath}`, import.meta.url));
   }
-  for (
-    const expected of [
-      "WTFPL",
-      "@agentclientprotocol/sdk 1.7.0",
-      "@modelcontextprotocol/server 2.3.1",
-      "@modelcontextprotocol/core 2.3.1",
-      "zod 4.6.5",
-    ]
-  ) {
+  for (const expected of [
+    "WTFPL",
+    "@agentclientprotocol/sdk 1.7.0",
+    "@modelcontextprotocol/server 2.3.1",
+    "@modelcontextprotocol/core 2.3.1",
+    "zod 4.6.5",
+  ]) {
     if (!notices.includes(expected)) {
       throw new Error(`Generated notices omitted '${expected}'`);
     }
@@ -164,7 +165,7 @@ Deno.test("runtime dependency license inventory matches the complete lock graph"
   if (!notices.includes("Apache-2.0") || !notices.includes("MIT")) {
     throw new Error("Generated notices omitted a runtime dependency license");
   }
-  const projectLicense = await Deno.readTextFile(
+  const projectLicense = await nodeFs.readText(
     new URL("../LICENSE", import.meta.url),
   );
   if (!projectLicense.includes("DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE")) {
@@ -172,8 +173,12 @@ Deno.test("runtime dependency license inventory matches the complete lock graph"
   }
   let driftRejected = false;
   try {
+    const driftedLock = JSON.parse(lockText) as {
+      packages: Record<string, { version?: string; dev?: boolean }>;
+    };
+    driftedLock.packages["node_modules/zod"]!.version = "9.9.9";
     assertRuntimeLicenseInventoryMatchesLock(
-      lockText.replace('"zod@4.6.5"', '"new-runtime@1.0.0"'),
+      JSON.stringify(driftedLock),
       configText,
       inventory,
     );
@@ -185,12 +190,13 @@ Deno.test("runtime dependency license inventory matches the complete lock graph"
   }
   let importDriftRejected = false;
   try {
+    const driftedPackage = JSON.parse(configText) as {
+      dependencies: Record<string, string>;
+    };
+    driftedPackage.dependencies["new-runtime"] = "1.0.0";
     assertRuntimeLicenseInventoryMatchesLock(
       lockText,
-      configText.replace(
-        '"zod": "npm:zod@4.6.5"',
-        '"new-runtime": "npm:new-runtime@1.0.0"',
-      ),
+      JSON.stringify(driftedPackage),
       inventory,
     );
   } catch {
@@ -201,21 +207,21 @@ Deno.test("runtime dependency license inventory matches the complete lock graph"
   }
 });
 
-Deno.test("release output root rejects a symlink or junction", async () => {
-  const root = await Deno.makeTempDir({ prefix: "acp-mcp-release-root-" });
-  const canonicalRoot = await Deno.realPath(root);
-  const outside = await Deno.makeTempDir({
+test("release output root rejects a symlink or junction", async () => {
+  const root = await nodeFs.makeTempDir({ prefix: "acp-mcp-release-root-" });
+  const canonicalRoot = await nodeFs.realpath(root);
+  const outside = await nodeFs.makeTempDir({
     prefix: "acp-mcp-release-outside-",
   });
-  const releases = `${root}${Deno.build.os === "windows" ? "\\" : "/"}dist${
-    Deno.build.os === "windows" ? "\\" : "/"
+  const releases = `${root}${process.platform === "win32" ? "\\" : "/"}dist${
+    process.platform === "win32" ? "\\" : "/"
   }releases`;
   try {
     await ensureReleaseOutputRoot(root);
     await ensureReleaseOutputRoot(canonicalRoot);
-    await Deno.remove(releases);
-    if (Deno.build.os === "windows") {
-      const linked = await new Deno.Command("powershell.exe", {
+    await nodeFs.removePath(releases);
+    if (process.platform === "win32") {
+      const linked = await new ProcessCommand("powershell.exe", {
         args: [
           "-NoProfile",
           "-Command",
@@ -230,7 +236,7 @@ Deno.test("release output root rejects a symlink or junction", async () => {
         throw new Error("Could not create release-root junction fixture");
       }
     } else {
-      await Deno.symlink(outside, releases, { type: "dir" });
+      await nodeFs.symlink(outside, releases, { type: "dir" });
     }
     let rejected = false;
     try {
@@ -241,46 +247,48 @@ Deno.test("release output root rejects a symlink or junction", async () => {
     if (!rejected) {
       throw new Error("A linked release output root was accepted");
     }
-    if ((await Array.fromAsync(Deno.readDir(outside))).length !== 0) {
+    if ((await Array.fromAsync(nodeFs.readDir(outside))).length !== 0) {
       throw new Error("Release root validation touched the external target");
     }
   } finally {
     try {
-      await Deno.remove(releases);
-    } catch { /* link may not have been created */ }
-    await Deno.remove(root, { recursive: true });
-    await Deno.remove(outside, { recursive: true });
+      await nodeFs.removePath(releases);
+    } catch {
+      /* link may not have been created */
+    }
+    await nodeFs.removePath(root, { recursive: true });
+    await nodeFs.removePath(outside, { recursive: true });
   }
 });
 
-Deno.test("install verifies licensed archive before atomically replacing destination", async () => {
-  const root = await Deno.makeTempDir({ prefix: "acp-mcp-local-install-" });
+test("install verifies licensed archive before atomically replacing destination", async () => {
+  const root = await nodeFs.makeTempDir({ prefix: "acp-mcp-local-install-" });
   const releaseDirectory = `${root}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }release bundle`;
   const installDirectory = `${root}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }installed app`;
-  await Deno.mkdir(releaseDirectory);
-  await Deno.mkdir(installDirectory);
+  await nodeFs.mkdir(releaseDirectory);
+  await nodeFs.mkdir(installDirectory);
   const target = targetId();
   const names = releaseNames(VERSION, target);
   const archive = `${releaseDirectory}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }${names.archive}`;
   const destination = `${installDirectory}${
-    Deno.build.os === "windows" ? "\\" : "/"
-  }acp-mcp${Deno.build.os === "windows" ? ".exe" : ""}`;
+    process.platform === "win32" ? "\\" : "/"
+  }acp-mcp${process.platform === "win32" ? ".exe" : ""}`;
   const configPath = `${installDirectory}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }config.json`;
   const bytes = new TextEncoder().encode("native executable fixture");
   const hash = sha256Hex(bytes);
   try {
     const fixtureBinary = `${installDirectory}${
-      Deno.build.os === "windows" ? "\\" : "/"
+      process.platform === "win32" ? "\\" : "/"
     }fixture-native`;
-    await Deno.writeFile(fixtureBinary, bytes);
+    await nodeFs.writeBytes(fixtureBinary, bytes);
     const manifest = await createReleaseArchive(archive, {
       binaryPath: fixtureBinary,
       version: VERSION,
@@ -288,33 +296,32 @@ Deno.test("install verifies licensed archive before atomically replacing destina
       commit: "a".repeat(40),
       executableSha256: hash,
     });
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       `${archive}.sha256`,
       checksumText(manifest.archiveSha256, names.archive),
     );
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       `${releaseDirectory}${
-        Deno.build.os === "windows" ? "\\" : "/"
+        process.platform === "win32" ? "\\" : "/"
       }${names.manifest}`,
       JSON.stringify(manifest),
     );
-    await Deno.writeTextFile(destination, "previous executable");
-    await Deno.writeTextFile(configPath, "user config stays unchanged");
+    await nodeFs.writeText(destination, "previous executable");
+    await nodeFs.writeText(configPath, "user config stays unchanged");
 
-    const installed = await installRelease(
-      releaseDirectory,
-      destination,
-      () => Promise.resolve(`acp-mcp ${VERSION}`),
+    const installed = await installRelease(releaseDirectory, destination, () =>
+      Promise.resolve(`acp-mcp ${VERSION}`),
     );
     if (
       installed.hash !== hash ||
-      new TextDecoder().decode(await Deno.readFile(destination)) !==
+      new TextDecoder().decode(await nodeFs.readFile(destination)) !==
         "native executable fixture" ||
-      await Deno.readTextFile(configPath) !== "user config stays unchanged"
-    ) throw new Error("Install did not verify/replace only the executable");
+      (await nodeFs.readText(configPath)) !== "user config stays unchanged"
+    )
+      throw new Error("Install did not verify/replace only the executable");
 
-    if (Deno.build.os !== "windows") {
-      const mode = (await Deno.stat(destination)).mode;
+    if (process.platform !== "win32") {
+      const mode = (await nodeFs.stat(destination)).mode;
       if (mode === null || (mode & 0o111) === 0) {
         throw new Error("Installed Linux executable is not executable");
       }
@@ -331,23 +338,25 @@ Deno.test("install verifies licensed archive before atomically replacing destina
       throw new Error("Installer did not accept the GitHub manifest naming");
     }
 
-    await Deno.writeTextFile(destination, "old executable remains");
-    await Deno.writeFile(archive, new TextEncoder().encode("corrupt archive"));
+    await nodeFs.writeText(destination, "old executable remains");
+    await nodeFs.writeBytes(
+      archive,
+      new TextEncoder().encode("corrupt archive"),
+    );
     let rejected = false;
     try {
-      await installRelease(
-        releaseDirectory,
-        destination,
-        () => Promise.resolve(`acp-mcp ${VERSION}`),
+      await installRelease(releaseDirectory, destination, () =>
+        Promise.resolve(`acp-mcp ${VERSION}`),
       );
     } catch (error) {
       rejected = String(error).includes("SHA-256 verification failed");
     }
     if (
       !rejected ||
-      await Deno.readTextFile(destination) !== "old executable remains"
-    ) throw new Error("Corrupt artifact changed the installed executable");
+      (await nodeFs.readText(destination)) !== "old executable remains"
+    )
+      throw new Error("Corrupt artifact changed the installed executable");
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await nodeFs.removePath(root, { recursive: true });
   }
 });

@@ -1,3 +1,7 @@
+import { test } from "node:test";
+import process from "node:process";
+import { type ProcessStatus } from "#proc";
+import * as nodeFs from "#fs";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import type { AgentFailureClassifiers } from "../src/agents/failure_classifiers.ts";
@@ -10,19 +14,14 @@ function managerFor(agentId: "raw" | "fake" = "fake") {
     }.ts`,
     import.meta.url,
   ).pathname;
-  const absoluteFixturePath = Deno.build.os === "windows"
-    ? decodeURIComponent(fixturePath.replace(/^\//, ""))
-    : fixturePath;
+  const absoluteFixturePath =
+    process.platform === "win32"
+      ? decodeURIComponent(fixturePath.replace(/^\//, ""))
+      : fixturePath;
   return new SessionManager({
     [agentId]: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        "--allow-write",
-        absoluteFixturePath,
-      ],
+      command: process.execPath,
+      args: [absoluteFixturePath],
     },
   });
 }
@@ -30,13 +29,13 @@ function managerFor(agentId: "raw" | "fake" = "fake") {
 function sessionInternalsForTest(manager: SessionManager, id: string) {
   type TestSession = {
     process: {
-      child: { status: Promise<Deno.CommandStatus> };
+      child: { status: Promise<ProcessStatus> };
       stderrTail: () => string;
     };
   };
-  const sessions =
-    (manager as unknown as { sessions: Map<string, TestSession> })
-      .sessions;
+  const sessions = (
+    manager as unknown as { sessions: Map<string, TestSession> }
+  ).sessions;
   const session = sessions.get(id);
   if (!session) throw new Error(`Missing test session ${id}`);
   return session;
@@ -48,7 +47,7 @@ async function harness(
   failureClassifiers?: AgentFailureClassifiers,
 ) {
   const manager = managerFor(agentId);
-  const closedChildren: Promise<Deno.CommandStatus>[] = [];
+  const closedChildren: Promise<ProcessStatus>[] = [];
   const closedStderr: Array<() => string> = [];
   const originalClose = manager.close.bind(manager);
   manager.close = async (id) => {
@@ -72,11 +71,8 @@ async function harness(
   return { manager, server, mcp, closedChildren, closedStderr };
 }
 
-Deno.test("run_task enriches only recognized OpenCode failures", async () => {
-  const { manager, server, mcp } = await harness(
-    "fake",
-    "opencode",
-  );
+test("run_task enriches only recognized OpenCode failures", async () => {
+  const { manager, server, mcp } = await harness("fake", "opencode");
   try {
     const rateLimited = parseToolResult(
       await mcp.callTool("run_task", {
@@ -86,15 +82,18 @@ Deno.test("run_task enriches only recognized OpenCode failures", async () => {
     );
     const failure = rateLimited.error as Record<string, unknown>;
     if (
-      rateLimited.status !== "failed" || failure.kind !== "prompt_failed" ||
-      failure.stage !== "prompt" || failure.acpCode !== -32603
+      rateLimited.status !== "failed" ||
+      failure.kind !== "prompt_failed" ||
+      failure.stage !== "prompt" ||
+      failure.acpCode !== -32603
     ) {
       throw new Error(
         `Generic failure fields changed: ${JSON.stringify(failure)}`,
       );
     }
     if (
-      JSON.stringify(failure.classification) !== JSON.stringify({
+      JSON.stringify(failure.classification) !==
+      JSON.stringify({
         reason: "rate_limited",
         source: "opencode",
         evidence: "message_heuristic",
@@ -132,7 +131,7 @@ Deno.test("run_task enriches only recognized OpenCode failures", async () => {
   }
 });
 
-Deno.test("generic agents do not infer rate limits from ACP -32603", async () => {
+test("generic agents do not infer rate limits from ACP -32603", async () => {
   const { manager, server, mcp } = await harness();
   try {
     const result = parseToolResult(
@@ -143,8 +142,10 @@ Deno.test("generic agents do not infer rate limits from ACP -32603", async () =>
     );
     const error = result.error as Record<string, unknown>;
     if (
-      result.status !== "failed" || error.kind !== "prompt_failed" ||
-      error.stage !== "prompt" || error.acpCode !== -32603 ||
+      result.status !== "failed" ||
+      error.kind !== "prompt_failed" ||
+      error.stage !== "prompt" ||
+      error.acpCode !== -32603 ||
       "classification" in error
     ) {
       throw new Error(
@@ -158,7 +159,7 @@ Deno.test("generic agents do not infer rate limits from ACP -32603", async () =>
   }
 });
 
-Deno.test("MCP session queries preserve public metadata without manager internals", async () => {
+test("MCP session queries preserve public metadata without manager internals", async () => {
   const { manager, server, mcp } = await harness();
   try {
     const started = parseToolResult(
@@ -166,7 +167,8 @@ Deno.test("MCP session queries preserve public metadata without manager internal
     );
     const sessionId = String(started.sessionId);
     if (
-      started.agentId !== "fake" || !started.acpSessionId ||
+      started.agentId !== "fake" ||
+      !started.acpSessionId ||
       started.acpProtocol !== "v1"
     ) {
       throw new Error(
@@ -181,7 +183,8 @@ Deno.test("MCP session queries preserve public metadata without manager internal
     }
     const listed = listedResult as unknown as Array<Record<string, unknown>>;
     if (
-      listed.length !== 1 || listed[0].id !== sessionId ||
+      listed.length !== 1 ||
+      listed[0].id !== sessionId ||
       listed[0].agentId !== "fake" ||
       listed[0].acpSessionId !== started.acpSessionId
     ) {
@@ -210,7 +213,7 @@ Deno.test("MCP session queries preserve public metadata without manager internal
       details.id !== sessionId ||
       expected.some((key) => !detailKeys.includes(key)) ||
       detailKeys.some((key) =>
-        ["driver", "process", "events", "permissionLease"].includes(key)
+        ["driver", "process", "events", "permissionLease"].includes(key),
       ) ||
       !Array.isArray(details.pendingPermissions)
     ) {
@@ -229,16 +232,12 @@ Deno.test("MCP session queries preserve public metadata without manager internal
   }
 });
 
-Deno.test("failure classifier exceptions preserve generic failures", async () => {
-  const { manager, server, mcp } = await harness(
-    "fake",
-    "thrower",
-    {
-      thrower: () => {
-        throw new Error("PRIVATE_CLASSIFIER_SENTINEL");
-      },
+test("failure classifier exceptions preserve generic failures", async () => {
+  const { manager, server, mcp } = await harness("fake", "thrower", {
+    thrower: () => {
+      throw new Error("PRIVATE_CLASSIFIER_SENTINEL");
     },
-  );
+  });
   try {
     const result = parseToolResult(
       await mcp.callTool("run_task", {
@@ -248,8 +247,10 @@ Deno.test("failure classifier exceptions preserve generic failures", async () =>
     );
     const error = result.error as Record<string, unknown>;
     if (
-      result.status !== "failed" || error.kind !== "prompt_failed" ||
-      error.stage !== "prompt" || error.acpCode !== -32603 ||
+      result.status !== "failed" ||
+      error.kind !== "prompt_failed" ||
+      error.stage !== "prompt" ||
+      error.acpCode !== -32603 ||
       "classification" in error ||
       JSON.stringify(result).includes("PRIVATE_CLASSIFIER_SENTINEL")
     ) {
@@ -264,10 +265,10 @@ Deno.test("failure classifier exceptions preserve generic failures", async () =>
   }
 });
 
-Deno.test("run_task advertises external disclosure and mutation accurately", async () => {
+test("run_task advertises external disclosure and mutation accurately", async () => {
   const { manager, server, mcp } = await harness();
   try {
-    const reply = await mcp.listTools().response as {
+    const reply = (await mcp.listTools().response) as {
       result?: { tools?: Array<Record<string, unknown>> };
     };
     const tool = reply.result?.tools?.find((item) => item.name === "run_task");
@@ -291,13 +292,11 @@ Deno.test("run_task advertises external disclosure and mutation accurately", asy
       );
     }
     const description = String(tool.description);
-    for (
-      const phrase of [
-        "may be sent to its configured model provider",
-        "does not prevent external data disclosure",
-        "Host approval policies still apply",
-      ]
-    ) {
+    for (const phrase of [
+      "may be sent to its configured model provider",
+      "does not prevent external data disclosure",
+      "Host approval policies still apply",
+    ]) {
       if (!description.includes(phrase)) {
         throw new Error(`run_task description omitted: ${phrase}`);
       }
@@ -306,7 +305,8 @@ Deno.test("run_task advertises external disclosure and mutation accurately", asy
       properties?: Record<string, { description?: string }>;
     };
     if (
-      !schema.properties?.task || schema.properties.prompt ||
+      !schema.properties?.task ||
+      schema.properties.prompt ||
       !String(schema.properties.task.description).includes("ACP agent")
     ) {
       throw new Error("run_task did not advertise its task input");
@@ -341,7 +341,7 @@ Deno.test("run_task advertises external disclosure and mutation accurately", asy
   }
 });
 
-Deno.test("run_task returns one compact answer while retaining internal ACP updates", async () => {
+test("run_task returns one compact answer while retaining internal ACP updates", async () => {
   const { manager, server, mcp, closedChildren } = await harness("raw");
   let observed: Array<{ kind: string; raw: unknown }> = [];
   const close = manager.close.bind(manager);
@@ -357,16 +357,18 @@ Deno.test("run_task returns one compact answer while retaining internal ACP upda
       agentId: "raw",
       task: "delegate isolation",
     });
-    const wire = await response as { result?: Record<string, unknown> };
+    const wire = (await response) as { result?: Record<string, unknown> };
     const serialized = JSON.stringify(wire.result);
     const result = parseToolResult(wire);
     if (
-      JSON.stringify(result) !== JSON.stringify({
+      JSON.stringify(result) !==
+      JSON.stringify({
         status: "completed",
         response: "Delegation complete.",
         stopReason: "end_turn",
       })
-    ) throw new Error(`Unexpected delegate result: ${JSON.stringify(result)}`);
+    )
+      throw new Error(`Unexpected delegate result: ${JSON.stringify(result)}`);
     if (
       (wire.result?.content as unknown[])?.length !== 1 ||
       wire.result?.structuredContent
@@ -375,18 +377,16 @@ Deno.test("run_task returns one compact answer while retaining internal ACP upda
         "MCP returned duplicate or structured result representations",
       );
     }
-    for (
-      const marker of [
-        "INTERNAL_THOUGHT_MARKER",
-        "INTERNAL_TOOL_MARKER",
-        "TOOL_HISTORY_MARKER",
-        "UNKNOWN_EVENT_MARKER",
-        "RAW_PARAMS_MARKER",
-        "agent_thought_chunk",
-        "usage_update",
-        "tool_call_update",
-      ]
-    ) {
+    for (const marker of [
+      "INTERNAL_THOUGHT_MARKER",
+      "INTERNAL_TOOL_MARKER",
+      "TOOL_HISTORY_MARKER",
+      "UNKNOWN_EVENT_MARKER",
+      "RAW_PARAMS_MARKER",
+      "agent_thought_chunk",
+      "usage_update",
+      "tool_call_update",
+    ]) {
       if (serialized.includes(marker)) {
         throw new Error(`Internal marker leaked: ${marker}`);
       }
@@ -432,7 +432,7 @@ Deno.test("run_task returns one compact answer while retaining internal ACP upda
   }
 });
 
-Deno.test("completed run_task result survives nonzero child cleanup exit", async () => {
+test("completed run_task result survives nonzero child cleanup exit", async () => {
   const { manager, server, mcp, closedChildren } = await harness();
   try {
     const result = parseToolResult(
@@ -442,24 +442,25 @@ Deno.test("completed run_task result survives nonzero child cleanup exit", async
       }).response,
     );
     if (
-      JSON.stringify(result) !== JSON.stringify({
+      JSON.stringify(result) !==
+      JSON.stringify({
         status: "completed",
         response: "fake reply",
         stopReason: "end_turn",
       })
     ) {
       throw new Error(
-        `Nonzero cleanup exit changed completed result: ${
-          JSON.stringify(result)
-        }`,
+        `Nonzero cleanup exit changed completed result: ${JSON.stringify(
+          result,
+        )}`,
       );
     }
     const [status] = await Promise.all(closedChildren);
     if (closedChildren.length !== 1 || status.code !== 23) {
       throw new Error(
-        `Expected one terminated child with diagnostic exit code 23, got ${
-          JSON.stringify(status)
-        }`,
+        `Expected one terminated child with diagnostic exit code 23, got ${JSON.stringify(
+          status,
+        )}`,
       );
     }
     if (manager.sessionCount) {
@@ -472,7 +473,7 @@ Deno.test("completed run_task result survives nonzero child cleanup exit", async
   }
 });
 
-Deno.test("operator delegation returns a minimal handoff and expires its lease", async () => {
+test("operator delegation returns a minimal handoff and expires its lease", async () => {
   const { manager, server, mcp, closedChildren } = await harness();
   try {
     const reply = await mcp.callTool("run_task", {
@@ -494,7 +495,7 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
     }
     if (
       Object.keys(handoff).sort().join(",") !==
-        "action,choices,leaseTimeoutMs,permissionId,sessionId,status"
+      "action,choices,leaseTimeoutMs,permissionId,sessionId,status"
     ) {
       throw new Error("Permission handoff includes unrelated session data");
     }
@@ -556,9 +557,9 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
     );
     const continuationPrompt = continuationSnapshot.prompt
       ? manager.waitForPromptCompletion(
-        continuationSessionId,
-        continuationSnapshot.prompt.id,
-      )
+          continuationSessionId,
+          continuationSnapshot.prompt.id,
+        )
       : undefined;
     if (continuationSnapshot.pendingPermissions.length !== 0) {
       throw new Error("Resolved permission remained pending in session state");
@@ -599,7 +600,7 @@ Deno.test("operator delegation returns a minimal handoff and expires its lease",
   }
 });
 
-Deno.test("permission leases are invalidated by cancellation and close", async () => {
+test("permission leases are invalidated by cancellation and close", async () => {
   const { manager, server, mcp, closedChildren } = await harness();
   try {
     const cancelled = parseToolResult(
@@ -647,9 +648,7 @@ Deno.test("permission leases are invalidated by cancellation and close", async (
     await manager.close(closedId);
     const replacement = await manager.start("fake");
     await new Promise((resolve) => setTimeout(resolve, 250));
-    if (
-      !manager.hasSession(replacement.id) || manager.sessionCount !== 1
-    ) {
+    if (!manager.hasSession(replacement.id) || manager.sessionCount !== 1) {
       throw new Error("An old lease affected a later managed session");
     }
     await manager.close(replacement.id);
@@ -666,7 +665,7 @@ Deno.test("permission leases are invalidated by cancellation and close", async (
   }
 });
 
-Deno.test("prompt completion clears a pending permission continuation lease", async () => {
+test("prompt completion clears a pending permission continuation lease", async () => {
   const { manager, server, mcp } = await harness();
   try {
     const handoff = parseToolResult(
@@ -709,15 +708,14 @@ Deno.test("prompt completion clears a pending permission continuation lease", as
   }
 });
 
-Deno.test("run_task applies allow_all only when requested and defaults to read_only", async () => {
+test("run_task applies allow_all only when requested and defaults to read_only", async () => {
   const { manager, server, mcp, closedChildren } = await harness();
   let permissionRequests = 0;
   const close = manager.close.bind(manager);
   manager.close = async (id) => {
-    permissionRequests +=
-      manager.getEvents(id).events.filter((event) =>
-        event.kind === "permission_request"
-      ).length;
+    permissionRequests += manager
+      .getEvents(id)
+      .events.filter((event) => event.kind === "permission_request").length;
     await close(id);
   };
   try {
@@ -749,18 +747,16 @@ Deno.test("run_task applies allow_all only when requested and defaults to read_o
   }
 });
 
-Deno.test("read_only cannot stop a fake agent's direct process write", async () => {
-  const dir = await Deno.makeTempDir();
-  const { manager, server, mcp, closedChildren } = await harness(
-    "fake",
-  );
+test("read_only cannot stop a fake agent's direct process write", async () => {
+  const dir = await nodeFs.makeTempDir();
+  const { manager, server, mcp, closedChildren } = await harness("fake");
   let eventKinds: string[] = [];
   const close = manager.close.bind(manager);
   manager.close = async (id) => {
     eventKinds = manager.getEvents(id).events.map((event) => event.kind);
     await close(id);
   };
-  const separator = Deno.build.os === "windows" ? "\\" : "/";
+  const separator = process.platform === "win32" ? "\\" : "/";
   const writtenFile = `${dir}${separator}DIRECT_WRITE.txt`;
   try {
     const result = parseToolResult(
@@ -772,15 +768,15 @@ Deno.test("read_only cannot stop a fake agent's direct process write", async () 
       }).response,
     );
     if (
-      result.status !== "completed" || result.response !==
-        "Wrote DIRECT_WRITE.txt"
+      result.status !== "completed" ||
+      result.response !== "Wrote DIRECT_WRITE.txt"
     ) {
       throw new Error(
         `Unexpected direct-write task result: ${JSON.stringify(result)}`,
       );
     }
     if (
-      await Deno.readTextFile(writtenFile) !== "written without ACP permission"
+      (await nodeFs.readText(writtenFile)) !== "written without ACP permission"
     ) {
       throw new Error("Fake agent did not write through its OS process access");
     }
@@ -797,11 +793,11 @@ Deno.test("read_only cannot stop a fake agent's direct process write", async () 
     await mcp.close();
     await manager.closeAll();
     await server.close();
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("run_task reports startup failures without exposing their detail", async () => {
+test("run_task reports startup failures without exposing their detail", async () => {
   const { manager, server, mcp } = await harness();
   manager.start = () => {
     throw new Error("PRIVATE_START_FAILURE_SENTINEL");
@@ -814,7 +810,8 @@ Deno.test("run_task reports startup failures without exposing their detail", asy
     const result = parseToolResult(reply);
     if (
       result.status !== "failed" ||
-      JSON.stringify(result.error) !== JSON.stringify({
+      JSON.stringify(result.error) !==
+        JSON.stringify({
           kind: "session_start_failed",
           stage: "session_start",
         })
@@ -836,7 +833,7 @@ Deno.test("run_task reports startup failures without exposing their detail", asy
   }
 });
 
-Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and empty output clean up", async () => {
+test("run_task timeout, MCP cancellation, prompt failure, process exit, and empty output clean up", async () => {
   const { manager, server, mcp, closedChildren, closedStderr } =
     await harness();
   try {
@@ -868,7 +865,8 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
     let runningSession = manager.listSessionSnapshots()[0];
     for (
       let i = 0;
-      i < 100 && (!runningSession?.prompt ||
+      i < 100 &&
+      (!runningSession?.prompt ||
         !manager.getPromptHandle(runningSession.id, runningSession.prompt.id)
           .activityVersion);
       i++
@@ -877,10 +875,9 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
       runningSession = manager.listSessionSnapshots()[0];
     }
     if (
-      !runningSession?.prompt || !manager.getPromptHandle(
-        runningSession.id,
-        runningSession.prompt.id,
-      ).activityVersion
+      !runningSession?.prompt ||
+      !manager.getPromptHandle(runningSession.id, runningSession.prompt.id)
+        .activityVersion
     ) {
       throw new Error("Active cancellation fixture did not emit updates");
     }
@@ -891,47 +888,43 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
     if (manager.sessionCount) {
       throw new Error("MCP request cancellation leaked a session");
     }
-    for (
-      const prompt of [
-        "late response",
-        "prompt failure",
-        "process crash",
-        "empty response",
-      ]
-    ) {
+    for (const prompt of [
+      "late response",
+      "prompt failure",
+      "process crash",
+      "empty response",
+    ]) {
       const reply = await mcp.callTool("run_task", {
         agentId: "fake",
         task: prompt,
         ...(prompt === "late response" ? { idleTimeoutMs: 40 } : {}),
-      })
-        .response;
+      }).response;
       const result = parseToolResult(reply);
       const failure = result.error as Record<string, unknown> | undefined;
-      const expectedKind = prompt === "empty response"
-        ? "invalid_response"
-        : prompt === "late response"
-        ? "timeout"
-        : "prompt_failed";
-      const expectedStage = prompt === "empty response"
-        ? "prompt_complete"
-        : "prompt";
-      const expectedStatus = prompt === "late response"
-        ? "timed_out"
-        : "failed";
+      const expectedKind =
+        prompt === "empty response"
+          ? "invalid_response"
+          : prompt === "late response"
+            ? "timeout"
+            : "prompt_failed";
+      const expectedStage =
+        prompt === "empty response" ? "prompt_complete" : "prompt";
+      const expectedStatus =
+        prompt === "late response" ? "timed_out" : "failed";
       if (
-        result.status !== expectedStatus || !failure ||
-        failure.kind !== expectedKind || failure.stage !== expectedStage ||
+        result.status !== expectedStatus ||
+        !failure ||
+        failure.kind !== expectedKind ||
+        failure.stage !== expectedStage ||
         Object.keys(result).sort().join(",") !== "error,status"
       ) {
         throw new Error(
-          `Unexpected structured failure for '${prompt}': ${
-            JSON.stringify(result)
-          }`,
+          `Unexpected structured failure for '${prompt}': ${JSON.stringify(
+            result,
+          )}`,
         );
       }
-      if (
-        prompt === "prompt failure" && typeof failure.acpCode !== "number"
-      ) {
+      if (prompt === "prompt failure" && typeof failure.acpCode !== "number") {
         throw new Error("ACP JSON-RPC error code was not retained");
       }
       if (
@@ -968,7 +961,7 @@ Deno.test("run_task timeout, MCP cancellation, prompt failure, process exit, and
   }
 });
 
-Deno.test("run_task idle timeout resets on known and unknown ACP updates", async () => {
+test("run_task idle timeout resets on known and unknown ACP updates", async () => {
   const { manager, server, mcp } = await harness();
   try {
     for (const task of ["active heartbeat", "unknown heartbeat"]) {
@@ -1008,7 +1001,7 @@ Deno.test("run_task idle timeout resets on known and unknown ACP updates", async
   }
 });
 
-Deno.test("stderr output alone does not reset the run_task idle timeout", async () => {
+test("stderr output alone does not reset the run_task idle timeout", async () => {
   const { manager, server, mcp, closedChildren, closedStderr } =
     await harness();
   try {
@@ -1040,7 +1033,7 @@ Deno.test("stderr output alone does not reset the run_task idle timeout", async 
   }
 });
 
-Deno.test("activity in another session does not reset a silent task", async () => {
+test("activity in another session does not reset a silent task", async () => {
   const { manager, server, mcp } = await harness();
   try {
     const silentCall = mcp.callTool("run_task", {

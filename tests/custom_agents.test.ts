@@ -1,3 +1,6 @@
+import { test } from "node:test";
+import process from "node:process";
+import * as nodeFs from "#fs";
 import { join } from "node:path";
 import { loadAgents } from "../src/agents/config.ts";
 import {
@@ -41,29 +44,31 @@ function modelPolicy(
 }
 
 async function writeConfig(directory: string, value: unknown): Promise<string> {
-  await Deno.mkdir(directory, { recursive: true });
+  await nodeFs.mkdir(directory, { recursive: true });
   const path = join(directory, ".acp-mcp.json");
-  await Deno.writeTextFile(path, JSON.stringify(value));
+  await nodeFs.writeText(path, JSON.stringify(value));
   return path;
 }
 
-Deno.test("trusted custom ACP agents use the generic MCP, policy, and session path", async () => {
-  const root = await Deno.makeTempDir({
+test("trusted custom ACP agents use the generic MCP, policy, and session path", async () => {
+  const root = await nodeFs.makeTempDir({
     prefix: "acp-mcp custom integration-",
   });
   const home = join(root, "home");
   const project = join(root, "repo");
   const reportPath = join(root, "child report.json");
   const canary = `CUSTOM_AGENT_ENV_${crypto.randomUUID()}`;
-  const fixture = join(Deno.cwd(), "tests", "fixtures", "custom_acp_agent.ts");
+  const fixture = join(
+    process.cwd(),
+    "tests",
+    "fixtures",
+    "custom_acp_agent.ts",
+  );
   const homeConfig = await writeConfig(home, {
     agents: {
       reviewer: {
-        command: Deno.execPath(),
+        command: process.execPath,
         args: [
-          "run",
-          "--allow-env=ACPMCP_CUSTOM_TEST_SECRET",
-          "--allow-write",
           fixture,
           `--report=${reportPath}`,
           "structured argument with spaces",
@@ -76,12 +81,7 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
   const projectConfig = {
     agents: {
       reviewer: {
-        models: modelPolicy(
-          "large",
-          "medium",
-          ["live-*"],
-          ["live-small"],
-        ),
+        models: modelPolicy("large", "medium", ["live-*"], ["live-small"]),
       },
     },
   };
@@ -97,7 +97,7 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
   });
   const mcp = await connectMcp(server);
   try {
-    const toolListing = await mcp.listTools().response as {
+    const toolListing = (await mcp.listTools().response) as {
       result?: { tools?: unknown[] };
     };
     if (toolListing.result?.tools?.length !== 16) {
@@ -109,7 +109,8 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
     ) as unknown as Array<Record<string, unknown>>;
     const reviewer = listed.find((entry) => entry.id === "reviewer");
     if (
-      !reviewer || reviewer.commandFound !== true ||
+      !reviewer ||
+      reviewer.commandFound !== true ||
       reviewer.acpProtocol !== "v1" ||
       JSON.stringify(reviewer).includes(canary)
     ) {
@@ -124,8 +125,10 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
     );
     const models = catalog.models as Array<Record<string, unknown>>;
     if (
-      catalog.status !== "completed" || models.length !== 1 ||
-      models[0].id !== "live-large" || models[0].isDefault !== true
+      catalog.status !== "completed" ||
+      models.length !== 1 ||
+      models[0].id !== "live-large" ||
+      models[0].isDefault !== true
     ) {
       throw new Error(
         `Custom live catalog/policy failed: ${JSON.stringify(catalog)}`,
@@ -144,9 +147,10 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
     if (
       task.status !== "completed" ||
       (task.response as string | undefined)?.trim() !== "CUSTOM_OK"
-    ) throw new Error(`Custom run_task failed: ${JSON.stringify(task)}`);
+    )
+      throw new Error(`Custom run_task failed: ${JSON.stringify(task)}`);
 
-    const runReport = JSON.parse(await Deno.readTextFile(reportPath)) as {
+    const runReport = JSON.parse(await nodeFs.readText(reportPath)) as {
       args: string[];
       env: string;
       currentConfig: Array<{ id: string; currentValue: string }>;
@@ -155,17 +159,16 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
       runReport.args.join() !== "structured argument with spaces" ||
       runReport.env !== canary ||
       runReport.currentConfig.find((item) => item.id === "model")
-          ?.currentValue !== "live-large" ||
+        ?.currentValue !== "live-large" ||
       runReport.currentConfig.find((item) => item.id === "effort")
-          ?.currentValue !== "low"
+        ?.currentValue !== "low"
     ) {
       throw new Error(
         "Structured args, env, model-size, or effort mapping failed",
       );
     }
-    if (
-      JSON.stringify({ listed, catalog, task }).includes(canary)
-    ) throw new Error("Custom agent environment value escaped through MCP");
+    if (JSON.stringify({ listed, catalog, task }).includes(canary))
+      throw new Error("Custom agent environment value escaped through MCP");
 
     const first = parseToolResult(
       await mcp.callTool("start_session", {
@@ -185,9 +188,10 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
       firstOptions.find((item) => item.id === "model")?.currentValue !==
         "live-large" ||
       firstOptions.find((item) => item.id === "effort")?.currentValue !== "low"
-    ) throw new Error("Initial session did not resolve its project policy");
+    )
+      throw new Error("Initial session did not resolve its project policy");
 
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       join(project, ".acp-mcp.json"),
       JSON.stringify({
         agents: {
@@ -206,16 +210,16 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
         "live-large" ||
       unchangedOptions.find((item) => item.id === "effort")?.currentValue !==
         "low"
-    ) throw new Error("Project edit changed an existing custom-agent session");
+    )
+      throw new Error("Project edit changed an existing custom-agent session");
     const prompt = parseToolResult(
       await mcp.callTool("prompt", {
         sessionId: firstId,
         text: "Reply exactly: CUSTOM_SESSION_OK",
       }).response,
     );
-    if (
-      prompt.state !== "completed" || prompt.text !== "CUSTOM_SESSION_OK"
-    ) throw new Error("Custom ACP session prompt did not complete");
+    if (prompt.state !== "completed" || prompt.text !== "CUSTOM_SESSION_OK")
+      throw new Error("Custom ACP session prompt did not complete");
 
     const second = parseToolResult(
       await mcp.callTool("start_session", {
@@ -233,7 +237,8 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
         "live-small" ||
       secondOptions.find((item) => item.id === "effort")?.currentValue !==
         "high"
-    ) throw new Error("New session did not observe updated project policy");
+    )
+      throw new Error("New session did not observe updated project policy");
     for (const sessionId of [firstId, secondId]) {
       await mcp.callTool("close_session", { sessionId }).response;
     }
@@ -246,7 +251,7 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
 
     const doctorDependencies: DoctorDependencies = {
       resolveExecutable: (command) =>
-        Promise.resolve(command === Deno.execPath() ? command : undefined),
+        Promise.resolve(command === process.execPath ? command : undefined),
       loadAgents,
       inspectStaleWorkspaces: () =>
         Promise.resolve({
@@ -265,15 +270,17 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
         resolveConfiguration({ ...options, homeDirectory: home }),
     };
     const doctor = await diagnose({ cwd: project }, doctorDependencies);
-    const reviewerCheck = doctor.checks.find((check) =>
-      check.id === "agent.reviewer"
+    const reviewerCheck = doctor.checks.find(
+      (check) => check.id === "agent.reviewer",
     );
     if (
-      !reviewerCheck || reviewerCheck.status !== "ok" ||
+      !reviewerCheck ||
+      reviewerCheck.status !== "ok" ||
       JSON.stringify(doctor).includes(canary)
-    ) throw new Error("Doctor did not report the custom agent safely");
+    )
+      throw new Error("Doctor did not report the custom agent safely");
 
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       homeConfig,
       JSON.stringify({
         agents: {
@@ -281,21 +288,25 @@ Deno.test("trusted custom ACP agents use the generic MCP, policy, and session pa
         },
       }),
     );
-    const missingDoctor = await diagnose({ configPath: homeConfig }, {
-      ...doctorDependencies,
-      resolveConfiguration: undefined,
-    });
-    const missingCheck = missingDoctor.checks.find((check) =>
-      check.id === "agent.missing_agent"
+    const missingDoctor = await diagnose(
+      { configPath: homeConfig },
+      {
+        ...doctorDependencies,
+        resolveConfiguration: undefined,
+      },
+    );
+    const missingCheck = missingDoctor.checks.find(
+      (check) => check.id === "agent.missing_agent",
     );
     if (
       missingCheck?.status !== "error" ||
       !missingCheck.summary.includes("command not found")
-    ) throw new Error("Doctor did not report an unavailable custom command");
+    )
+      throw new Error("Doctor did not report an unavailable custom command");
   } finally {
     await mcp.close();
     await manager.closeAll();
     await server.close();
-    await Deno.remove(root, { recursive: true });
+    await nodeFs.removePath(root, { recursive: true });
   }
 });

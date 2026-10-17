@@ -12,9 +12,10 @@ export function classifyOpenCodeFailure(
   context: FailureClassificationContext,
 ): FailureClassification | undefined {
   if (context.stage !== "prompt") return undefined;
-  const details = context.errorData && typeof context.errorData === "object"
-    ? (context.errorData as Record<string, unknown>).details
-    : undefined;
+  const details =
+    context.errorData && typeof context.errorData === "object"
+      ? (context.errorData as Record<string, unknown>).details
+      : undefined;
   const diagnostic = [context.errorMessage, details]
     .filter((value): value is string => typeof value === "string")
     .join("\n");

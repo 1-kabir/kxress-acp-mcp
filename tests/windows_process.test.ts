@@ -1,3 +1,6 @@
+import { test } from "node:test";
+import process from "node:process";
+import * as nodeFs from "#fs";
 import {
   findExecutablePath,
   quoteCmdStaticArgument,
@@ -5,16 +8,20 @@ import {
   stopAgent,
 } from "../src/runtime/process.ts";
 
-Deno.test("stopAgent forcefully bounds cleanup when a child ignores stdin EOF", async () => {
+test("stopAgent forcefully bounds cleanup when a child ignores stdin EOF", async () => {
   const fixture = new URL("./fixtures/ignore_shutdown.ts", import.meta.url)
     .pathname;
-  const path = Deno.build.os === "windows"
-    ? decodeURIComponent(fixture.replace(/^\//, ""))
-    : fixture;
-  const child = await startAgent({
-    command: Deno.execPath(),
-    args: ["run", path],
-  }, Deno.cwd());
+  const path =
+    process.platform === "win32"
+      ? decodeURIComponent(fixture.replace(/^\//, ""))
+      : fixture;
+  const child = await startAgent(
+    {
+      command: process.execPath,
+      args: [path],
+    },
+    process.cwd(),
+  );
   const started = performance.now();
   try {
     await stopAgent(child.child, 50);
@@ -27,23 +34,26 @@ Deno.test("stopAgent forcefully bounds cleanup when a child ignores stdin EOF", 
   }
 });
 
-Deno.test({
+test({
   name: "configured batch wrapper preserves quoted static arguments",
-  ignore: Deno.build.os !== "windows",
+  skip: process.platform !== "win32",
   fn: async () => {
-    const root = await Deno.makeTempDir();
+    const root = await nodeFs.makeTempDir();
     const dir = `${root}\\ACP Test With Spaces`;
-    await Deno.mkdir(dir);
+    await nodeFs.mkdir(dir);
     const script = `${dir}\\fixture.BAT`;
     try {
-      await Deno.writeTextFile(
+      await nodeFs.writeText(
         script,
         '@echo off\r\nif "%~1"=="space value" if "%~2"=="amp&ersand|paren()" exit /b 0\r\nexit /b 91\r\n',
       );
-      const process = await startAgent({
-        command: script,
-        args: ["space value", "amp&ersand|paren()"],
-      }, dir);
+      const process = await startAgent(
+        {
+          command: script,
+          args: ["space value", "amp&ersand|paren()"],
+        },
+        dir,
+      );
       const status = await process.child.status;
       await process.stderrDone;
       if (!status.success) {
@@ -52,21 +62,21 @@ Deno.test({
         );
       }
     } finally {
-      await Deno.remove(root, { recursive: true });
+      await nodeFs.removePath(root, { recursive: true });
     }
   },
 });
 
-Deno.test({
+test({
   name: "Windows executable resolver handles absolute paths with spaces",
-  ignore: Deno.build.os !== "windows",
+  skip: process.platform !== "win32",
   fn: async () => {
-    const root = await Deno.makeTempDir();
+    const root = await nodeFs.makeTempDir();
     const dir = `${root}\\ACP Test With Spaces`;
-    await Deno.mkdir(dir);
+    await nodeFs.mkdir(dir);
     const executable = `${dir}\\fixture.ExE`;
     try {
-      await Deno.writeTextFile(executable, "fixture");
+      await nodeFs.writeText(executable, "fixture");
       const resolved = await findExecutablePath(executable);
       if (resolved?.toLowerCase() !== executable.toLowerCase()) {
         throw new Error(
@@ -74,12 +84,12 @@ Deno.test({
         );
       }
     } finally {
-      await Deno.remove(root, { recursive: true });
+      await nodeFs.removePath(root, { recursive: true });
     }
   },
 });
 
-Deno.test("quotes cmd arguments and keeps shell metacharacters inside the quotes", () => {
+test("quotes cmd arguments and keeps shell metacharacters inside the quotes", () => {
   if (quoteCmdStaticArgument("a&b|c") !== '"a&b|c"') {
     throw new Error("Unexpected cmd argument quoting");
   }

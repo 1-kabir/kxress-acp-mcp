@@ -13,12 +13,14 @@ export function interceptSessionUpdates(
     new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
         if (
-          "method" in message && message.method === "session/update" &&
+          "method" in message &&
+          message.method === "session/update" &&
           !("id" in message)
         ) {
           const params = message.params;
           if (
-            params && typeof params === "object" &&
+            params &&
+            typeof params === "object" &&
             typeof (params as { sessionId?: unknown }).sessionId === "string"
           ) {
             receive(params);
@@ -45,17 +47,19 @@ export function interceptV2SessionUpdates(
       transform(message, controller) {
         const batch = Array.isArray(message);
         const entries: readonly AnyV2Message[] = batch
-          ? message as readonly AnyV2Message[]
+          ? (message as readonly AnyV2Message[])
           : [message as AnyV2Message];
         const remaining: AnyV2Message[] = [];
         for (const entry of entries) {
           if (
-            "method" in entry && entry.method === "session/update" &&
+            "method" in entry &&
+            entry.method === "session/update" &&
             !("id" in entry)
           ) {
             const params = entry.params;
             if (
-              params && typeof params === "object" &&
+              params &&
+              typeof params === "object" &&
               typeof (params as { sessionId?: unknown }).sessionId === "string"
             ) {
               receive(params);

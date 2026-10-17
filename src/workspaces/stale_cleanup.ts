@@ -1,3 +1,6 @@
+import process from "node:process";
+import { ProcessCommand } from "#proc";
+import * as nodeFs from "#fs";
 import {
   cleanupWorkspaceSnapshot,
   getWorkspaceRoot,
@@ -40,12 +43,12 @@ export interface StaleWorkspaceCleanupOptions {
   isProcessAlive?: (pid: number) => boolean | Promise<boolean>;
   /** Skip creator PID checks for read-only summaries that must not inspect processes. */
   checkCreatorProcess?: boolean;
-  remove?: typeof Deno.remove;
+  remove?: typeof nodeFs.removePath;
 }
 
 function join(parent: string, child: string) {
   return `${parent.replace(/[\\/]+$/, "")}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }${child}`;
 }
 
@@ -54,21 +57,21 @@ function isWorkspaceName(name: string) {
 }
 
 async function processIsAlive(pid: number): Promise<boolean> {
-  if (pid === Deno.pid) return true;
+  if (pid === process.pid) return true;
   try {
-    if (Deno.build.os === "windows") {
-      const result = await new Deno.Command("tasklist.exe", {
+    if (process.platform === "win32") {
+      const result = await new ProcessCommand("tasklist.exe", {
         args: ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
         stdout: "piped",
         stderr: "null",
       }).output();
       if (!result.success) return true;
       const output = new TextDecoder().decode(result.stdout);
-      return output.split(/\r?\n/).some((line) =>
-        new RegExp(`^"[^"]+","${pid}",`).test(line)
-      );
+      return output
+        .split(/\r?\n/)
+        .some((line) => new RegExp(`^"[^"]+","${pid}",`).test(line));
     }
-    const result = await new Deno.Command("ps", {
+    const result = await new ProcessCommand("ps", {
       args: ["-p", String(pid), "-o", "pid="],
       stdout: "piped",
       stderr: "piped",
@@ -118,23 +121,25 @@ export async function cleanupStaleWorkspaceSnapshots(
   const result = ageResult(options);
   const root = await getWorkspaceRoot();
   result.root = root;
-  let rootInfo: Deno.FileInfo;
+  let rootInfo: nodeFs.FileInfo;
   try {
-    rootInfo = await Deno.lstat(root);
+    rootInfo = await nodeFs.lstat(root);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return result;
+    if (nodeFs.isErrorCode(error, "ENOENT")) return result;
     throw error;
   }
-  if (!rootInfo.isDirectory || rootInfo.isSymlink) {
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
     throw new Error(
       "Refusing to inspect a linked or non-directory workspace root",
     );
   }
-  const canonicalRoot = await Deno.realPath(root);
+  const canonicalRoot = await nodeFs.realpath(root);
   if (
     canonicalRoot !== root &&
-    !(Deno.build.os === "windows" &&
-      canonicalRoot.toLowerCase() === root.toLowerCase())
+    !(
+      process.platform === "win32" &&
+      canonicalRoot.toLowerCase() === root.toLowerCase()
+    )
   ) {
     throw new Error(
       "Refusing to inspect a workspace root that resolves elsewhere",
@@ -142,12 +147,13 @@ export async function cleanupStaleWorkspaceSnapshots(
   }
 
   const now = options.now ?? Date.now();
-  for await (const entry of Deno.readDir(canonicalRoot)) {
+  for await (const entry of nodeFs.readDir(canonicalRoot)) {
     const path = join(canonicalRoot, entry.name);
     if (
       entry.name.endsWith(".json") &&
       isWorkspaceName(entry.name.slice(0, -5))
-    ) continue;
+    )
+      continue;
 
     if (!isWorkspaceName(entry.name)) {
       result.skipped++;
@@ -159,9 +165,9 @@ export async function cleanupStaleWorkspaceSnapshots(
       continue;
     }
 
-    let info: Deno.FileInfo;
+    let info: nodeFs.FileInfo;
     try {
-      info = await Deno.lstat(path);
+      info = await nodeFs.lstat(path);
     } catch (error) {
       result.failed++;
       result.entries.push({
@@ -171,7 +177,7 @@ export async function cleanupStaleWorkspaceSnapshots(
       });
       continue;
     }
-    if (!info.isDirectory || info.isSymlink) {
+    if (!info.isDirectory() || info.isSymbolicLink()) {
       result.skipped++;
       result.entries.push({
         path,
@@ -194,9 +200,9 @@ export async function cleanupStaleWorkspaceSnapshots(
       continue;
     }
     const manifestName = `${manifest.cwd}.json`;
-    let manifestInfo: Deno.FileInfo;
+    let manifestInfo: nodeFs.FileInfo;
     try {
-      manifestInfo = await Deno.lstat(manifestName);
+      manifestInfo = await nodeFs.lstat(manifestName);
     } catch (error) {
       result.failed++;
       result.entries.push({
@@ -206,8 +212,8 @@ export async function cleanupStaleWorkspaceSnapshots(
       });
       continue;
     }
-    const createdAt = manifest.createdAt ?? manifestInfo.mtime?.getTime() ??
-      null;
+    const createdAt =
+      manifest.createdAt ?? manifestInfo.mtime?.getTime() ?? null;
     if (createdAt === null || createdAt > now) {
       result.skipped++;
       result.entries.push({
@@ -218,9 +224,10 @@ export async function cleanupStaleWorkspaceSnapshots(
       continue;
     }
     const ageMs = now - createdAt;
-    const kind = manifest.ownerPid === null || manifest.kind === null
-      ? "legacy" as const
-      : manifest.kind;
+    const kind =
+      manifest.ownerPid === null || manifest.kind === null
+        ? ("legacy" as const)
+        : manifest.kind;
     if (ageMs < result.olderThanMs) {
       result.skipped++;
       result.entries.push({
@@ -245,7 +252,7 @@ export async function cleanupStaleWorkspaceSnapshots(
     }
     if (
       manifest.ownerPid !== null &&
-      await (options.isProcessAlive ?? processIsAlive)(manifest.ownerPid)
+      (await (options.isProcessAlive ?? processIsAlive)(manifest.ownerPid))
     ) {
       result.skipped++;
       result.entries.push({

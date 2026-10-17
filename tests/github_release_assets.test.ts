@@ -1,3 +1,6 @@
+import { test } from "node:test";
+import process from "node:process";
+import * as nodeFs from "#fs";
 import {
   assertTagMatchesVersion,
   releaseAssetNames,
@@ -14,16 +17,13 @@ import {
 } from "../scripts/release_package.ts";
 import { VERSION } from "../src/version.ts";
 
-async function fixtureBundle(
-  root: string,
-  target: ReleaseTarget,
-) {
+async function fixtureBundle(root: string, target: ReleaseTarget) {
   const bundle = `${root}/bundle-${target}`;
-  await Deno.mkdir(bundle);
+  await nodeFs.mkdir(bundle);
   const names = releaseNames(VERSION, target);
   const binary = `${root}/fixture-${target}`;
   const bytes = new TextEncoder().encode(`native ${target} fixture`);
-  await Deno.writeFile(binary, bytes);
+  await nodeFs.writeBytes(binary, bytes);
   const manifest = await createReleaseArchive(`${bundle}/${names.archive}`, {
     binaryPath: binary,
     version: VERSION,
@@ -31,18 +31,18 @@ async function fixtureBundle(
     commit: "a".repeat(40),
     executableSha256: sha256Hex(bytes),
   });
-  await Deno.writeTextFile(
+  await nodeFs.writeText(
     `${bundle}/${names.checksum}`,
     `${manifest.archiveSha256}  ${names.archive}\n`,
   );
-  await Deno.writeTextFile(
+  await nodeFs.writeText(
     `${bundle}/${names.manifest}`,
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
   return { bundle, names, manifest };
 }
 
-Deno.test("GitHub release tag must exactly match source version", () => {
+test("GitHub release tag must exactly match source version", () => {
   assertTagMatchesVersion(`v${VERSION}`, VERSION);
   for (const tag of ["0.2.1", "v0.2.0", "release-v0.2.1", "vNext"]) {
     let rejected = false;
@@ -55,7 +55,7 @@ Deno.test("GitHub release tag must exactly match source version", () => {
   }
 });
 
-Deno.test("macOS ARM64 has a closed canonical manifest and archive name", () => {
+test("macOS ARM64 has a closed canonical manifest and archive name", () => {
   const names = releaseNames("0.2.4", "macos-arm64");
   const manifest = validatePackageManifest({
     product: "acp-mcp",
@@ -69,7 +69,8 @@ Deno.test("macOS ARM64 has a closed canonical manifest and archive name", () => 
     names.executable !== "acp-mcp" ||
     names.archive !== "acp-mcp-0.2.4-macos-arm64.tar.gz" ||
     manifest.target !== "macos-arm64"
-  ) throw new Error("macOS ARM64 release metadata was incorrect");
+  )
+    throw new Error("macOS ARM64 release metadata was incorrect");
   let unknownTargetRejected = false;
   try {
     validatePackageManifest({
@@ -84,8 +85,8 @@ Deno.test("macOS ARM64 has a closed canonical manifest and archive name", () => 
   }
 });
 
-Deno.test("GitHub assets are self-contained licensed archives for all targets", async () => {
-  const root = await Deno.makeTempDir({ prefix: "acp-mcp-gh-release-" });
+test("GitHub assets are self-contained licensed archives for all targets", async () => {
+  const root = await nodeFs.makeTempDir({ prefix: "acp-mcp-gh-release-" });
   try {
     const targets: ReleaseTarget[] = [
       "windows-x86_64",
@@ -95,10 +96,10 @@ Deno.test("GitHub assets are self-contained licensed archives for all targets", 
     for (const target of targets) {
       const fixture = await fixtureBundle(root, target);
       const inputManifest = JSON.parse(
-        await Deno.readTextFile(`${fixture.bundle}/${fixture.names.manifest}`),
+        await nodeFs.readText(`${fixture.bundle}/${fixture.names.manifest}`),
       );
       inputManifest.privatePath = "must-not-be-published";
-      await Deno.writeTextFile(
+      await nodeFs.writeText(
         `${fixture.bundle}/${fixture.names.manifest}`,
         JSON.stringify(inputManifest),
       );
@@ -107,73 +108,77 @@ Deno.test("GitHub assets are self-contained licensed archives for all targets", 
       const names = releaseAssetNames(VERSION, target);
       if (
         staged.sort().join("\n") !==
-          [names.archive, names.checksum, names.manifest].sort().join("\n")
-      ) throw new Error(`Unexpected GitHub asset set for ${target}`);
+        [names.archive, names.checksum, names.manifest].sort().join("\n")
+      )
+        throw new Error(`Unexpected GitHub asset set for ${target}`);
       if (
-        await sha256File(`${output}/${names.archive}`) !==
+        (await sha256File(`${output}/${names.archive}`)) !==
           fixture.manifest.archiveSha256 ||
-        await Deno.readTextFile(`${output}/${names.checksum}`) !==
+        (await nodeFs.readText(`${output}/${names.checksum}`)) !==
           `${fixture.manifest.archiveSha256}  ${names.archive}\n`
-      ) throw new Error(`Published archive checksum mismatch for ${target}`);
+      )
+        throw new Error(`Published archive checksum mismatch for ${target}`);
       const publishedManifest = JSON.parse(
-        await Deno.readTextFile(`${output}/${names.manifest}`),
+        await nodeFs.readText(`${output}/${names.manifest}`),
       );
       if (publishedManifest.privatePath !== undefined) {
         throw new Error("Published manifest retained an untrusted extra field");
       }
 
       const extracted = `${root}/verify-${target}`;
-      await Deno.mkdir(extracted);
+      await nodeFs.mkdir(extracted);
       await extractReleaseArchive(
         `${output}/${names.archive}`,
         target,
         extracted,
       );
-      for (
-        const path of [
-          "LICENSE",
-          "THIRD_PARTY_NOTICES.txt",
-          "licenses/Apache-2.0.txt",
-          "licenses/MCP-SDK-MIT.txt",
-          "licenses/Zod-MIT.txt",
-          "manifest.json",
-        ]
-      ) {
+      for (const path of [
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.txt",
+        "licenses/Apache-2.0.txt",
+        "licenses/MCP-SDK-MIT.txt",
+        "licenses/Zod-MIT.txt",
+        "manifest.json",
+      ]) {
         try {
-          await Deno.stat(`${extracted}/${path}`);
+          await nodeFs.stat(`${extracted}/${path}`);
         } catch {
           throw new Error(`${target} archive omitted ${path}`);
         }
       }
       if (
-        !(await Deno.readTextFile(`${extracted}/LICENSE`)).includes(
+        !(await nodeFs.readText(`${extracted}/LICENSE`)).includes(
           "DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE",
         ) ||
-        !(await Deno.readTextFile(`${extracted}/licenses/Apache-2.0.txt`))
-          .includes("Apache License") ||
-        !(await Deno.readTextFile(`${extracted}/licenses/MCP-SDK-MIT.txt`))
-          .includes("Copyright (c) 2024-2025 Model Context Protocol") ||
-        !(await Deno.readTextFile(`${extracted}/licenses/Zod-MIT.txt`))
-          .includes("Copyright (c) 2025 Colin McDonnell")
-      ) throw new Error(`${target} package license notices were incomplete`);
-      if (target !== "windows-x86_64" && Deno.build.os !== "windows") {
-        const mode = (await Deno.stat(`${extracted}/acp-mcp`)).mode;
+        !(
+          await nodeFs.readText(`${extracted}/licenses/Apache-2.0.txt`)
+        ).includes("Apache License") ||
+        !(
+          await nodeFs.readText(`${extracted}/licenses/MCP-SDK-MIT.txt`)
+        ).includes("Copyright (c) 2024-2025 Model Context Protocol") ||
+        !(await nodeFs.readText(`${extracted}/licenses/Zod-MIT.txt`)).includes(
+          "Copyright (c) 2025 Colin McDonnell",
+        )
+      )
+        throw new Error(`${target} package license notices were incomplete`);
+      if (target !== "windows-x86_64" && process.platform !== "win32") {
+        const mode = (await nodeFs.stat(`${extracted}/acp-mcp`)).mode;
         if (mode === null || (mode & 0o111) === 0) {
           throw new Error(`${target} archive did not preserve executable mode`);
         }
       }
     }
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await nodeFs.removePath(root, { recursive: true });
   }
 });
 
-Deno.test("GitHub release staging rejects archive and manifest mismatches", async () => {
-  const root = await Deno.makeTempDir({ prefix: "acp-mcp-gh-release-bad-" });
+test("GitHub release staging rejects archive and manifest mismatches", async () => {
+  const root = await nodeFs.makeTempDir({ prefix: "acp-mcp-gh-release-bad-" });
   try {
     const fixture = await fixtureBundle(root, "windows-x86_64");
     const manifest = { ...fixture.manifest, archiveSha256: "0".repeat(64) };
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       `${fixture.bundle}/${fixture.names.manifest}`,
       JSON.stringify(manifest),
     );
@@ -185,6 +190,6 @@ Deno.test("GitHub release staging rejects archive and manifest mismatches", asyn
     }
     if (!rejected) throw new Error("Mismatched archive manifest was accepted");
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await nodeFs.removePath(root, { recursive: true });
   }
 });

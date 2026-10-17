@@ -1,5 +1,5 @@
 [tools]
-deno = "2.9.6"
+node = "24"
 
 [settings]
-enable_tools = ["deno"]
+enable_tools = ["node"]

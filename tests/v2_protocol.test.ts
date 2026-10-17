@@ -1,3 +1,6 @@
+import { test } from "node:test";
+import process from "node:process";
+import * as nodeFs from "#fs";
 import { loadAgents } from "../src/agents/config.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
@@ -6,7 +9,7 @@ import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 function fixturePath() {
   const path = new URL("./fixtures/fake_acp_v2_agent.ts", import.meta.url)
     .pathname;
-  return Deno.build.os === "windows"
+  return process.platform === "win32"
     ? decodeURIComponent(path.replace(/^\//, ""))
     : path;
 }
@@ -14,7 +17,7 @@ function fixturePath() {
 function v1FixturePath() {
   const path = new URL("./fixtures/fake_acp_agent.ts", import.meta.url)
     .pathname;
-  return Deno.build.os === "windows"
+  return process.platform === "win32"
     ? decodeURIComponent(path.replace(/^\//, ""))
     : path;
 }
@@ -26,41 +29,37 @@ function managerFor(
 ) {
   return new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        "--allow-write",
-        fixturePath(),
-        ...extra,
-      ],
+      command: process.execPath,
+      args: [fixturePath(), ...extra],
       acpProtocol: protocol,
       env,
     },
   });
 }
 
-Deno.test("ACP v2 normalizes config, mode, streaming, snapshots, and unknown updates", async () => {
-  const cwd = await Deno.makeTempDir({ prefix: "acp-mcp-v2-" });
+test("ACP v2 normalizes config, mode, streaming, snapshots, and unknown updates", async () => {
+  const cwd = await nodeFs.makeTempDir({ prefix: "acp-mcp-v2-" });
   const manager = managerFor();
   try {
-    const session = await manager.start("fake", cwd, {
-      model: "fake-v2-model",
-      "boolean-option": "true",
-    }, "act");
+    const session = await manager.start(
+      "fake",
+      cwd,
+      {
+        model: "fake-v2-model",
+        "boolean-option": "true",
+      },
+      "act",
+    );
     if (
       session.acpProtocol !== "v2" ||
       !session.configOptions.some((option) => option.id === "model") ||
-      (session.modes?.currentModeId !== "act")
+      session.modes?.currentModeId !== "act"
     ) {
       throw new Error(
-        `ACP v2 config/mode data was not normalized: ${
-          JSON.stringify({
-            options: session.configOptions,
-            modes: session.modes,
-          })
-        }`,
+        `ACP v2 config/mode data was not normalized: ${JSON.stringify({
+          options: session.configOptions,
+          modes: session.modes,
+        })}`,
       );
     }
     const prompt = await manager.prompt(session.id, "snapshot");
@@ -71,7 +70,8 @@ Deno.test("ACP v2 normalizes config, mode, streaming, snapshots, and unknown upd
     if (
       !events.some((event) => event.kind === "_future_v2_update") ||
       !events.some((event) => event.kind === "state_update")
-    ) throw new Error("V2 raw/unknown updates were not journaled");
+    )
+      throw new Error("V2 raw/unknown updates were not journaled");
     await manager.setConfigOption(session.id, "model", "fake-v2-model");
     const mode = await manager.setMode(session.id, "plan");
     if (mode?.currentModeId !== "plan") {
@@ -79,20 +79,20 @@ Deno.test("ACP v2 normalizes config, mode, streaming, snapshots, and unknown upd
     }
   } finally {
     await manager.closeAll();
-    await Deno.remove(cwd, { recursive: true });
+    await nodeFs.removePath(cwd, { recursive: true });
   }
 });
 
-Deno.test("ACP v2 prompt acknowledgement is not turn completion", async () => {
+test("ACP v2 prompt acknowledgement is not turn completion", async () => {
   const manager = managerFor();
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const prompt = manager.beginPrompt(session.id, "delayed-completion");
     let sawStreamedOutput = false;
     for (let i = 0; i < 100; i++) {
       const events = manager.getEvents(session.id).events;
-      sawStreamedOutput = events.some((event) =>
-        event.kind === "agent_message_chunk"
+      sawStreamedOutput = events.some(
+        (event) => event.kind === "agent_message_chunk",
       );
       if (sawStreamedOutput) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -101,9 +101,7 @@ Deno.test("ACP v2 prompt acknowledgement is not turn completion", async () => {
       throw new Error("V2 streamed output did not arrive after prompt ack");
     }
     if (prompt.state !== "running") {
-      throw new Error(
-        `V2 prompt completed before idle state: ${prompt.state}`,
-      );
+      throw new Error(`V2 prompt completed before idle state: ${prompt.state}`);
     }
     await prompt.done;
     const events = manager.getEvents(session.id).events;
@@ -113,26 +111,26 @@ Deno.test("ACP v2 prompt acknowledgement is not turn completion", async () => {
       prompt.text !== "still working then done" ||
       events.filter((event) => event.kind === "state_update").length < 2
     ) {
-      throw new Error(`V2 idle completion was not observed: ${
-        JSON.stringify({
+      throw new Error(
+        `V2 idle completion was not observed: ${JSON.stringify({
           state: prompt.state,
           stopReason: prompt.stopReason,
           text: prompt.text,
           events,
-        })
-      }`);
+        })}`,
+      );
     }
   } finally {
     await manager.closeAll();
   }
 });
 
-Deno.test("ACP v2 permission requests use the generic permission policy", async () => {
+test("ACP v2 permission requests use the generic permission policy", async () => {
   const manager = managerFor();
   try {
     const session = await manager.start(
       "fake",
-      Deno.cwd(),
+      process.cwd(),
       {},
       undefined,
       "read_only",
@@ -143,53 +141,59 @@ Deno.test("ACP v2 permission requests use the generic permission policy", async 
         `ACP v2 command permission was not denied: ${result.text}`,
       );
     }
-    const permission = manager.getEvents(session.id).events.find((event) =>
-      event.kind === "permission_request"
-    );
+    const permission = manager
+      .getEvents(session.id)
+      .events.find((event) => event.kind === "permission_request");
     if (!permission) throw new Error("V2 permission request was not journaled");
   } finally {
     await manager.closeAll();
   }
 });
 
-Deno.test("ACP v2 idle error state becomes a structured prompt failure", async () => {
+test("ACP v2 idle error state becomes a structured prompt failure", async () => {
   const manager = managerFor();
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const prompt = manager.beginPrompt(session.id, "error");
     await prompt.done;
     if (
-      prompt.state !== "failed" || prompt.stopReason !== "error" ||
-      prompt.error !== "fixture prompt error" || prompt.errorCode !== -32042 ||
+      prompt.state !== "failed" ||
+      prompt.stopReason !== "error" ||
+      prompt.error !== "fixture prompt error" ||
+      prompt.errorCode !== -32042 ||
       JSON.stringify(prompt.errorData) !== JSON.stringify({ kind: "test" })
     ) {
-      throw new Error(`ACP v2 error state was not normalized: ${
-        JSON.stringify({
+      throw new Error(
+        `ACP v2 error state was not normalized: ${JSON.stringify({
           state: prompt.state,
           stopReason: prompt.stopReason,
           error: prompt.error,
           errorCode: prompt.errorCode,
           errorData: prompt.errorData,
           events: manager.getEvents(session.id).events,
-        })
-      }`);
+        })}`,
+      );
     }
   } finally {
     await manager.closeAll();
   }
 });
 
-Deno.test("ACP v2 cancellation waits for its idle completion update", async () => {
+test("ACP v2 cancellation waits for its idle completion update", async () => {
   const manager = managerFor();
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const prompt = manager.beginPrompt(session.id, "wait");
     for (let i = 0; i < 50; i++) {
       if (
-        manager.getEvents(session.id).events.some((event) =>
-          (event.update as { state?: string })?.state === "running"
-        )
-      ) break;
+        manager
+          .getEvents(session.id)
+          .events.some(
+            (event) =>
+              (event.update as { state?: string })?.state === "running",
+          )
+      )
+        break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     const result = await manager.cancelPrompt(session.id, prompt.id);
@@ -201,18 +205,12 @@ Deno.test("ACP v2 cancellation waits for its idle completion update", async () =
   }
 });
 
-Deno.test("unknown ACP v2 updates reset run_task's idle timeout", async () => {
-  const cwd = await Deno.makeTempDir({ prefix: "acp-mcp-v2-activity-" });
+test("unknown ACP v2 updates reset run_task's idle timeout", async () => {
+  const cwd = await nodeFs.makeTempDir({ prefix: "acp-mcp-v2-activity-" });
   const agents = {
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        "--allow-write",
-        fixturePath(),
-      ],
+      command: process.execPath,
+      args: [fixturePath()],
       acpProtocol: "v2" as const,
     },
   };
@@ -233,25 +231,26 @@ Deno.test("unknown ACP v2 updates reset run_task's idle timeout", async () => {
       result.response !== "activity kept the task alive"
     ) {
       throw new Error(
-        `ACP v2 activity did not reset the idle timeout: ${
-          JSON.stringify(result)
-        }`,
+        `ACP v2 activity did not reset the idle timeout: ${JSON.stringify(
+          result,
+        )}`,
       );
     }
   } finally {
     await mcp.close();
     await manager.closeAll();
     await server.close();
-    await Deno.remove(cwd, { recursive: true });
+    await nodeFs.removePath(cwd, { recursive: true });
   }
 });
 
-Deno.test("ACP v2 adapter maps load_session to session/resume", async () => {
+test("ACP v2 adapter maps load_session to session/resume", async () => {
   const manager = managerFor();
   try {
-    const session = await manager.load("fake", "existing-id", Deno.cwd());
+    const session = await manager.load("fake", "existing-id", process.cwd());
     if (
-      session.acpSessionId !== "existing-id" || session.acpProtocol !== "v2"
+      session.acpSessionId !== "existing-id" ||
+      session.acpProtocol !== "v2"
     ) {
       throw new Error("ACP v2 resume did not retain the session ID");
     }
@@ -260,22 +259,18 @@ Deno.test("ACP v2 adapter maps load_session to session/resume", async () => {
   }
 });
 
-Deno.test("Claude built-in v2 selection applies profile launch metadata", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-claude-v2-profile-" });
+test("Claude built-in v2 selection applies profile launch metadata", async () => {
+  const dir = await nodeFs.makeTempDir({
+    prefix: "acp-mcp-claude-v2-profile-",
+  });
   const configPath = `${dir}/config.json`;
-  await Deno.writeTextFile(
+  await nodeFs.writeText(
     configPath,
     JSON.stringify({
       agents: {
         claude: {
-          command: Deno.execPath(),
-          args: [
-            "run",
-            "--allow-env",
-            "--allow-read",
-            fixturePath(),
-            "--expect-claude-v2-env",
-          ],
+          command: process.execPath,
+          args: [fixturePath(), "--expect-claude-v2-env"],
           acpProtocol: "v2",
         },
       },
@@ -290,29 +285,23 @@ Deno.test("Claude built-in v2 selection applies profile launch metadata", async 
     }
   } finally {
     await manager.closeAll();
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("agent launch composes inherited, user, and protocol environment", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-env-compose-" });
+test("agent launch composes inherited, user, and protocol environment", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-env-compose-" });
   const configPath = `${dir}/config.json`;
   const parentKey = "ACPMCP_FIXTURE_PARENT_VALUE";
-  const previousParentValue = Deno.env.get(parentKey);
-  Deno.env.set(parentKey, "parent-runtime");
-  await Deno.writeTextFile(
+  const previousParentValue = process.env[parentKey];
+  process.env[parentKey] = "parent-runtime";
+  await nodeFs.writeText(
     configPath,
     JSON.stringify({
       agents: {
         claude: {
-          command: Deno.execPath(),
-          args: [
-            "run",
-            "--allow-env",
-            "--allow-read",
-            fixturePath(),
-            "--expect-composed-launch-env",
-          ],
+          command: process.execPath,
+          args: [fixturePath(), "--expect-composed-launch-env"],
           acpProtocol: "v2",
           env: {
             ACPMCP_FIXTURE_USER_VALUE: "user-config",
@@ -332,19 +321,19 @@ Deno.test("agent launch composes inherited, user, and protocol environment", asy
     }
   } finally {
     await manager.closeAll();
-    if (previousParentValue === undefined) Deno.env.delete(parentKey);
-    else Deno.env.set(parentKey, previousParentValue);
-    await Deno.remove(dir, { recursive: true });
+    if (previousParentValue === undefined) delete process.env[parentKey];
+    else process.env[parentKey] = previousParentValue;
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("built-in profile protocol mismatch is rejected before spawning", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-v2-profile-" });
+test("built-in profile protocol mismatch is rejected before spawning", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-v2-profile-" });
   const marker = `${dir}/launches.txt`;
   const manager = new SessionManager({
     builtIn: {
-      command: Deno.execPath(),
-      args: ["run", "--allow-env", "--allow-read", fixturePath()],
+      command: process.execPath,
+      args: [fixturePath()],
       acpProtocol: "v2",
       supportedProtocols: ["v1"],
       env: { ACPMCP_V2_FIXTURE_LAUNCH_MARKER: marker },
@@ -359,9 +348,9 @@ Deno.test("built-in profile protocol mismatch is rejected before spawning", asyn
     }
     let launched = true;
     try {
-      await Deno.stat(marker);
+      await nodeFs.stat(marker);
     } catch (error) {
-      if (error instanceof Deno.errors.NotFound) launched = false;
+      if (nodeFs.isErrorCode(error, "ENOENT")) launched = false;
       else throw error;
     }
     if (!rejected || launched) {
@@ -369,12 +358,12 @@ Deno.test("built-in profile protocol mismatch is rejected before spawning", asyn
     }
   } finally {
     await manager.closeAll();
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("ACP v2 protocol mismatch fails without retrying v1", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-v2-mismatch-" });
+test("ACP v2 protocol mismatch fails without retrying v1", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-v2-mismatch-" });
   const marker = `${dir}/launches.txt`;
   const manager = managerFor("v2", ["--v1-only"], {
     ACPMCP_V2_FIXTURE_LAUNCH_MARKER: marker,
@@ -382,25 +371,26 @@ Deno.test("ACP v2 protocol mismatch fails without retrying v1", async () => {
   try {
     let message = "";
     try {
-      await manager.start("fake", Deno.cwd());
+      await manager.start("fake", process.cwd());
     } catch (error) {
       message = String(error);
     }
-    const launches = await Deno.readTextFile(marker);
+    const launches = await nodeFs.readText(marker);
     if (
-      !message.includes("ACP v2 required") || manager.sessionCount ||
+      !message.includes("ACP v2 required") ||
+      manager.sessionCount ||
       launches.trim().split(/\r?\n/).length !== 1
     ) {
       throw new Error(`V2 mismatch was hidden or retried: ${message}`);
     }
   } finally {
     await manager.closeAll();
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("ACP v1 protocol mismatch fails without retrying v2", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-v1-mismatch-" });
+test("ACP v1 protocol mismatch fails without retrying v2", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-v1-mismatch-" });
   const marker = `${dir}/launches.txt`;
   const manager = managerFor("v1", [], {
     ACPMCP_V2_FIXTURE_LAUNCH_MARKER: marker,
@@ -408,33 +398,32 @@ Deno.test("ACP v1 protocol mismatch fails without retrying v2", async () => {
   try {
     let failed = false;
     try {
-      await manager.start("fake", Deno.cwd());
+      await manager.start("fake", process.cwd());
     } catch {
       failed = true;
     }
-    const launches = await Deno.readTextFile(marker);
+    const launches = await nodeFs.readText(marker);
     if (
-      !failed || manager.sessionCount ||
+      !failed ||
+      manager.sessionCount ||
       launches.trim().split(/\r?\n/).length !== 1
     ) {
-      throw new Error(
-        `V1 mismatch was hidden or retried: ${launches}`,
-      );
+      throw new Error(`V1 mismatch was hidden or retried: ${launches}`);
     }
   } finally {
     await manager.closeAll();
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("ACP v2 model discovery normalizes exact advertised config IDs", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-v2-models-" });
+test("ACP v2 model discovery normalizes exact advertised config IDs", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-v2-models-" });
   const configPath = `${dir}/config.json`;
-  await Deno.writeTextFile(configPath, JSON.stringify({ agents: {} }));
+  await nodeFs.writeText(configPath, JSON.stringify({ agents: {} }));
   const agents = await loadAgents(configPath);
   agents.fake = {
-    command: Deno.execPath(),
-    args: ["run", "--allow-env", "--allow-read", fixturePath()],
+    command: process.execPath,
+    args: [fixturePath()],
     acpProtocol: "v2",
   };
   const manager = new SessionManager(agents);
@@ -448,17 +437,18 @@ Deno.test("ACP v2 model discovery normalizes exact advertised config IDs", async
     if (
       result.status !== "completed" ||
       !models.some((item) => item.id === "fake-v2-model")
-    ) throw new Error(`V2 model discovery failed: ${JSON.stringify(result)}`);
+    )
+      throw new Error(`V2 model discovery failed: ${JSON.stringify(result)}`);
   } finally {
     await mcp.close();
     await manager.closeAll();
     await server.close();
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("v1 and v2 run_task keep the same compact product result shape", async () => {
-  const cwd = await Deno.makeTempDir({ prefix: "acp-mcp-cross-protocol-" });
+test("v1 and v2 run_task keep the same compact product result shape", async () => {
+  const cwd = await nodeFs.makeTempDir({ prefix: "acp-mcp-cross-protocol-" });
   const cases: Array<{
     protocol: "v1" | "v2";
     command: string;
@@ -466,13 +456,13 @@ Deno.test("v1 and v2 run_task keep the same compact product result shape", async
   }> = [
     {
       protocol: "v1",
-      command: Deno.execPath(),
-      args: ["run", "--allow-env", v1FixturePath()],
+      command: process.execPath,
+      args: [v1FixturePath()],
     },
     {
       protocol: "v2",
-      command: Deno.execPath(),
-      args: ["run", "--allow-env", "--allow-read", fixturePath()],
+      command: process.execPath,
+      args: [fixturePath()],
     },
   ];
   try {
@@ -499,9 +489,9 @@ Deno.test("v1 and v2 run_task keep the same compact product result shape", async
           keys !== "response,status,stopReason"
         ) {
           throw new Error(
-            `${definition.protocol} run_task result differs: ${
-              JSON.stringify(result)
-            }`,
+            `${definition.protocol} run_task result differs: ${JSON.stringify(
+              result,
+            )}`,
           );
         }
       } finally {
@@ -511,22 +501,15 @@ Deno.test("v1 and v2 run_task keep the same compact product result shape", async
       }
     }
   } finally {
-    await Deno.remove(cwd, { recursive: true });
+    await nodeFs.removePath(cwd, { recursive: true });
   }
 });
 
-Deno.test("v2 task completion survives nonzero child exit during cleanup", async () => {
+test("v2 task completion survives nonzero child exit during cleanup", async () => {
   const agents = {
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        "--allow-write",
-        fixturePath(),
-        "--exit-nonzero-after-close",
-      ],
+      command: process.execPath,
+      args: [fixturePath(), "--exit-nonzero-after-close"],
       acpProtocol: "v2" as const,
     },
   };
@@ -538,11 +521,12 @@ Deno.test("v2 task completion survives nonzero child exit during cleanup", async
       await mcp.callTool("run_task", {
         agentId: "fake",
         task: "contract",
-        cwd: Deno.cwd(),
+        cwd: process.cwd(),
       }).response,
     );
     if (
-      result.status !== "completed" || result.response !== "v2 reply" ||
+      result.status !== "completed" ||
+      result.response !== "v2 reply" ||
       manager.sessionCount !== 0
     ) {
       throw new Error(

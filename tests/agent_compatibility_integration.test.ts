@@ -1,3 +1,7 @@
+import { test } from "node:test";
+import process from "node:process";
+import { type ProcessStatus } from "#proc";
+import * as nodeFs from "#fs";
 import { loadAgents } from "../src/agents/config.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { findExecutablePath } from "../src/runtime/process.ts";
@@ -6,11 +10,11 @@ import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
 function childStatusForTest(manager: SessionManager, id: string) {
   type TestSession = {
-    process: { child: { status: Promise<Deno.CommandStatus> } };
+    process: { child: { status: Promise<ProcessStatus> } };
   };
-  const sessions =
-    (manager as unknown as { sessions: Map<string, TestSession> })
-      .sessions;
+  const sessions = (
+    manager as unknown as { sessions: Map<string, TestSession> }
+  ).sessions;
   const session = sessions.get(id);
   if (!session) throw new Error(`Missing test session ${id}`);
   return session.process.child.status;
@@ -19,8 +23,8 @@ function childStatusForTest(manager: SessionManager, id: string) {
 async function runIntegration(
   agentId: "codex" | "claude" | "antigravity",
 ): Promise<void> {
-  const missingConfig = `${Deno.cwd()}${
-    Deno.build.os === "windows" ? "\\" : "/"
+  const missingConfig = `${process.cwd()}${
+    process.platform === "win32" ? "\\" : "/"
   }acp-mcp-nonexistent-${crypto.randomUUID()}.json`;
   // Reuse user-local profile environment for agents whose configured launch
   // route may carry provider settings. Never log those environment values.
@@ -29,9 +33,10 @@ async function runIntegration(
       ? undefined
       : missingConfig,
   );
-  const protocol = agentId === "claude"
-    ? Deno.env.get("ACPMCP_COMPAT_PROTOCOL") ?? "v1"
-    : "v1";
+  const protocol =
+    agentId === "claude"
+      ? (process.env["ACPMCP_COMPAT_PROTOCOL"] ?? "v1")
+      : "v1";
   const definition = {
     ...configured[agentId],
     acpProtocol: protocol as "v1" | "v2",
@@ -51,7 +56,7 @@ async function runIntegration(
     [agentId]: { ...definition, command: executable, env },
   };
   const manager = new SessionManager(agents);
-  const closedChildren: Promise<Deno.CommandStatus>[] = [];
+  const closedChildren: Promise<ProcessStatus>[] = [];
   const closedSessions: Array<{
     acpSessionId: string;
     eventCount: number;
@@ -78,15 +83,17 @@ async function runIntegration(
         await mcp.callTool("list_agents", {}).response,
       );
       const row = Array.isArray(listed)
-        ? listed.find((item) => (item as { id?: unknown }).id === agentId) as {
-          commandFound?: unknown;
-        } | undefined
+        ? (listed.find((item) => (item as { id?: unknown }).id === agentId) as
+            | {
+                commandFound?: unknown;
+              }
+            | undefined)
         : undefined;
       if (row?.commandFound !== true) {
         throw new Error(
-          `${agentId} configured executable was not launchable: ${
-            JSON.stringify(listed)
-          }`,
+          `${agentId} configured executable was not launchable: ${JSON.stringify(
+            listed,
+          )}`,
         );
       }
     }
@@ -105,9 +112,8 @@ async function runIntegration(
       id: string;
       selected: boolean;
     }>;
-    const requestedModel = agentId === "claude"
-      ? Deno.env.get("ACPMCP_CLAUDE_MODEL")
-      : undefined;
+    const requestedModel =
+      agentId === "claude" ? process.env["ACPMCP_CLAUDE_MODEL"] : undefined;
     const selectedModel = requestedModel
       ? models.find((model) => model.id === requestedModel)
       : models.find((model) => model.selected);
@@ -118,21 +124,20 @@ async function runIntegration(
           : `${agentId} advertised no selected model`,
       );
     }
-    const runConfig: Record<string, string> = agentId === "claude" &&
-        requestedModel === undefined
-      ? {}
-      : { [selectedModel.configId]: selectedModel.id };
+    const runConfig: Record<string, string> =
+      agentId === "claude" && requestedModel === undefined
+        ? {}
+        : { [selectedModel.configId]: selectedModel.id };
     const metadataSession = await manager.start(agentId);
     let loadResult: Record<string, unknown> | undefined;
-    const requestedEffort = agentId === "claude"
-      ? Deno.env.get("ACPMCP_CLAUDE_EFFORT")
-      : undefined;
+    const requestedEffort =
+      agentId === "claude" ? process.env["ACPMCP_CLAUDE_EFFORT"] : undefined;
     if (requestedEffort) {
-      const effortOption = metadataSession.configOptions.find((option) =>
-        option.id === "effort"
+      const effortOption = metadataSession.configOptions.find(
+        (option) => option.id === "effort",
       );
       const options = Array.isArray(effortOption?.options)
-        ? effortOption.options as Array<Record<string, unknown>>
+        ? (effortOption.options as Array<Record<string, unknown>>)
         : [];
       if (
         !effortOption ||
@@ -144,8 +149,8 @@ async function runIntegration(
       }
       runConfig[effortOption.id as string] = requestedEffort;
     }
-    console.log(`${agentId} ACP auth/config: ${
-      JSON.stringify({
+    console.log(
+      `${agentId} ACP auth/config: ${JSON.stringify({
         capabilities: metadataSession.capabilities,
         authMethods: metadataSession.authMethods,
         configOptions: metadataSession.configOptions.map((option) => ({
@@ -154,10 +159,10 @@ async function runIntegration(
           type: option.type,
           currentValue: option.currentValue,
         })),
-      })
-    }`);
+      })}`,
+    );
     await manager.close(metadataSession.id);
-    const taskWorkspace = await Deno.makeTempDir({ prefix: "acp-mcp-live-" });
+    const taskWorkspace = await nodeFs.makeTempDir({ prefix: "acp-mcp-live-" });
     const taskStartedAt = Date.now();
     let result: Record<string, unknown>;
     let resultDurationMs = 0;
@@ -167,8 +172,7 @@ async function runIntegration(
       result = parseToolResult(
         await mcp.callTool("run_task", {
           agentId,
-          task:
-            "Reply with exactly the two letters OK and no punctuation. Do not inspect files or use tools.",
+          task: "Reply with exactly the two letters OK and no punctuation. Do not inspect files or use tools.",
           permissionPolicy: "read_only",
           idleTimeoutMs: 600000,
           cwd: taskWorkspace,
@@ -179,20 +183,23 @@ async function runIntegration(
       callerResultBytes = JSON.stringify(result).length;
       if (result.status !== "completed" || result.response !== "OK") {
         throw new Error(
-          `${agentId} ${protocol} harmless run_task failed: ${
-            JSON.stringify(result)
-          }`,
+          `${agentId} ${protocol} harmless run_task failed: ${JSON.stringify(
+            result,
+          )}`,
         );
       }
       if (agentId === "claude") {
         const sourceSession = closedSessions.at(-1);
-        const capabilities = metadataSession.capabilities as {
-          loadSession?: unknown;
-          session?: unknown;
-        } | undefined;
-        const resumeSupported = protocol === "v1"
-          ? capabilities?.loadSession === true
-          : Boolean(capabilities?.session);
+        const capabilities = metadataSession.capabilities as
+          | {
+              loadSession?: unknown;
+              session?: unknown;
+            }
+          | undefined;
+        const resumeSupported =
+          protocol === "v1"
+            ? capabilities?.loadSession === true
+            : Boolean(capabilities?.session);
         if (resumeSupported && sourceSession) {
           const loaded = await manager.load(
             agentId,
@@ -207,10 +214,11 @@ async function runIntegration(
             }
             if (protocol === "v2") {
               const replay = manager.getEvents(loaded.id).events;
-              const replayedResponse = replay.some((event) =>
-                (event.kind === "agent_message" ||
-                  event.kind === "agent_message_chunk") &&
-                updateContainsText(event.update, "OK")
+              const replayedResponse = replay.some(
+                (event) =>
+                  (event.kind === "agent_message" ||
+                    event.kind === "agent_message_chunk") &&
+                  updateContainsText(event.update, "OK"),
               );
               if (!replayedResponse) {
                 throw new Error(
@@ -241,7 +249,7 @@ async function runIntegration(
         } else {
           loadResult = { supported: false };
         }
-        const writeProbeDir = await Deno.makeTempDir({
+        const writeProbeDir = await nodeFs.makeTempDir({
           prefix: "acp-mcp-claude-write-",
         });
         try {
@@ -249,8 +257,7 @@ async function runIntegration(
           const writeProbeResult = parseToolResult(
             await mcp.callTool("run_task", {
               agentId,
-              task:
-                "Create a file named CLAUDE_WRITE_TEST.txt containing TEST. Then report whether the file was created.",
+              task: "Create a file named CLAUDE_WRITE_TEST.txt containing TEST. Then report whether the file was created.",
               permissionPolicy: "read_only",
               idleTimeoutMs: 600000,
               cwd: writeProbeDir,
@@ -259,10 +266,10 @@ async function runIntegration(
           ) as Record<string, unknown>;
           let fileCreated = false;
           try {
-            await Deno.stat(`${writeProbeDir}/CLAUDE_WRITE_TEST.txt`);
+            await nodeFs.stat(`${writeProbeDir}/CLAUDE_WRITE_TEST.txt`);
             fileCreated = true;
           } catch (error) {
-            if (!(error instanceof Deno.errors.NotFound)) throw error;
+            if (!nodeFs.isErrorCode(error, "ENOENT")) throw error;
           }
           const probeSession = closedSessions.at(-1);
           writeProbeMetrics = {
@@ -278,11 +285,11 @@ async function runIntegration(
             journalBytes: probeSession?.journalBytes,
           };
         } finally {
-          await Deno.remove(writeProbeDir, { recursive: true });
+          await nodeFs.removePath(writeProbeDir, { recursive: true });
         }
       }
     } finally {
-      await Deno.remove(taskWorkspace, { recursive: true });
+      await nodeFs.removePath(taskWorkspace, { recursive: true });
     }
     if (result.status !== "completed" || result.response !== "OK") {
       throw new Error(
@@ -293,28 +300,25 @@ async function runIntegration(
       throw new Error(`${agentId} left a session active`);
     }
     const statuses = await Promise.all(closedChildren);
-    const sessionMetrics = closedSessions.map(({
-      acpSessionId: _acpSessionId,
-      ...metrics
-    }) => metrics);
+    const sessionMetrics = closedSessions.map(
+      ({ acpSessionId: _acpSessionId, ...metrics }) => metrics,
+    );
     console.log(
       `${agentId}: ${discovery.models.length} ACP-advertised models; ` +
-        `model config IDs=${
-          JSON.stringify([...new Set(models.map((model) => model.configId))])
-        }; ` +
-        `selected=${
-          JSON.stringify(
-            models.filter((model) => model.selected).map((model) => model.id),
-          )
-        }; ` +
+        `model config IDs=${JSON.stringify([
+          ...new Set(models.map((model) => model.configId)),
+        ])}; ` +
+        `selected=${JSON.stringify(
+          models.filter((model) => model.selected).map((model) => model.id),
+        )}; ` +
         `selected model=${selectedModel.id}; ` +
         `run config=${JSON.stringify(runConfig)}; ` +
-        `read-only OK task completed; session events=${
-          JSON.stringify(sessionMetrics)
-        }; ` +
-        `caller result=${
-          JSON.stringify(result)
-        } (${callerResultBytes} bytes); ` +
+        `read-only OK task completed; session events=${JSON.stringify(
+          sessionMetrics,
+        )}; ` +
+        `caller result=${JSON.stringify(
+          result,
+        )} (${callerResultBytes} bytes); ` +
         `task duration=${resultDurationMs}ms; ` +
         (writeProbeMetrics
           ? `write probe=${JSON.stringify(writeProbeMetrics)}; `
@@ -322,9 +326,9 @@ async function runIntegration(
         (loadResult
           ? `session resume/load=${JSON.stringify(loadResult)}; `
           : "") +
-        `${statuses.length} ACP child processes exited with codes=${
-          JSON.stringify(statuses.map((status) => status.code))
-        }`,
+        `${statuses.length} ACP child processes exited with codes=${JSON.stringify(
+          statuses.map((status) => status.code),
+        )}`,
     );
   } finally {
     await mcp.close();
@@ -339,33 +343,35 @@ function updateContainsText(update: unknown, expected: string): boolean {
   if (Array.isArray(content)) {
     return content.some((block) =>
       Boolean(
-        block && typeof block === "object" &&
+        block &&
+          typeof block === "object" &&
           typeof (block as { text?: unknown }).text === "string" &&
           (block as { text: string }).text.includes(expected),
-      )
+      ),
     );
   }
   return Boolean(
-    content && typeof content === "object" &&
+    content &&
+      typeof content === "object" &&
       typeof (content as { text?: unknown }).text === "string" &&
       (content as { text: string }).text.includes(expected),
   );
 }
 
-Deno.test({
+test({
   name: "Codex ACP adapter integration (opt in)",
-  ignore: Deno.env.get("ACPMCP_CODEX_TEST") !== "1",
+  skip: process.env["ACPMCP_CODEX_TEST"] !== "1",
   fn: () => runIntegration("codex"),
 });
 
-Deno.test({
+test({
   name: "Antigravity ACP server integration (opt in)",
-  ignore: Deno.env.get("ACPMCP_ANTIGRAVITY_TEST") !== "1",
+  skip: process.env["ACPMCP_ANTIGRAVITY_TEST"] !== "1",
   fn: () => runIntegration("antigravity"),
 });
 
-Deno.test({
+test({
   name: "Claude Agent ACP integration (opt in)",
-  ignore: Deno.env.get("ACPMCP_CLAUDE_TEST") !== "1",
+  skip: process.env["ACPMCP_CLAUDE_TEST"] !== "1",
   fn: () => runIntegration("claude"),
 });

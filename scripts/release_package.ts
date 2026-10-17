@@ -1,5 +1,8 @@
+import process from "node:process";
+import { ProcessCommand } from "#proc";
+import * as nodeFs from "#fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   assertRuntimeLicenseInventoryMatchesLock,
@@ -40,10 +43,7 @@ export interface ReleaseNames {
 
 export { type ReleaseTarget } from "./release_target.ts";
 
-export function releaseNames(
-  version: string,
-  target: string,
-): ReleaseNames {
+export function releaseNames(version: string, target: string): ReleaseNames {
   if (!isReleaseTarget(target)) {
     throw new Error(`Unsupported release target '${target}'`);
   }
@@ -76,18 +76,20 @@ export function validatePackageManifest(value: unknown): PackageManifest {
   }
   const manifest = value as Record<string, unknown>;
   if (
-    manifest.product !== "acp-mcp" || typeof manifest.version !== "string" ||
+    manifest.product !== "acp-mcp" ||
+    typeof manifest.version !== "string" ||
     !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version) ||
     typeof manifest.target !== "string" ||
     !isReleaseTarget(manifest.target) ||
     typeof manifest.commit !== "string" ||
     !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(manifest.commit) ||
     typeof manifest.executable !== "string" ||
-    manifest.executable !== releaseNames(manifest.version, manifest.target)
-        .executable ||
+    manifest.executable !==
+      releaseNames(manifest.version, manifest.target).executable ||
     typeof manifest.executableSha256 !== "string" ||
     !/^[a-f0-9]{64}$/.test(manifest.executableSha256)
-  ) throw new Error("Package manifest contains invalid release metadata");
+  )
+    throw new Error("Package manifest contains invalid release metadata");
   return {
     product: "acp-mcp",
     version: manifest.version,
@@ -104,11 +106,11 @@ export function validateReleaseManifest(value: unknown): ReleaseManifest {
   if (
     typeof manifest.archive !== "string" ||
     manifest.archive !==
-      releaseNames(packageManifest.version, packageManifest.target)
-        .archive ||
+      releaseNames(packageManifest.version, packageManifest.target).archive ||
     typeof manifest.archiveSha256 !== "string" ||
     !/^[a-f0-9]{64}$/.test(manifest.archiveSha256)
-  ) throw new Error("Release manifest contains invalid archive metadata");
+  )
+    throw new Error("Release manifest contains invalid archive metadata");
   return {
     ...packageManifest,
     archive: manifest.archive,
@@ -117,20 +119,18 @@ export function validateReleaseManifest(value: unknown): ReleaseManifest {
 }
 
 export async function sha256File(path: string): Promise<string> {
-  return sha256Hex(await Deno.readFile(path));
+  return sha256Hex(await nodeFs.readFile(path));
 }
 
 export async function loadLicenseInventory(
   root = projectRoot,
 ): Promise<RuntimeLicenseInventory> {
   const inventory = parseRuntimeLicenseInventory(
-    await Deno.readTextFile(
-      join(root, "licenses", "runtime-dependencies.json"),
-    ),
+    await nodeFs.readText(join(root, "licenses", "runtime-dependencies.json")),
   );
   assertRuntimeLicenseInventoryMatchesLock(
-    await Deno.readTextFile(join(root, "deno.lock")),
-    await Deno.readTextFile(join(root, "deno.jsonc")),
+    await nodeFs.readText(join(root, "package-lock.json")),
+    await nodeFs.readText(join(root, "package.json")),
     inventory,
   );
   return inventory;
@@ -144,31 +144,36 @@ export async function packageContents(
 ): Promise<void> {
   const inventory = await loadLicenseInventory(root);
   const executableDestination = join(packageRoot, manifest.executable);
-  await Deno.copyFile(executablePath, executableDestination);
+  await nodeFs.copyFile(executablePath, executableDestination);
   if (!isWindowsTarget(manifest.target)) {
-    await Deno.chmod(executableDestination, 0o755);
+    await nodeFs.chmod(executableDestination, 0o755);
   }
-  await Deno.copyFile(join(root, "LICENSE"), join(packageRoot, "LICENSE"));
-  await Deno.writeTextFile(
+  await nodeFs.copyFile(join(root, "LICENSE"), join(packageRoot, "LICENSE"));
+  await nodeFs.mkdir(join(packageRoot, "licenses"), { recursive: true });
+  await nodeFs.copyFile(
+    join(dirname(process.execPath), "LICENSE"),
+    join(packageRoot, "licenses", "Node.js-LICENSE.txt"),
+  );
+  await nodeFs.writeText(
     join(packageRoot, "THIRD_PARTY_NOTICES.txt"),
-    renderThirdPartyNotices(inventory),
+    renderThirdPartyNotices(inventory, { includeNodeRuntime: true }),
   );
   const licenseFiles = new Set(
     inventory.dependencies.flatMap((dependency) => dependency.licenseFiles),
   );
   for (const relative of licenseFiles) {
     const destination = join(packageRoot, relative);
-    await Deno.mkdir(join(packageRoot, "licenses"), { recursive: true });
-    await Deno.copyFile(join(root, relative), destination);
+    await nodeFs.mkdir(join(packageRoot, "licenses"), { recursive: true });
+    await nodeFs.copyFile(join(root, relative), destination);
   }
-  await Deno.writeTextFile(
+  await nodeFs.writeText(
     join(packageRoot, "manifest.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
 }
 
 async function runTar(args: string[], cwd: string): Promise<string> {
-  const result = await new Deno.Command("tar", {
+  const result = await new ProcessCommand("tar", {
     args,
     cwd,
     stdout: "piped",
@@ -176,9 +181,9 @@ async function runTar(args: string[], cwd: string): Promise<string> {
   }).output();
   if (!result.success) {
     throw new Error(
-      `Archive command failed: ${
-        new TextDecoder().decode(result.stderr).trim()
-      }`,
+      `Archive command failed: ${new TextDecoder()
+        .decode(result.stderr)
+        .trim()}`,
     );
   }
   return new TextDecoder().decode(result.stdout);
@@ -190,6 +195,7 @@ const packagedFiles = [
   "licenses/Apache-2.0.txt",
   "licenses/MCP-SDK-MIT.txt",
   "licenses/Zod-MIT.txt",
+  "licenses/Node.js-LICENSE.txt",
   "manifest.json",
 ] as const;
 
@@ -205,7 +211,9 @@ export async function validateArchiveEntries(
   const args = !isWindowsTarget(target)
     ? ["-tzf", archivePath]
     : ["-tf", archivePath];
-  const listing = (await runTar(args, Deno.cwd())).trim().split(/\r?\n/)
+  const listing = (await runTar(args, process.cwd()))
+    .trim()
+    .split(/\r?\n/)
     .map((name) => name.replace(/^\.\//, ""));
   const expected = expectedArchiveEntries(names.executable);
   const files = listing.filter((entry) => !entry.endsWith("/"));
@@ -218,25 +226,30 @@ export async function validateArchiveEntries(
     directories.some((entry) => entry !== "licenses/")
   ) {
     throw new Error(
-      `Release archive contains missing or unexpected paths; actual: ${
-        [...actual].join(", ")
-      }; expected: ${
-        [...expected].join(", ")
-      }; files=${files.length}/${actual.size}; directories=${
-        JSON.stringify(directories)
-      }`,
+      `Release archive contains missing or unexpected paths; actual: ${[
+        ...actual,
+      ].join(", ")}; expected: ${[...expected].join(
+        ", ",
+      )}; files=${files.length}/${actual.size}; directories=${JSON.stringify(
+        directories,
+      )}`,
     );
   }
   for (const entry of listing) {
     if (
-      entry.startsWith("/") || entry.startsWith("\\") ||
-      entry.split(/[\\/]/).includes("..") || entry.includes("\\")
-    ) throw new Error("Release archive contains an unsafe path");
+      entry.startsWith("/") ||
+      entry.startsWith("\\") ||
+      entry.split(/[\\/]/).includes("..") ||
+      entry.includes("\\")
+    )
+      throw new Error("Release archive contains an unsafe path");
   }
   const verboseArgs = !isWindowsTarget(target)
     ? ["-tvzf", archivePath]
     : ["-tvf", archivePath];
-  const verbose = (await runTar(verboseArgs, Deno.cwd())).trim().split(/\r?\n/);
+  const verbose = (await runTar(verboseArgs, process.cwd()))
+    .trim()
+    .split(/\r?\n/);
   if (verbose.length !== listing.length) {
     throw new Error("Could not validate release archive entry types");
   }
@@ -256,7 +269,7 @@ export async function extractReleaseArchive(
   const args = !isWindowsTarget(target)
     ? ["-xzf", archivePath, "-C", destination]
     : ["-xf", archivePath, "-C", destination];
-  await runTar(args, Deno.cwd());
+  await runTar(args, process.cwd());
   const names = releaseNames("0.0.0", target);
   const expected = new Set([
     ...expectedArchiveEntries(names.executable),
@@ -264,12 +277,12 @@ export async function extractReleaseArchive(
   ]);
   const actual = new Set<string>();
   const visit = async (path: string, relative: string) => {
-    for await (const entry of Deno.readDir(path)) {
+    for await (const entry of nodeFs.readDir(path)) {
       const item = relative ? `${relative}/${entry.name}` : entry.name;
-      if (entry.isDirectory) {
+      if (entry.isDirectory()) {
         actual.add(item);
         await visit(join(path, entry.name), item);
-      } else if (entry.isFile) actual.add(item);
+      } else if (entry.isFile()) actual.add(item);
       else throw new Error("Extracted release package contains a special file");
     }
   };
@@ -277,7 +290,8 @@ export async function extractReleaseArchive(
   if (
     [...actual].some((entry) => !expected.has(entry)) ||
     [...expected].some((entry) => !actual.has(entry))
-  ) throw new Error("Extracted release package contents are incomplete");
+  )
+    throw new Error("Extracted release package contents are incomplete");
 }
 
 export async function createReleaseArchive(
@@ -292,8 +306,8 @@ export async function createReleaseArchive(
   },
 ): Promise<ReleaseManifest> {
   const names = releaseNames(input.version, input.target);
-  const packageRoot = await Deno.makeTempDir({ prefix: "acp-mcp-package-" });
-  const extracted = await Deno.makeTempDir({
+  const packageRoot = await nodeFs.makeTempDir({ prefix: "acp-mcp-package-" });
+  const extracted = await nodeFs.makeTempDir({
     prefix: "acp-mcp-package-check-",
   });
   try {
@@ -313,64 +327,65 @@ export async function createReleaseArchive(
     );
     const createArgs = isWindowsTarget(input.target)
       ? [
-        "-a",
-        "-cf",
-        archivePath,
-        "-C",
-        packageRoot,
-        names.executable,
-        ...packagedFiles,
-      ]
-      : Deno.build.os === "linux"
-      ? [
-        "--sort=name",
-        "--mtime=@0",
-        "--owner=0",
-        "--group=0",
-        "--numeric-owner",
-        "-czf",
-        archivePath,
-        "-C",
-        packageRoot,
-        names.executable,
-        ...packagedFiles,
-      ]
-      : [
-        "-czf",
-        archivePath,
-        "-C",
-        packageRoot,
-        names.executable,
-        ...packagedFiles,
-      ];
-    await runTar(createArgs, Deno.cwd());
+          "-a",
+          "-cf",
+          archivePath,
+          "-C",
+          packageRoot,
+          names.executable,
+          ...packagedFiles,
+        ]
+      : process.platform === "linux"
+        ? [
+            "--sort=name",
+            "--mtime=@0",
+            "--owner=0",
+            "--group=0",
+            "--numeric-owner",
+            "-czf",
+            archivePath,
+            "-C",
+            packageRoot,
+            names.executable,
+            ...packagedFiles,
+          ]
+        : [
+            "-czf",
+            archivePath,
+            "-C",
+            packageRoot,
+            names.executable,
+            ...packagedFiles,
+          ];
+    await runTar(createArgs, process.cwd());
     await extractReleaseArchive(archivePath, input.target, extracted);
     if (
-      await sha256File(join(extracted, names.executable)) !==
-        input.executableSha256
-    ) throw new Error("Packaged executable hash does not match the manifest");
+      (await sha256File(join(extracted, names.executable))) !==
+      input.executableSha256
+    )
+      throw new Error("Packaged executable hash does not match the manifest");
     const embedded = validatePackageManifest(
-      JSON.parse(await Deno.readTextFile(join(extracted, "manifest.json"))),
+      JSON.parse(await nodeFs.readText(join(extracted, "manifest.json"))),
     );
     if (JSON.stringify(embedded) !== JSON.stringify(packageManifest)) {
       throw new Error("Embedded package manifest does not match release input");
     }
     const inventory = await loadLicenseInventory(input.root);
     if (
-      await Deno.readTextFile(join(extracted, "THIRD_PARTY_NOTICES.txt")) !==
+      (await nodeFs.readText(join(extracted, "THIRD_PARTY_NOTICES.txt"))) !==
         renderThirdPartyNotices(inventory) ||
-      await Deno.readTextFile(join(extracted, "LICENSE")) !==
-        await Deno.readTextFile(join(input.root ?? projectRoot, "LICENSE"))
-    ) throw new Error("Release archive omitted project or third-party notices");
-    for (
-      const relative of new Set(
-        inventory.dependencies.flatMap((item) => item.licenseFiles),
-      )
-    ) {
+      (await nodeFs.readText(join(extracted, "LICENSE"))) !==
+        (await nodeFs.readText(join(input.root ?? projectRoot, "LICENSE")))
+    )
+      throw new Error("Release archive omitted project or third-party notices");
+    for (const relative of new Set(
+      inventory.dependencies.flatMap((item) => item.licenseFiles),
+    )) {
       if (
-        await Deno.readTextFile(join(extracted, relative)) !==
-          await Deno.readTextFile(join(input.root ?? projectRoot, relative))
-      ) throw new Error(`Release archive license text mismatch: ${relative}`);
+        (await nodeFs.readText(join(extracted, relative))) !==
+        (await nodeFs.readText(join(input.root ?? projectRoot, relative)))
+      )
+        throw new Error(`Release archive license text mismatch: ${relative}`);
     }
     const archiveHash = await sha256File(archivePath);
     return {
@@ -379,7 +394,7 @@ export async function createReleaseArchive(
       archiveSha256: archiveHash,
     };
   } finally {
-    await Deno.remove(packageRoot, { recursive: true });
-    await Deno.remove(extracted, { recursive: true });
+    await nodeFs.removePath(packageRoot, { recursive: true });
+    await nodeFs.removePath(extracted, { recursive: true });
   }
 }

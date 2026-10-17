@@ -1,31 +1,24 @@
+import process from "node:process";
+import { build } from "esbuild";
+import * as nodeFs from "#fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isWindowsTarget, targetId } from "./release_target.ts";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const outputDirectory = join(projectRoot, "dist");
-const target = targetId();
-const executableName = isWindowsTarget(target) ? "acp-mcp.exe" : "acp-mcp";
-const outputPath = join(outputDirectory, executableName);
 
-await Deno.mkdir(outputDirectory, { recursive: true });
-const command = new Deno.Command(Deno.execPath(), {
-  args: [
-    "compile",
-    "--app-name",
-    "acp-mcp",
-    "--allow-env",
-    "--allow-read",
-    "--allow-write",
-    "--allow-run",
-    "--allow-net=opencode.ai",
-    "--output",
-    outputPath,
-    new URL("../src/main.ts", import.meta.url).href,
-  ],
-  stdin: "inherit",
-  stdout: "inherit",
-  stderr: "inherit",
+await nodeFs.mkdir(outputDirectory, { recursive: true });
+await build({
+  entryPoints: [join(projectRoot, "src", "main.ts")],
+  outfile: join(outputDirectory, "acp-mcp.mjs"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node24",
+  packages: "bundle",
+  sourcemap: false,
+  legalComments: "none",
+  logLevel: "info",
 });
-const status = await command.spawn().status;
-if (!status.success) Deno.exit(status.code || 1);
+
+if (!process.versions.node) throw new Error("Node.js runtime is required");

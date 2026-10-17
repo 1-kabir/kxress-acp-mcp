@@ -1,3 +1,6 @@
+import { test } from "node:test";
+import process from "node:process";
+import * as nodeFs from "#fs";
 import {
   DEFAULT_MAX_MANAGED_SESSIONS,
   DEFAULT_SESSION_START_TIMEOUT_MS,
@@ -5,19 +8,19 @@ import {
 } from "../src/sessions/manager.ts";
 
 function fakeFixturePath() {
-  const path =
-    new URL("./fixtures/fake_acp_agent.ts", import.meta.url).pathname;
-  return Deno.build.os === "windows"
+  const path = new URL("./fixtures/fake_acp_agent.ts", import.meta.url)
+    .pathname;
+  return process.platform === "win32"
     ? decodeURIComponent(path.replace(/^\//, ""))
     : path;
 }
 
-Deno.test("requested cwd is shared by the ACP session and child process", async () => {
-  const cwd = await Deno.makeTempDir({ prefix: "acp-mcp-requested-cwd-" });
+test("requested cwd is shared by the ACP session and child process", async () => {
+  const cwd = await nodeFs.makeTempDir({ prefix: "acp-mcp-requested-cwd-" });
   const manager = new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: ["run", "--allow-read", fakeFixturePath(), "--report-cwd"],
+      command: process.execPath,
+      args: [fakeFixturePath(), "--report-cwd"],
     },
   });
   try {
@@ -28,25 +31,23 @@ Deno.test("requested cwd is shared by the ACP session and child process", async 
           ?.currentValue,
       ),
     ) as { processCwd: string; sessionCwd: string };
-    const requestedRealPath = await Deno.realPath(cwd);
+    const requestedRealPath = await nodeFs.realpath(cwd);
     if (
-      await Deno.realPath(report.processCwd) !== requestedRealPath ||
-      await Deno.realPath(report.sessionCwd) !== requestedRealPath
+      (await nodeFs.realpath(report.processCwd)) !== requestedRealPath ||
+      (await nodeFs.realpath(report.sessionCwd)) !== requestedRealPath
     ) {
-      throw new Error(
-        `Requested cwd diverged: ${JSON.stringify(report)}`,
-      );
+      throw new Error(`Requested cwd diverged: ${JSON.stringify(report)}`);
     }
   } finally {
     await manager.closeAll();
-    await Deno.remove(cwd, { recursive: true });
+    await nodeFs.removePath(cwd, { recursive: true });
   }
 });
 
-Deno.test("session query APIs return detached snapshots", async () => {
+test("session query APIs return detached snapshots", async () => {
   const manager = rawFixtureManager();
   try {
-    const session = await manager.start("raw", Deno.cwd());
+    const session = await manager.start("raw", process.cwd());
     const snapshot = manager.getSessionSnapshot(session.id);
     const listed = manager.listSessionSnapshots();
     (snapshot.configOptions as Array<Record<string, unknown>>).push({
@@ -54,9 +55,9 @@ Deno.test("session query APIs return detached snapshots", async () => {
     });
     (listed[0].capabilities as Record<string, unknown>).callerMutation = true;
     if (
-      manager.getSessionSnapshot(session.id).configOptions.some((option) =>
-        option.id === "caller-mutation"
-      ) ||
+      manager
+        .getSessionSnapshot(session.id)
+        .configOptions.some((option) => option.id === "caller-mutation") ||
       "callerMutation" in
         (manager.getSessionSnapshot(session.id).capabilities as object)
     ) {
@@ -73,21 +74,16 @@ Deno.test("session query APIs return detached snapshots", async () => {
 function rawFixtureManager() {
   return new SessionManager({
     raw: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-read",
-        "--allow-write",
-        "tests/fixtures/raw_wire_acp_agent.ts",
-      ],
+      command: process.execPath,
+      args: ["tests/fixtures/raw_wire_acp_agent.ts"],
     },
   });
 }
 
-Deno.test("journals unknown raw updates in order and keeps the connection usable", async () => {
+test("journals unknown raw updates in order and keeps the connection usable", async () => {
   const manager = rawFixtureManager();
   try {
-    const session = await manager.start("raw", Deno.cwd());
+    const session = await manager.start("raw", process.cwd());
     const response = await manager.prompt(session.id, "raw wire");
     if (response.text !== "raw reply") {
       throw new Error(`Unexpected text: ${response.text}`);
@@ -98,7 +94,7 @@ Deno.test("journals unknown raw updates in order and keeps the connection usable
     }
     if (
       events.map((event) => event.kind).join(",") !==
-        "agent_message_chunk,future_update,agent_message_chunk"
+      "agent_message_chunk,future_update,agent_message_chunk"
     ) {
       throw new Error("Raw updates were not journaled in arrival order");
     }
@@ -110,7 +106,8 @@ Deno.test("journals unknown raw updates in order and keeps the connection usable
     }
     const raw = events[1].raw;
     if (
-      JSON.stringify(raw) !== JSON.stringify({
+      JSON.stringify(raw) !==
+      JSON.stringify({
         sessionId: session.acpSessionId,
         update: {
           sessionUpdate: "future_update",
@@ -137,12 +134,12 @@ Deno.test("journals unknown raw updates in order and keeps the connection usable
   }
 });
 
-Deno.test("routes raw updates to each managed session", async () => {
+test("routes raw updates to each managed session", async () => {
   const manager = rawFixtureManager();
   try {
     const [first, second] = await Promise.all([
-      manager.start("raw", Deno.cwd()),
-      manager.start("raw", Deno.cwd()),
+      manager.start("raw", process.cwd()),
+      manager.start("raw", process.cwd()),
     ]);
     await Promise.all([
       manager.prompt(first.id, "first"),
@@ -152,9 +149,10 @@ Deno.test("routes raw updates to each managed session", async () => {
       const events = manager.getEvents(session.id).events;
       if (
         events.length !== 3 ||
-        events.some((event) =>
-          (event.raw as { sessionId: string }).sessionId !==
-            session.acpSessionId
+        events.some(
+          (event) =>
+            (event.raw as { sessionId: string }).sessionId !==
+            session.acpSessionId,
         )
       ) {
         throw new Error(
@@ -167,20 +165,15 @@ Deno.test("routes raw updates to each managed session", async () => {
   }
 });
 
-Deno.test("starts a fake ACP agent and returns streamed prompt text", async () => {
+test("starts a fake ACP agent and returns streamed prompt text", async () => {
   const manager = new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        "tests/fixtures/fake_acp_agent.ts",
-      ],
+      command: process.execPath,
+      args: ["tests/fixtures/fake_acp_agent.ts"],
     },
   });
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const response = await manager.prompt(session.id, "hello");
     if (response.text !== "fake reply") {
       throw new Error(`Unexpected text: ${response.text}`);
@@ -192,7 +185,8 @@ Deno.test("starts a fake ACP agent and returns streamed prompt text", async () =
     if (
       journal.events.length !== 1 ||
       journal.events[0].kind !== "agent_message_chunk"
-    ) throw new Error("Expected one normalized text event");
+    )
+      throw new Error("Expected one normalized text event");
     if (!journal.events[0].raw) {
       throw new Error("Expected original ACP notification to be retained");
     }
@@ -201,20 +195,15 @@ Deno.test("starts a fake ACP agent and returns streamed prompt text", async () =
   }
 });
 
-Deno.test("polls and cancels an asynchronous prompt", async () => {
+test("polls and cancels an asynchronous prompt", async () => {
   const manager = new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        "tests/fixtures/fake_acp_agent.ts",
-      ],
+      command: process.execPath,
+      args: ["tests/fixtures/fake_acp_agent.ts"],
     },
   });
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const prompt = manager.beginPrompt(session.id, "wait");
     const pending = await manager.waitPrompt(session.id, prompt.id, 0);
     if (pending.state !== "running") {
@@ -229,58 +218,50 @@ Deno.test("polls and cancels an asynchronous prompt", async () => {
   }
 });
 
-Deno.test("cancellation remains authoritative if the prompt then errors", async () => {
+test("cancellation remains authoritative if the prompt then errors", async () => {
   const manager = new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        fakeFixturePath(),
-      ],
+      command: process.execPath,
+      args: [fakeFixturePath()],
     },
   });
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const prompt = manager.beginPrompt(session.id, "cancel then fail");
     const cancelled = await manager.cancelPrompt(session.id, prompt.id);
     await prompt.done;
     if (cancelled.state !== "cancelled" || prompt.state !== "cancelled") {
-      throw new Error(
-        `Prompt failure overwrote cancellation: ${prompt.state}`,
-      );
+      throw new Error(`Prompt failure overwrote cancellation: ${prompt.state}`);
     }
   } finally {
     await manager.closeAll();
   }
 });
 
-Deno.test("late ACP output after cancellation is journaled but cannot complete the prompt", async () => {
+test("late ACP output after cancellation is journaled but cannot complete the prompt", async () => {
   const manager = new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: ["run", "--allow-env", "--allow-read", fakeFixturePath()],
+      command: process.execPath,
+      args: [fakeFixturePath()],
     },
   });
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const prompt = manager.beginPrompt(session.id, "cancel then late update");
     await manager.cancelPrompt(session.id, prompt.id);
     await prompt.done;
     const journal = manager.getEvents(session.id);
     if (
-      prompt.state !== "cancelled" || prompt.text ||
+      prompt.state !== "cancelled" ||
+      prompt.text ||
       !journal.events.some((event) => event.kind === "agent_message_chunk")
     ) {
       throw new Error(
-        `Late output changed cancelled state: ${
-          JSON.stringify({
-            state: prompt.state,
-            text: prompt.text,
-            events: journal.events.map((event) => event.kind),
-          })
-        }`,
+        `Late output changed cancelled state: ${JSON.stringify({
+          state: prompt.state,
+          text: prompt.text,
+          events: journal.events.map((event) => event.kind),
+        })}`,
       );
     }
   } finally {
@@ -288,20 +269,15 @@ Deno.test("late ACP output after cancellation is journaled but cannot complete t
   }
 });
 
-Deno.test("closing an active session cancels its prompt before cleanup", async () => {
+test("closing an active session cancels its prompt before cleanup", async () => {
   const manager = new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        fakeFixturePath(),
-      ],
+      command: process.execPath,
+      args: [fakeFixturePath()],
     },
   });
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const prompt = manager.beginPrompt(session.id, "wait");
     await manager.close(session.id);
     await prompt.done;
@@ -315,20 +291,15 @@ Deno.test("closing an active session cancels its prompt before cleanup", async (
   }
 });
 
-Deno.test("cancelling after completed prompt preserves completion", async () => {
+test("cancelling after completed prompt preserves completion", async () => {
   const manager = new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        fakeFixturePath(),
-      ],
+      command: process.execPath,
+      args: [fakeFixturePath()],
     },
   });
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const prompt = manager.beginPrompt(session.id, "hello");
     await prompt.done;
     const result = await manager.cancelPrompt(session.id, prompt.id);
@@ -340,7 +311,7 @@ Deno.test("cancelling after completed prompt preserves completion", async () => 
   }
 });
 
-Deno.test("closed sessions release capacity while active sessions are retained", async () => {
+test("closed sessions release capacity while active sessions are retained", async () => {
   if (DEFAULT_MAX_MANAGED_SESSIONS !== 8) {
     throw new Error(
       `Production session capacity changed: ${DEFAULT_MAX_MANAGED_SESSIONS}`,
@@ -349,8 +320,8 @@ Deno.test("closed sessions release capacity while active sessions are retained",
   const manager = new SessionManager(
     {
       fake: {
-        command: Deno.execPath(),
-        args: ["run", "--no-check", "tests/fixtures/raw_wire_acp_agent.ts"],
+        command: process.execPath,
+        args: ["tests/fixtures/raw_wire_acp_agent.ts"],
       },
     },
     undefined,
@@ -359,29 +330,27 @@ Deno.test("closed sessions release capacity while active sessions are retained",
   );
   const sessionCount = () => manager.sessionCount;
   try {
-    const first = await manager.start("fake", Deno.cwd());
-    const second = await manager.start("fake", Deno.cwd());
+    const first = await manager.start("fake", process.cwd());
+    const second = await manager.start("fake", process.cwd());
     if (sessionCount() !== 2) {
       throw new Error("The test session capacity was not filled");
     }
 
     let rejected = false;
     try {
-      await manager.start("missing-agent", Deno.cwd());
+      await manager.start("missing-agent", process.cwd());
     } catch (error) {
       rejected = String(error).includes("Active session limit (2) reached");
     }
     if (!rejected || sessionCount() !== 2) {
-      throw new Error(
-        "Capacity was not rejected before agent lookup/startup",
-      );
+      throw new Error("Capacity was not rejected before agent lookup/startup");
     }
 
     await manager.close(first.id);
     if (sessionCount() !== 1) {
       throw new Error("Closing a session did not release capacity");
     }
-    const replacement = await manager.start("fake", Deno.cwd());
+    const replacement = await manager.start("fake", process.cwd());
     if (sessionCount() !== 2) {
       throw new Error("A closed session continued to consume capacity");
     }
@@ -395,30 +364,22 @@ Deno.test("closed sessions release capacity while active sessions are retained",
   }
 });
 
-Deno.test("a hung ACP session/close cannot block child cleanup", async () => {
+test("a hung ACP session/close cannot block child cleanup", async () => {
   const manager = new SessionManager(
     {
       fake: {
-        command: Deno.execPath(),
-        args: [
-          "run",
-          "--allow-env",
-          "--allow-read",
-          fakeFixturePath(),
-          "--session-close-hang",
-        ],
+        command: process.execPath,
+        args: [fakeFixturePath(), "--session-close-hang"],
       },
     },
     DEFAULT_SESSION_START_TIMEOUT_MS,
     40,
   );
   try {
-    const session = await manager.start("fake", Deno.cwd());
+    const session = await manager.start("fake", process.cwd());
     const startedAt = performance.now();
     await manager.close(session.id);
-    if (
-      performance.now() - startedAt > 1_000 || manager.sessionCount !== 0
-    ) {
+    if (performance.now() - startedAt > 1_000 || manager.sessionCount !== 0) {
       throw new Error("Hung session/close blocked cleanup or retained state");
     }
   } finally {
@@ -426,22 +387,17 @@ Deno.test("a hung ACP session/close cannot block child cleanup", async () => {
   }
 });
 
-Deno.test("holds operator permission until an advertised choice is resolved", async () => {
+test("holds operator permission until an advertised choice is resolved", async () => {
   const manager = new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        "tests/fixtures/fake_acp_agent.ts",
-      ],
+      command: process.execPath,
+      args: ["tests/fixtures/fake_acp_agent.ts"],
     },
   });
   try {
     const session = await manager.start(
       "fake",
-      Deno.cwd(),
+      process.cwd(),
       {},
       undefined,
       "operator",
@@ -455,8 +411,8 @@ Deno.test("holds operator permission until an advertised choice is resolved", as
     ) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    const pending =
-      manager.getSessionSnapshot(session.id).pendingPermissions[0];
+    const pending = manager.getSessionSnapshot(session.id)
+      .pendingPermissions[0];
     if (!pending) throw new Error("Permission request was not exposed");
     manager.resolvePermission(session.id, pending.id, "reject");
     await prompt.done;
@@ -468,20 +424,19 @@ Deno.test("holds operator permission until an advertised choice is resolved", as
   }
 });
 
-Deno.test("loads a session when the fake agent advertises support", async () => {
+test("loads a session when the fake agent advertises support", async () => {
   const manager = new SessionManager({
     fake: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        "tests/fixtures/fake_acp_agent.ts",
-      ],
+      command: process.execPath,
+      args: ["tests/fixtures/fake_acp_agent.ts"],
     },
   });
   try {
-    const session = await manager.load("fake", "existing-session", Deno.cwd());
+    const session = await manager.load(
+      "fake",
+      "existing-session",
+      process.cwd(),
+    );
     if (session.acpSessionId !== "existing-session") {
       throw new Error("Loaded session ID was not retained");
     }
@@ -494,25 +449,19 @@ Deno.test("loads a session when the fake agent advertises support", async () => 
   }
 });
 
-Deno.test("advertises and uses ACP boolean configuration options", async () => {
+test("advertises and uses ACP boolean configuration options", async () => {
   const manager = new SessionManager({
     bool: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        "tests/fixtures/fake_acp_agent.ts",
-        "--advertise-bool",
-      ],
+      command: process.execPath,
+      args: ["tests/fixtures/fake_acp_agent.ts", "--advertise-bool"],
     },
   });
   try {
-    const session = await manager.start("bool", Deno.cwd(), {
+    const session = await manager.start("bool", process.cwd(), {
       "use-fast-mode": "true",
     });
-    const fastMode = session.configOptions.find((option) =>
-      option.id === "use-fast-mode"
+    const fastMode = session.configOptions.find(
+      (option) => option.id === "use-fast-mode",
     );
     if (fastMode?.currentValue !== true) {
       throw new Error("String config value was not sent as an ACP boolean");
@@ -524,7 +473,7 @@ Deno.test("advertises and uses ACP boolean configuration options", async () => {
     );
     if (
       updated.find((option) => option.id === "use-fast-mode")?.currentValue !==
-        false
+      false
     ) {
       throw new Error("Interactive boolean config update did not reach ACP");
     }

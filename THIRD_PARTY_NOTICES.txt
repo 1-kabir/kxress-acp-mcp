@@ -1,4 +1,4 @@
-acp-mcp includes the runtime dependencies listed below in its native release binaries.
+acp-mcp bundles the runtime dependencies listed below in its release packages.
 
 The original acp-mcp source is licensed under WTFPL; this does not change the
 separate licenses of third-party code included in the binaries.

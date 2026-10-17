@@ -1,3 +1,4 @@
+import process from "node:process";
 import type { AgentDefinition, AgentMap } from "../agents/config.ts";
 import type {
   AgentModelPolicy,
@@ -141,7 +142,8 @@ function configOptionsFromUpdate(
   if (
     !Array.isArray(options) ||
     !options.every((option) => option !== null && typeof option === "object")
-  ) return undefined;
+  )
+    return undefined;
   return options as Array<Record<string, unknown>>;
 }
 
@@ -154,13 +156,13 @@ interface PendingPermission {
   id: string;
   toolCall: unknown;
   options: Array<{ optionId: string; kind: string; name: string }>;
-  resolve: (
-    value: {
-      outcome: { outcome: "selected"; optionId: string } | {
-        outcome: "cancelled";
-      };
-    },
-  ) => void;
+  resolve: (value: {
+    outcome:
+      | { outcome: "selected"; optionId: string }
+      | {
+          outcome: "cancelled";
+        };
+  }) => void;
 }
 
 export class SessionManager {
@@ -169,12 +171,22 @@ export class SessionManager {
     string,
     Set<ConfigOptionWaiter>
   >();
+  private agents: AgentMap;
+  private readonly startupTimeoutMs: number;
+  private readonly closeRequestTimeoutMs: number;
+  private readonly maxSessions: number;
+
   constructor(
-    private agents: AgentMap,
-    private readonly startupTimeoutMs = DEFAULT_SESSION_START_TIMEOUT_MS,
-    private readonly closeRequestTimeoutMs = DEFAULT_SESSION_CLOSE_TIMEOUT_MS,
-    private readonly maxSessions = DEFAULT_MAX_MANAGED_SESSIONS,
-  ) {}
+    agents: AgentMap,
+    startupTimeoutMs = DEFAULT_SESSION_START_TIMEOUT_MS,
+    closeRequestTimeoutMs = DEFAULT_SESSION_CLOSE_TIMEOUT_MS,
+    maxSessions = DEFAULT_MAX_MANAGED_SESSIONS,
+  ) {
+    this.agents = agents;
+    this.startupTimeoutMs = startupTimeoutMs;
+    this.closeRequestTimeoutMs = closeRequestTimeoutMs;
+    this.maxSessions = maxSessions;
+  }
 
   get sessionCount(): number {
     return this.sessions.size;
@@ -186,7 +198,7 @@ export class SessionManager {
 
   listSessionSnapshots(): SessionSnapshot[] {
     return [...this.sessions.values()].map((session) =>
-      this.sessionSnapshot(session)
+      this.sessionSnapshot(session),
     );
   }
 
@@ -196,11 +208,13 @@ export class SessionManager {
 
   recordModelSelection(
     sessionId: string,
-    selection: {
-      model: string;
-      modelSize?: ModelSize;
-      thinkingEffort?: ThinkingEffort;
-    } | undefined,
+    selection:
+      | {
+          model: string;
+          modelSize?: ModelSize;
+          thinkingEffort?: ThinkingEffort;
+        }
+      | undefined,
   ): void {
     const session = this.requireSession(sessionId);
     session.modelSelection = selection ? { ...selection } : undefined;
@@ -231,23 +245,23 @@ export class SessionManager {
       modelSelection: session.modelSelection
         ? { ...session.modelSelection }
         : undefined,
-      pendingPermissions: [...session.pendingPermissions.values()].map((
-        pending,
-      ) => ({
-        id: pending.id,
-        toolCall: structuredClone(pending.toolCall),
-        options: structuredClone(pending.options),
-      })),
+      pendingPermissions: [...session.pendingPermissions.values()].map(
+        (pending) => ({
+          id: pending.id,
+          toolCall: structuredClone(pending.toolCall),
+          options: structuredClone(pending.options),
+        }),
+      ),
       prompt: session.prompt
         ? {
-          id: session.prompt.id,
-          state: session.prompt.state,
-          text: session.prompt.text,
-          stopReason: session.prompt.stopReason,
-          error: session.prompt.error,
-          errorCode: session.prompt.errorCode,
-          errorData: structuredClone(session.prompt.errorData),
-        }
+            id: session.prompt.id,
+            state: session.prompt.state,
+            text: session.prompt.text,
+            stopReason: session.prompt.stopReason,
+            error: session.prompt.error,
+            errorCode: session.prompt.errorCode,
+            errorData: structuredClone(session.prompt.errorData),
+          }
         : undefined,
       nextSequence: session.nextSequence,
     };
@@ -314,7 +328,7 @@ export class SessionManager {
 
   start(
     agentId: string,
-    cwd = Deno.cwd(),
+    cwd = process.cwd(),
     config: Record<string, string> = {},
     modeId?: string,
     permissionPolicy: PermissionPolicy = "read_only",
@@ -378,8 +392,8 @@ export class SessionManager {
     let wakeStartupUpdate: (() => void) | undefined;
     const driver = createProtocolDriver(protocol, def, process, {
       update: (update) => {
-        const managed = [...this.sessions.values()].find((item) =>
-          item.acpSessionId === update.sessionId
+        const managed = [...this.sessions.values()].find(
+          (item) => item.acpSessionId === update.sessionId,
         );
         if (!managed) {
           earlyUpdates.push(update);
@@ -412,18 +426,22 @@ export class SessionManager {
           }
         };
         let modes = sessionResponse.modes;
-        const modelConfigIds = new Set(configOptions.flatMap((option) => {
-          const id = typeof option.id === "string" ? option.id : undefined;
-          if (
-            id &&
-            (option.category === "model" ||
-              ((option.category === undefined || option.category === null) &&
-                id === def.modelConfigId))
-          ) return [id];
-          return [];
-        }));
-        const desired = Object.entries(config).sort(([a], [b]) =>
-          Number(modelConfigIds.has(b)) - Number(modelConfigIds.has(a))
+        const modelConfigIds = new Set(
+          configOptions.flatMap((option) => {
+            const id = typeof option.id === "string" ? option.id : undefined;
+            if (
+              id &&
+              (option.category === "model" ||
+                ((option.category === undefined || option.category === null) &&
+                  id === def.modelConfigId))
+            )
+              return [id];
+            return [];
+          }),
+        );
+        const desired = Object.entries(config).sort(
+          ([a], [b]) =>
+            Number(modelConfigIds.has(b)) - Number(modelConfigIds.has(a)),
         );
         for (const [configId, value] of desired) {
           applyEarlyConfigUpdates();
@@ -449,14 +467,16 @@ export class SessionManager {
             throw new Error(`Unknown config option: ${configId}`);
           }
           if (option?.type === "select" && Array.isArray(option.options)) {
-            const values = (option.options as Array<Record<string, unknown>>)
-              .flatMap((entry) =>
-                Array.isArray(entry.options)
-                  ? entry.options as Array<Record<string, unknown>>
-                  : [entry]
-              );
+            const values = (
+              option.options as Array<Record<string, unknown>>
+            ).flatMap((entry) =>
+              Array.isArray(entry.options)
+                ? (entry.options as Array<Record<string, unknown>>)
+                : [entry],
+            );
             if (
-              values.length && !values.some((entry) => entry.value === value)
+              values.length &&
+              !values.some((entry) => entry.value === value)
             ) {
               throw new Error(
                 `Invalid value '${value}' for config option '${configId}'`,
@@ -472,7 +492,8 @@ export class SessionManager {
           configOptionsEarlyUpdateCursor = earlyUpdates.length;
         }
         if (modeId) {
-          modes = await driver.setMode(acpId, modeId, configOptions, modes) ??
+          modes =
+            (await driver.setMode(acpId, modeId, configOptions, modes)) ??
             modes;
         }
         return {
@@ -573,12 +594,13 @@ export class SessionManager {
   ): { promise: Promise<void>; cancel: () => void } {
     const prompt = this.requirePrompt(sessionId, promptId);
     if (
-      prompt.state !== "running" || prompt.activityVersion !== activityVersion
+      prompt.state !== "running" ||
+      prompt.activityVersion !== activityVersion
     ) {
       return { promise: Promise.resolve(), cancel: () => {} };
     }
     let resolve!: () => void;
-    const promise = new Promise<void>((done) => resolve = done);
+    const promise = new Promise<void>((done) => (resolve = done));
     const waiter = () => {
       prompt.activityWaiters.delete(waiter);
       resolve();
@@ -617,18 +639,20 @@ export class SessionManager {
         text,
       );
       if (record.state === "running") {
-        record.state = record.stopReason === "cancelled"
-          ? "cancelled"
-          : "completed";
+        record.state =
+          record.stopReason === "cancelled" ? "cancelled" : "completed";
       }
     } catch (error) {
       if (record.state === "running") {
         record.state = "failed";
         record.error = error instanceof Error ? error.message : String(error);
         if (
-          error && typeof error === "object" &&
-          "code" in error && typeof error.code === "number"
-        ) record.errorCode = error.code;
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          typeof error.code === "number"
+        )
+          record.errorCode = error.code;
         if (error && typeof error === "object" && "data" in error) {
           record.errorData = error.data;
         }
@@ -678,19 +702,19 @@ export class SessionManager {
   getEvents(sessionId: string, afterSequence = 0, limit = 100) {
     const session = this.requireSession(sessionId);
     return {
-      events: session.events.filter((event) => event.sequence > afterSequence)
-        .slice(0, Math.max(1, Math.min(limit, 500))).map((event) =>
-          structuredClone(event)
-        ),
+      events: session.events
+        .filter((event) => event.sequence > afterSequence)
+        .slice(0, Math.max(1, Math.min(limit, 500)))
+        .map((event) => structuredClone(event)),
       nextSequence: session.nextSequence - 1,
       gap: afterSequence < session.droppedThrough,
       prompt: session.prompt
         ? {
-          id: session.prompt.id,
-          state: session.prompt.state,
-          text: session.prompt.text,
-          stopReason: session.prompt.stopReason,
-        }
+            id: session.prompt.id,
+            state: session.prompt.state,
+            text: session.prompt.text,
+            stopReason: session.prompt.stopReason,
+          }
         : undefined,
     };
   }
@@ -751,9 +775,9 @@ export class SessionManager {
             ? updateEvent.text.text
             : previous + updateEvent.text.text,
         );
-        prompt.text = prompt.messageOrder.map((id) =>
-          prompt.messageText.get(id) ?? ""
-        ).join("");
+        prompt.text = prompt.messageOrder
+          .map((id) => prompt.messageText.get(id) ?? "")
+          .join("");
       }
     }
     if (updateEvent.stopReason && session.prompt?.state === "running") {
@@ -762,8 +786,8 @@ export class SessionManager {
         session.prompt.state = "cancelled";
       } else if (updateEvent.error) {
         session.prompt.state = "failed";
-        session.prompt.error = updateEvent.error?.message ??
-          "ACP prompt failed";
+        session.prompt.error =
+          updateEvent.error?.message ?? "ACP prompt failed";
         session.prompt.errorCode = updateEvent.error?.code;
         session.prompt.errorData = updateEvent.error?.data;
       } else {
@@ -847,7 +871,7 @@ export class SessionManager {
       const values = (option.options as Array<Record<string, unknown>>).flatMap(
         (entry) =>
           Array.isArray(entry.options)
-            ? entry.options as Array<Record<string, unknown>>
+            ? (entry.options as Array<Record<string, unknown>>)
             : [entry],
       );
       if (values.length && !values.some((entry) => entry.value === value)) {
@@ -866,7 +890,8 @@ export class SessionManager {
       option?.category === "model" ||
       configId === session.agentDefinition.modelConfigId ||
       configId === session.agentDefinition.models?.thinkingEffort?.configOption
-    ) session.modelSelection = undefined;
+    )
+      session.modelSelection = undefined;
     return structuredClone(session.configOptions);
   }
 
@@ -885,8 +910,8 @@ export class SessionManager {
     params: AcpPermissionRequest,
     policy: PermissionPolicy,
   ) {
-    const session = [...this.sessions.values()].find((item) =>
-      item.acpSessionId === params.sessionId
+    const session = [...this.sessions.values()].find(
+      (item) => item.acpSessionId === params.sessionId,
     );
     const options = params.options ?? [];
     const choose = (kind: string) =>
@@ -901,13 +926,13 @@ export class SessionManager {
     };
     this.appendEvent(session, "permission_request", { requestId, ...raw }, raw);
     if (policy === "operator") {
-      return await new Promise<
-        {
-          outcome: { outcome: "selected"; optionId: string } | {
-            outcome: "cancelled";
-          };
-        }
-      >((resolve) => {
+      return await new Promise<{
+        outcome:
+          | { outcome: "selected"; optionId: string }
+          | {
+              outcome: "cancelled";
+            };
+      }>((resolve) => {
         session.pendingPermissions.set(requestId, {
           id: requestId,
           toolCall: params.toolCall,
@@ -918,12 +943,13 @@ export class SessionManager {
     }
     const kind = (params.toolCall as { kind?: string | null } | undefined)
       ?.kind;
-    const permit = policy === "allow_all" ||
+    const permit =
+      policy === "allow_all" ||
       (policy === "read_only" &&
         ["read", "search", "fetch", "think"].includes(kind ?? ""));
     const option = permit
-      ? choose("allow_once") ?? choose("allow_always")
-      : choose("reject_once") ?? choose("reject_always");
+      ? (choose("allow_once") ?? choose("allow_always"))
+      : (choose("reject_once") ?? choose("reject_always"));
     return {
       outcome: option
         ? { outcome: "selected" as const, optionId: option.optionId }
@@ -947,9 +973,11 @@ export class SessionManager {
       session.permissionLease = undefined;
       const current = this.sessions.get(sessionId);
       if (
-        current !== session || current.prompt?.state !== "running" ||
+        current !== session ||
+        current.prompt?.state !== "running" ||
         !current.pendingPermissions.has(pending.id)
-      ) return;
+      )
+        return;
       void this.close(sessionId).catch(() => undefined);
     }, leaseTimeoutMs);
 
@@ -980,21 +1008,19 @@ export class SessionManager {
     if (session.prompt?.state === "running") {
       try {
         await this.cancelPrompt(id, session.prompt.id);
-      } catch { /* Closing the connection remains authoritative. */ }
+      } catch {
+        /* Closing the connection remains authoritative. */
+      }
     }
     this.clearPermissionLease(session);
-    for (
-      const waiter of [
-        ...(this.configOptionWaiters.get(id) ?? []),
-      ]
-    ) waiter.finish(session.configOptions);
+    for (const waiter of [...(this.configOptionWaiters.get(id) ?? [])])
+      waiter.finish(session.configOptions);
     this.cancelPendingPermissions(session);
     this.sessions.delete(id);
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
-    const closeRequest = session.driver.closeSession(session.acpSessionId)
-      .catch(
-        () => undefined,
-      );
+    const closeRequest = session.driver
+      .closeSession(session.acpSessionId)
+      .catch(() => undefined);
     await Promise.race([
       closeRequest,
       new Promise<void>((resolve) => {

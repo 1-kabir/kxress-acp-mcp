@@ -61,6 +61,8 @@ Each release package contains the native executable, the `acp-mcp` WTFPL license
 
 The release workflow publishes only when the tag version matches `src/version.ts` and all native builds and smoke tests pass.
 
+A platform-neutral Node package is also attached as `acp-mcp-<version>-node.zip`. It contains the JavaScript bundle and licenses and requires Node.js 24.12.0 or newer.
+
 <details>
 <summary><strong>Windows x86_64</strong></summary>
 
@@ -135,10 +137,10 @@ The macOS binary is unsigned and not notarized.
 
 </details>
 
-The repository installer can also install from a directory that contains the release archive, checksum, and target manifest:
+The repository installer can also install from a directory that contains the native release archive, checksum, and target manifest:
 
 ```sh
-deno task install --release-dir ./acp-mcp-release-assets
+npm run install-release -- --release-dir ./acp-mcp-release-assets
 ```
 
 It verifies the archive and embedded executable before it replaces the installed binary.
@@ -153,7 +155,13 @@ Default install locations:
 
 On Linux and macOS, the installer reports when `$HOME/.local/bin` is not on `PATH`. It does not modify shell configuration.
 
-The installed executable is native. Deno, mise, and the source checkout are not required at runtime.
+The installed executable is native and includes the Node.js runtime. The Node ZIP runs with the Node.js version installed on the host.
+
+To run the Node package, verify and extract `acp-mcp-<version>-node.zip`, then start `acp-mcp.mjs` with Node.js 24.12.0 or newer:
+
+```sh
+node acp-mcp.mjs --version
+```
 
 > SHA-256 verifies downloaded bytes against a known hash. It does not authenticate the publisher.
 
@@ -708,25 +716,26 @@ Treat downstream ACP agents with the same care as any local process running unde
 
 ## Development
 
-The repository pins Deno `2.9.6` in `mise.toml`.
+The repository pins Node.js 24 in `mise.toml`. Development requires Node.js 24.12.0 or newer; Node.js 26 is used to build native standalone executables.
 
 Mise is development tooling only. It is not a runtime dependency of the installed executable.
 
 Common commands:
 
 ```powershell
-mise exec -- deno task check
-mise exec -- deno task test
-mise exec -- deno lint
-mise exec -- deno fmt --check
-mise exec -- deno task build
-mise exec -- deno task release
+npm ci
+npm run check
+npm test
+npm run lint
+npm run format:check
+npm run build
+npm run release
 ```
 
 Live compatibility checks are also available:
 
 ```text
-deno task compat <agent>
+npm run compat -- <agent>
 ```
 
 Compatibility tasks may consume provider quota.

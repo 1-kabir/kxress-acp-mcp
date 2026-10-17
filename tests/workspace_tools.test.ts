@@ -1,10 +1,14 @@
+import { test } from "node:test";
+import process from "node:process";
+import { ProcessCommand } from "#proc";
+import * as nodeFs from "#fs";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { createWorkspaceSnapshot } from "../src/workspaces/snapshot.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
 async function command(cwd: string, args: string[]) {
-  const result = await new Deno.Command("git", {
+  const result = await new ProcessCommand("git", {
     args: ["-C", cwd, ...args],
     stdout: "piped",
     stderr: "piped",
@@ -13,55 +17,58 @@ async function command(cwd: string, args: string[]) {
 }
 
 async function sourceRepository() {
-  const source = await Deno.makeTempDir({ prefix: "acp-mcp-workspace-api-" });
+  const source = await nodeFs.makeTempDir({ prefix: "acp-mcp-workspace-api-" });
   await command(source, ["init", "--quiet"]);
-  await Deno.writeTextFile(`${source}/tracked.txt`, "source");
+  await nodeFs.writeText(`${source}/tracked.txt`, "source");
   await command(source, ["add", "tracked.txt"]);
   return source;
 }
 
 async function markStale(path: string) {
   const manifestPath = `${path}.json`;
-  const manifest = JSON.parse(await Deno.readTextFile(manifestPath)) as Record<
+  const manifest = JSON.parse(await nodeFs.readText(manifestPath)) as Record<
     string,
     unknown
   >;
   manifest.createdAt = Date.now() - 48 * 60 * 60 * 1000;
   manifest.ownerPid = 2_147_483_647;
-  await Deno.writeTextFile(manifestPath, JSON.stringify(manifest));
+  await nodeFs.writeText(manifestPath, JSON.stringify(manifest));
 }
 
 async function exists(path: string) {
-  return await Deno.lstat(path).then(() => true).catch(() => false);
+  return await nodeFs
+    .lstat(path)
+    .then(() => true)
+    .catch(() => false);
 }
 
 function join(parent: string, child: string) {
   return `${parent.replace(/[\\/]+$/, "")}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }${child}`;
 }
 
 async function withWorkspaceRoot<T>(fn: () => Promise<T>): Promise<T> {
-  const tempRoot = await Deno.makeTempDir({
+  const tempRoot = await nodeFs.makeTempDir({
     prefix: "acp-mcp-workspace-api-root-",
   });
   const names = ["TEMP", "TMP", "TMPDIR"];
-  const previous = new Map(names.map((name) => [name, Deno.env.get(name)]));
-  for (const name of names) Deno.env.set(name, tempRoot);
+  const previous = new Map(names.map((name) => [name, process.env[name]]));
+  for (const name of names) process.env[name] = tempRoot;
   try {
     return await fn();
   } finally {
     for (const name of names) {
       const value = previous.get(name);
-      if (value === undefined) Deno.env.delete(name);
-      else Deno.env.set(name, value);
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
     }
-    await Deno.remove(tempRoot, { recursive: true });
+    await nodeFs.removePath(tempRoot, { recursive: true });
   }
 }
 
 function connectWorkspaceTools(
-  remove?: typeof Deno.remove,
+  remove?: typeof nodeFs.removePath,
   isProcessAlive?: (pid: number) => boolean | Promise<boolean>,
 ) {
   const manager = new SessionManager({});
@@ -78,18 +85,18 @@ function connectWorkspaceTools(
   }));
 }
 
-Deno.test("MCP workspace tools inspect, explicitly clean, and repeat safely", async () => {
+test("MCP workspace tools inspect, explicitly clean, and repeat safely", async () => {
   await withWorkspaceRoot(async () => {
     const source = await sourceRepository();
     const stale = await createWorkspaceSnapshot(source);
     const recent = await createWorkspaceSnapshot(source);
-    const root = join(Deno.env.get("TEMP")!, "acp-mcp-workspaces");
+    const root = join(process.env["TEMP"]!, "acp-mcp-workspaces");
     const unowned = join(root, "plan-unowned");
     const unknown = join(root, "manual-data");
-    const external = await Deno.makeTempDir({
+    const external = await nodeFs.makeTempDir({
       prefix: "acp-mcp-workspace-api-target-",
     });
-    const outside = await Deno.makeTempDir({
+    const outside = await nodeFs.makeTempDir({
       prefix: "acp-mcp-workspace-api-outside-",
     });
     let mcp:
@@ -99,24 +106,28 @@ Deno.test("MCP workspace tools inspect, explicitly clean, and repeat safely", as
     let server: ReturnType<typeof createMcpServer> | undefined;
     try {
       await markStale(stale.cwd);
-      await Deno.mkdir(unowned);
-      await Deno.mkdir(unknown);
-      await Deno.writeTextFile(join(external, "keep.txt"), "external data");
+      await nodeFs.mkdir(unowned);
+      await nodeFs.mkdir(unknown);
+      await nodeFs.writeText(join(external, "keep.txt"), "external data");
       try {
-        await Deno.symlink(
-          external,
-          join(stale.cwd, "external-symlink"),
-          { type: "dir" },
-        );
+        await nodeFs.symlink(external, join(stale.cwd, "external-symlink"), {
+          type: "dir",
+        });
       } catch (error) {
         if (
-          !(error instanceof Deno.errors.NotCapable) &&
-          !(error instanceof Deno.errors.PermissionDenied)
-        ) throw error;
+          !nodeFs.isErrorCode(error, [
+            "EACCES",
+            "EPERM",
+            "ENOTSUP",
+            "EINVAL",
+          ]) &&
+          !nodeFs.isErrorCode(error, ["EACCES", "EPERM"])
+        )
+          throw error;
       }
-      if (Deno.build.os === "windows") {
+      if (process.platform === "win32") {
         const link = join(stale.cwd, "external-junction");
-        const result = await new Deno.Command("powershell.exe", {
+        const result = await new ProcessCommand("powershell.exe", {
           args: [
             "-NoProfile",
             "-NonInteractive",
@@ -134,15 +145,15 @@ Deno.test("MCP workspace tools inspect, explicitly clean, and repeat safely", as
         undefined,
         () => false,
       ));
-      const toolsReply = await mcp.listTools().response as {
+      const toolsReply = (await mcp.listTools().response) as {
         result?: { tools?: Array<Record<string, unknown>> };
       };
       const tools = toolsReply.result?.tools ?? [];
-      const listing = tools.find((tool) =>
-        tool.name === "list_stale_workspaces"
+      const listing = tools.find(
+        (tool) => tool.name === "list_stale_workspaces",
       );
-      const cleanup = tools.find((tool) =>
-        tool.name === "cleanup_stale_workspaces"
+      const cleanup = tools.find(
+        (tool) => tool.name === "cleanup_stale_workspaces",
       );
       if (!listing || !cleanup) {
         throw new Error("Workspace MCP tools are absent");
@@ -158,19 +169,22 @@ Deno.test("MCP workspace tools inspect, explicitly clean, and repeat safely", as
         cleanupAnnotations.destructiveHint !== true ||
         cleanupAnnotations.idempotentHint !== true ||
         cleanupAnnotations.openWorldHint !== false
-      ) throw new Error("Workspace tool annotations do not match behavior");
+      )
+        throw new Error("Workspace tool annotations do not match behavior");
       const cleanupSchema = cleanup.inputSchema as {
         properties?: Record<string, unknown>;
       };
       if (
         !cleanupSchema.properties?.olderThanMs ||
-        cleanupSchema.properties.path || cleanupSchema.properties.workspacePath
-      ) throw new Error("Cleanup must not accept arbitrary filesystem paths");
+        cleanupSchema.properties.path ||
+        cleanupSchema.properties.workspacePath
+      )
+        throw new Error("Cleanup must not accept arbitrary filesystem paths");
 
-      const unsafeCall = await mcp.callTool("cleanup_stale_workspaces", {
+      const unsafeCall = (await mcp.callTool("cleanup_stale_workspaces", {
         path: outside,
-      }).response as { result?: { isError?: boolean } };
-      if (!unsafeCall.result?.isError || !await exists(outside)) {
+      }).response) as { result?: { isError?: boolean } };
+      if (!unsafeCall.result?.isError || !(await exists(outside))) {
         throw new Error("Cleanup accepted an arbitrary path argument");
       }
 
@@ -179,11 +193,13 @@ Deno.test("MCP workspace tools inspect, explicitly clean, and repeat safely", as
       );
       const candidates = listed.candidates as Array<Record<string, unknown>>;
       if (
-        listed.status !== "completed" || candidates.length !== 1 ||
+        listed.status !== "completed" ||
+        candidates.length !== 1 ||
         candidates[0].workspaceId !== stale.cwd.split(/[\\/]/).at(-1) ||
         candidates[0].kind !== "snapshot" ||
-        (listed.skipped as number) < 2 || !await exists(stale.cwd) ||
-        !await exists(recent.cwd)
+        (listed.skipped as number) < 2 ||
+        !(await exists(stale.cwd)) ||
+        !(await exists(recent.cwd))
       ) {
         throw new Error(
           `Unexpected stale workspace listing: ${JSON.stringify(listed)}`,
@@ -192,21 +208,26 @@ Deno.test("MCP workspace tools inspect, explicitly clean, and repeat safely", as
       if (
         JSON.stringify(candidates).includes("manual-data") ||
         JSON.stringify(candidates).includes("plan-unowned")
-      ) throw new Error("Unowned entries appeared as deletable candidates");
+      )
+        throw new Error("Unowned entries appeared as deletable candidates");
 
       const deleted = parseToolResult(
         await mcp.callTool("cleanup_stale_workspaces", {}).response,
       );
       if (
-        deleted.status !== "completed" || deleted.removed !== 1 ||
-        deleted.failed !== 0 || await exists(stale.cwd) ||
-        !(deleted.entries as Array<Record<string, unknown>>).some((entry) =>
-          entry.workspaceId === stale.cwd.split(/[\\/]/).at(-1) &&
-          entry.status === "removed"
+        deleted.status !== "completed" ||
+        deleted.removed !== 1 ||
+        deleted.failed !== 0 ||
+        (await exists(stale.cwd)) ||
+        !(deleted.entries as Array<Record<string, unknown>>).some(
+          (entry) =>
+            entry.workspaceId === stale.cwd.split(/[\\/]/).at(-1) &&
+            entry.status === "removed",
         ) ||
-        !await exists(recent.cwd) || !await exists(unowned) ||
-        !await exists(unknown) ||
-        await Deno.readTextFile(join(external, "keep.txt")) !== "external data"
+        !(await exists(recent.cwd)) ||
+        !(await exists(unowned)) ||
+        !(await exists(unknown)) ||
+        (await nodeFs.readText(join(external, "keep.txt"))) !== "external data"
       ) {
         throw new Error(
           `Unexpected workspace cleanup result: ${JSON.stringify(deleted)}`,
@@ -225,14 +246,14 @@ Deno.test("MCP workspace tools inspect, explicitly clean, and repeat safely", as
       await server?.close();
       await stale.cleanup().catch(() => {});
       await recent.cleanup().catch(() => {});
-      await Deno.remove(source, { recursive: true });
-      await Deno.remove(external, { recursive: true });
-      await Deno.remove(outside, { recursive: true });
+      await nodeFs.removePath(source, { recursive: true });
+      await nodeFs.removePath(external, { recursive: true });
+      await nodeFs.removePath(outside, { recursive: true });
     }
   });
 });
 
-Deno.test("MCP cleanup reports per-workspace failure and continues", async () => {
+test("MCP cleanup reports per-workspace failure and continues", async () => {
   await withWorkspaceRoot(async () => {
     const source = await sourceRepository();
     const first = await createWorkspaceSnapshot(source);
@@ -243,12 +264,12 @@ Deno.test("MCP cleanup reports per-workspace failure and continues", async () =>
     let manager: SessionManager | undefined;
     let server: ReturnType<typeof createMcpServer> | undefined;
     let failedOnce = false;
-    const remove: typeof Deno.remove = async (path, options) => {
+    const remove: typeof nodeFs.removePath = async (path, options) => {
       if (!failedOnce && options?.recursive === true) {
         failedOnce = true;
         throw new Error("simulated deletion failure");
       }
-      await Deno.remove(path, options);
+      await nodeFs.removePath(path, options);
     };
     try {
       await markStale(first.cwd);
@@ -261,12 +282,13 @@ Deno.test("MCP cleanup reports per-workspace failure and continues", async () =>
         await mcp.callTool("cleanup_stale_workspaces", {}).response,
       );
       if (
-        result.status !== "failed" || result.failed !== 1 ||
+        result.status !== "failed" ||
+        result.failed !== 1 ||
         result.removed !== 1 ||
         (result.failures as Array<Record<string, unknown>>).length !== 1 ||
-        (result.entries as Array<Record<string, unknown>>).filter((entry) =>
-            entry.status === "removed"
-          ).length !== 1 ||
+        (result.entries as Array<Record<string, unknown>>).filter(
+          (entry) => entry.status === "removed",
+        ).length !== 1 ||
         (await exists(first.cwd)) === (await exists(second.cwd))
       ) {
         throw new Error(
@@ -279,7 +301,7 @@ Deno.test("MCP cleanup reports per-workspace failure and continues", async () =>
       await server?.close();
       await first.cleanup().catch(() => {});
       await second.cleanup().catch(() => {});
-      await Deno.remove(source, { recursive: true });
+      await nodeFs.removePath(source, { recursive: true });
     }
   });
 });

@@ -1,4 +1,4 @@
-name: Native releases
+name: Node releases
 
 on:
   push:
@@ -16,7 +16,35 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  node-package:
+    name: Build Node package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Verify release tag
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: node scripts/github_release_assets.ts check-tag
+      - run: npm run check
+      - run: npm test
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run build
+      - run: node scripts/node_archive.ts create
+      - run: node scripts/node_archive.ts stage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-node
+          path: dist/github-release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+
+  native:
     name: Build ${{ matrix.target }}
     strategy:
       fail-fast: false
@@ -29,43 +57,28 @@ jobs:
           - target: macos-arm64
             os: macos-15
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v5
-
-      - uses: denoland/setup-deno@v2.0.5
+      - uses: actions/setup-node@v5
         with:
-          deno-version: 2.9.6
-
+          node-version: 26
+      - run: npm ci
       - name: Verify native macOS ARM64 runner
         if: matrix.target == 'macos-arm64'
-        run: |
-          test "$(uname -m)" = "arm64"
-          deno eval 'if (Deno.build.os !== "darwin" || Deno.build.arch !== "aarch64") throw new Error(`Unexpected runner: ${Deno.build.os}-${Deno.build.arch}`);'
-
+        run: test "$(uname -m)" = "arm64"
       - name: Verify tag matches source version
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
-        run: deno run --allow-read --allow-env=GITHUB_REF_NAME scripts/github_release_assets.ts check-tag
-
+        run: node scripts/github_release_assets.ts check-tag
       - name: Build, validate, and smoke-test native release bundle
         env:
           ACPMCP_EXPECTED_RELEASE_TARGET: ${{ matrix.target }}
-        run: deno task release
-
-      - name: Verify native macOS executable is ARM64 Mach-O
-        if: matrix.target == 'macos-arm64'
-        run: |
-          file dist/acp-mcp
-          file dist/acp-mcp | grep -E 'Mach-O.*arm64'
-
+        run: npm run release
       - name: Stage licensed archive, checksum, and manifest
         env:
           ACPMCP_EXPECTED_RELEASE_TARGET: ${{ matrix.target }}
-        run: deno run --allow-env=ACPMCP_EXPECTED_RELEASE_TARGET --allow-read --allow-write --allow-run scripts/github_release_assets.ts stage
-
+        run: node scripts/github_release_assets.ts stage
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
@@ -76,7 +89,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [node-package, native]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -85,7 +98,6 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true
-
       - name: Create release without replacing an existing tag release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,10 +111,7 @@ jobs:
           fi
           version="${RELEASE_TAG#v}"
           gh release create "$RELEASE_TAG" release-assets/* \
-            --repo "$GH_REPO" \
-            --verify-tag \
-            --generate-notes \
-            --title "acp-mcp $version"
+            --repo "$GH_REPO" --verify-tag --generate-notes --title "acp-mcp $version"
 
   verify-public:
     name: Verify public ${{ matrix.target }} package
@@ -119,25 +128,38 @@ jobs:
           - target: macos-arm64
             os: macos-15
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v5
-
-      - uses: denoland/setup-deno@v2.0.5
+      - uses: actions/setup-node@v5
         with:
-          deno-version: 2.9.6
-
-      - name: Download this target's public release assets
+          node-version: 24
+      - run: npm ci
+      - name: Download public native release assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           mkdir -p dist/public-release
-          gh release download "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir dist/public-release \
-            --pattern "acp-mcp-${GITHUB_REF_NAME#v}-${{ matrix.target }}*"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --dir dist/public-release --pattern "acp-mcp-${GITHUB_REF_NAME#v}-${{ matrix.target }}*"
+      - run: node scripts/verify_public_release.ts dist/public-release ${{ matrix.target }}
 
-      - name: Verify downloaded package and smoke-test native executable
-        run: deno run --allow-env --allow-read --allow-write --allow-run scripts/verify_public_release.ts dist/public-release ${{ matrix.target }}
+  verify-node-package:
+    name: Verify public Node package
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Download public Node release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/public-release
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --dir dist/public-release --pattern "acp-mcp-${GITHUB_REF_NAME#v}-node*"
+      - run: node scripts/verify_public_release.ts dist/public-release node

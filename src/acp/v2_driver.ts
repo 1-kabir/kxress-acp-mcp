@@ -33,23 +33,17 @@ export class V2Driver implements ProtocolDriver {
     readonly process: Awaited<ReturnType<typeof startAgent>>,
     callbacks: ProtocolCallbacks,
   ) {
-    this.app.onRequest(
-      "session/request_permission",
-      ({ params }) => callbacks.permission(normalizePermission(params)),
+    this.app.onRequest("session/request_permission", ({ params }) =>
+      callbacks.permission(normalizePermission(params)),
     );
     const stream = interceptV2SessionUpdates(
       ndJsonStream(process.child.stdin, process.child.stdout),
       (params) => this.receiveUpdate(params, callbacks),
     );
-    this.connection = this.app.connect(
-      stream,
-    );
+    this.connection = this.app.connect(stream);
   }
 
-  private receiveUpdate(
-    params: unknown,
-    callbacks: ProtocolCallbacks,
-  ): void {
+  private receiveUpdate(params: unknown, callbacks: ProtocolCallbacks): void {
     const normalized = normalizeUpdate(params);
     callbacks.update(normalized);
     const turn = this.activeTurns.get(normalized.sessionId);
@@ -72,9 +66,9 @@ export class V2Driver implements ProtocolDriver {
       });
     } catch (error) {
       throw new Error(
-        `ACP v2 required; initialize failed or returned an incompatible protocol response: ${
-          String(error)
-        }`,
+        `ACP v2 required; initialize failed or returned an incompatible protocol response: ${String(
+          error,
+        )}`,
       );
     }
     if (response.protocolVersion !== 2) {
@@ -165,9 +159,9 @@ export class V2Driver implements ProtocolDriver {
     if (option?.type === "boolean") {
       if (value !== "true" && value !== "false") {
         throw new Error(
-          `Boolean config option '${
-            String(option.id)
-          }' must be 'true' or 'false'`,
+          `Boolean config option '${String(
+            option.id,
+          )}' must be 'true' or 'false'`,
         );
       }
       type = "boolean";
@@ -224,11 +218,12 @@ function normalizePermission(params: {
   options: Array<{ optionId: string; kind: string; name: string }>;
 }): AcpPermissionRequest {
   const subject = params.subject;
-  const toolCall = subject?.type === "tool_call"
-    ? subject.toolCall
-    : subject?.type === "command"
-    ? { kind: "execute", ...subject }
-    : { kind: "other", ...(subject ?? {}) };
+  const toolCall =
+    subject?.type === "tool_call"
+      ? subject.toolCall
+      : subject?.type === "command"
+        ? { kind: "execute", ...subject }
+        : { kind: "other", ...(subject ?? {}) };
   return {
     sessionId: params.sessionId,
     title: params.title,
@@ -238,44 +233,44 @@ function normalizePermission(params: {
 }
 
 function normalizeUpdate(value: unknown): NormalizedAcpUpdate {
-  const params = value && typeof value === "object"
-    ? value as { sessionId?: unknown; update?: unknown }
-    : {};
-  const update = params.update && typeof params.update === "object"
-    ? params.update as Record<string, unknown>
-    : {};
-  const kind = typeof update.sessionUpdate === "string"
-    ? update.sessionUpdate
-    : "unknown";
+  const params =
+    value && typeof value === "object"
+      ? (value as { sessionId?: unknown; update?: unknown })
+      : {};
+  const update =
+    params.update && typeof params.update === "object"
+      ? (params.update as Record<string, unknown>)
+      : {};
+  const kind =
+    typeof update.sessionUpdate === "string" ? update.sessionUpdate : "unknown";
   let text: NormalizedAcpUpdate["text"];
   if (kind === "agent_message_chunk") {
     const content = update.content as { type?: string; text?: string };
     if (content?.type === "text") {
       text = {
-        messageId: typeof update.messageId === "string"
-          ? update.messageId
-          : undefined,
+        messageId:
+          typeof update.messageId === "string" ? update.messageId : undefined,
         text: content.text ?? "",
         replace: false,
       };
     }
   } else if (kind === "agent_message") {
     const content = Array.isArray(update.content) ? update.content : [];
-    const messageText = content.flatMap((item) => {
-      const block = item as { type?: string; text?: string };
-      return block.type === "text" ? [block.text ?? ""] : [];
-    }).join("");
+    const messageText = content
+      .flatMap((item) => {
+        const block = item as { type?: string; text?: string };
+        return block.type === "text" ? [block.text ?? ""] : [];
+      })
+      .join("");
     text = {
-      messageId: typeof update.messageId === "string"
-        ? update.messageId
-        : undefined,
+      messageId:
+        typeof update.messageId === "string" ? update.messageId : undefined,
       text: messageText,
       replace: true,
     };
   }
-  const state = kind === "state_update"
-    ? (update as { state?: string }).state
-    : undefined;
+  const state =
+    kind === "state_update" ? (update as { state?: string }).state : undefined;
   return {
     sessionId: typeof params.sessionId === "string" ? params.sessionId : "",
     kind,
@@ -287,10 +282,11 @@ function normalizeUpdate(value: unknown): NormalizedAcpUpdate {
       : {}),
     ...(state === "idle" && update.stopReason === "error"
       ? {
-        error: update.error && typeof update.error === "object"
-          ? update.error as NormalizedAcpUpdate["error"]
-          : { message: "ACP v2 prompt failed" },
-      }
+          error:
+            update.error && typeof update.error === "object"
+              ? (update.error as NormalizedAcpUpdate["error"])
+              : { message: "ACP v2 prompt failed" },
+        }
       : {}),
   };
 }
@@ -314,7 +310,7 @@ function flattenOptions(value: unknown): Array<Record<string, unknown>> {
     if (!item || typeof item !== "object") return [];
     const entry = item as Record<string, unknown>;
     return Array.isArray(entry.options)
-      ? entry.options as Array<Record<string, unknown>>
+      ? (entry.options as Array<Record<string, unknown>>)
       : [entry];
   });
 }

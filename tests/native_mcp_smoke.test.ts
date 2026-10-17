@@ -1,19 +1,23 @@
+import { test } from "node:test";
+import process from "node:process";
+import { ProcessCommand } from "#proc";
+import * as nodeFs from "#fs";
 import { VERSION } from "../src/version.ts";
 
-const executable = Deno.env.get("ACPMCP_NATIVE_EXECUTABLE");
+const executable = process.env["ACPMCP_NATIVE_EXECUTABLE"];
 
-Deno.test({
+test({
   name: "native product works outside the checkout and serves MCP tools",
-  ignore: !executable,
+  skip: !executable,
   fn: async () => {
     if (!executable) throw new Error("Native executable path is required");
-    const cwd = await Deno.makeTempDir({ prefix: "acp-mcp-native-smoke-" });
+    const cwd = await nodeFs.makeTempDir({ prefix: "acp-mcp-native-smoke-" });
     try {
       const configPath = `${cwd}${
-        Deno.build.os === "windows" ? "\\" : "/"
+        process.platform === "win32" ? "\\" : "/"
       }release smoke config.json`;
-      await Deno.writeTextFile(configPath, JSON.stringify({ agents: {} }));
-      const version = await new Deno.Command(executable, {
+      await nodeFs.writeText(configPath, JSON.stringify({ agents: {} }));
+      const version = await new ProcessCommand(executable, {
         args: ["--version"],
         cwd,
         stdout: "piped",
@@ -25,7 +29,7 @@ Deno.test({
       ) {
         throw new Error("Native version command failed");
       }
-      const help = await new Deno.Command(executable, {
+      const help = await new ProcessCommand(executable, {
         args: ["--help"],
         cwd,
         stdout: "piped",
@@ -33,23 +37,27 @@ Deno.test({
       }).output();
       if (
         !help.success ||
-        !new TextDecoder().decode(help.stdout).includes(
-          "acp-mcp doctor [--config <path>] [--json]",
-        ) || help.stderr.length
-      ) throw new Error("Native help output did not match the CLI");
+        !new TextDecoder()
+          .decode(help.stdout)
+          .includes("acp-mcp doctor [--config <path>] [--json]") ||
+        help.stderr.length
+      )
+        throw new Error("Native help output did not match the CLI");
 
-      const unknown = await new Deno.Command(executable, {
+      const unknown = await new ProcessCommand(executable, {
         args: ["unknown-command"],
         cwd,
         stdout: "piped",
         stderr: "piped",
       }).output();
       if (
-        unknown.code !== 2 || unknown.stdout.length ||
+        unknown.code !== 2 ||
+        unknown.stdout.length ||
         !new TextDecoder().decode(unknown.stderr).includes("Unknown command")
-      ) throw new Error("Native unknown-command behavior was incorrect");
+      )
+        throw new Error("Native unknown-command behavior was incorrect");
 
-      const doctor = await new Deno.Command(executable, {
+      const doctor = await new ProcessCommand(executable, {
         args: ["doctor", "--json"],
         cwd,
         stdout: "piped",
@@ -59,17 +67,19 @@ Deno.test({
         new TextDecoder().decode(doctor.stdout),
       ) as { version?: string; status?: string; checks?: unknown[] };
       if (
-        doctor.code !== 0 && doctor.code !== 1 ||
+        (doctor.code !== 0 && doctor.code !== 1) ||
         doctorReport.version !== VERSION ||
         !["healthy", "warnings", "errors"].includes(
           doctorReport.status ?? "",
-        ) || !Array.isArray(doctorReport.checks)
-      ) throw new Error("Native offline doctor output was invalid");
+        ) ||
+        !Array.isArray(doctorReport.checks)
+      )
+        throw new Error("Native offline doctor output was invalid");
 
       const missingConfig = `${cwd}${
-        Deno.build.os === "windows" ? "\\" : "/"
+        process.platform === "win32" ? "\\" : "/"
       }missing config.json`;
-      const startupFailure = await new Deno.Command(executable, {
+      const startupFailure = await new ProcessCommand(executable, {
         args: ["--config", missingConfig],
         cwd,
         stdout: "piped",
@@ -78,7 +88,8 @@ Deno.test({
       const startupStdout = new TextDecoder().decode(startupFailure.stdout);
       const startupStderr = new TextDecoder().decode(startupFailure.stderr);
       if (
-        startupFailure.success || startupStdout !== "" ||
+        startupFailure.success ||
+        startupStdout !== "" ||
         !startupStderr.includes("Explicit config file does not exist")
       ) {
         throw new Error(
@@ -86,7 +97,7 @@ Deno.test({
         );
       }
 
-      const child = new Deno.Command(executable, {
+      const child = new ProcessCommand(executable, {
         args: ["--config", configPath],
         cwd,
         stdin: "piped",
@@ -151,7 +162,7 @@ Deno.test({
             setTimeout(
               () => reject(new Error("Native server did not exit")),
               10_000,
-            )
+            ),
           ),
         ]);
         if (!status.success) {
@@ -160,21 +171,28 @@ Deno.test({
       } finally {
         try {
           writer.releaseLock();
-        } catch { /* already closed */ }
+        } catch {
+          /* already closed */
+        }
         try {
           reader.releaseLock();
-        } catch { /* child already exited */ }
+        } catch {
+          /* child already exited */
+        }
         const exited = await Promise.race([
-          child.status.then(() => true, () => true),
+          child.status.then(
+            () => true,
+            () => true,
+          ),
           new Promise<boolean>((resolve) =>
-            setTimeout(() => resolve(false), 50)
+            setTimeout(() => resolve(false), 50),
           ),
         ]);
         if (!exited) child.kill("SIGKILL");
         await child.status.catch(() => undefined);
       }
     } finally {
-      await Deno.remove(cwd, { recursive: true });
+      await nodeFs.removePath(cwd, { recursive: true });
     }
   },
 });

@@ -1,3 +1,4 @@
+import { test } from "node:test";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { connectMcp } from "./helpers/mcp_wire.ts";
@@ -109,12 +110,12 @@ const expectedAnnotations: Record<
   },
 };
 
-Deno.test("every public MCP tool explicitly advertises accurate annotations", async () => {
+test("every public MCP tool explicitly advertises accurate annotations", async () => {
   const manager = new SessionManager({});
   const server = createMcpServer({}, manager);
   const mcp = await connectMcp(server);
   try {
-    const wire = await mcp.listTools().response as {
+    const wire = (await mcp.listTools().response) as {
       result?: { tools?: Array<Record<string, unknown>> };
     };
     const tools = wire.result?.tools ?? [];
@@ -122,9 +123,9 @@ Deno.test("every public MCP tool explicitly advertises accurate annotations", as
     const expectedNames = Object.keys(expectedAnnotations).sort();
     if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
       throw new Error(
-        `MCP tool list changed; review annotation decisions: ${
-          JSON.stringify(actualNames)
-        }`,
+        `MCP tool list changed; review annotation decisions: ${JSON.stringify(
+          actualNames,
+        )}`,
       );
     }
 
@@ -137,14 +138,12 @@ Deno.test("every public MCP tool explicitly advertises accurate annotations", as
         throw new Error(`${name} has no explicit tool annotations`);
       }
       const expected = expectedAnnotations[name];
-      for (
-        const key of [
-          "readOnlyHint",
-          "destructiveHint",
-          "idempotentHint",
-          "openWorldHint",
-        ] as const
-      ) {
+      for (const key of [
+        "readOnlyHint",
+        "destructiveHint",
+        "idempotentHint",
+        "openWorldHint",
+      ] as const) {
         if (typeof annotations[key] !== "boolean") {
           throw new Error(`${name}.${key} must be explicitly boolean`);
         }

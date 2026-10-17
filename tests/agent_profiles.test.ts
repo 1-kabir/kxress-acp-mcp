@@ -1,65 +1,81 @@
+import { test } from "node:test";
+import process from "node:process";
+import * as nodeFs from "#fs";
 import { loadAgents } from "../src/agents/config.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { findExecutablePath, startAgent } from "../src/runtime/process.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
-Deno.test("built-in profiles describe ACP launch routes without vendor behavior", async () => {
-  const dir = await Deno.makeTempDir();
+test("built-in profiles describe ACP launch routes without vendor behavior", async () => {
+  const dir = await nodeFs.makeTempDir();
   const configPath = `${dir}/config.json`;
   try {
-    await Deno.writeTextFile(configPath, JSON.stringify({ agents: {} }));
+    await nodeFs.writeText(configPath, JSON.stringify({ agents: {} }));
     const agents = await loadAgents(configPath);
     if (
       agents.opencode.command !== "opencode" ||
       JSON.stringify(agents.opencode.args) !== JSON.stringify(["acp"])
-    ) throw new Error("OpenCode native ACP launch changed");
+    )
+      throw new Error("OpenCode native ACP launch changed");
     if (
-      agents.codex.command !== "codex-acp" || agents.codex.args.length !== 0 ||
-      agents.codex.env || agents.codex.modelConfigId ||
-      agents.codex.modelEnrichment || agents.codex.failureClassifier
-    ) throw new Error("Codex profile is not a plain ACP adapter profile");
+      agents.codex.command !== "codex-acp" ||
+      agents.codex.args.length !== 0 ||
+      agents.codex.env ||
+      agents.codex.modelConfigId ||
+      agents.codex.modelEnrichment ||
+      agents.codex.failureClassifier
+    )
+      throw new Error("Codex profile is not a plain ACP adapter profile");
     if (
       agents.claude.command !== "claude-agent-acp" ||
       agents.claude.args.length !== 0 ||
-      agents.claude.displayName !== "Claude Agent ACP" || agents.claude.env ||
+      agents.claude.displayName !== "Claude Agent ACP" ||
+      agents.claude.env ||
       JSON.stringify(agents.claude.protocolEnv?.v2) !==
         JSON.stringify({ CLAUDE_AGENT_ACP_EXPERIMENTAL_V2: "1" }) ||
-      agents.claude.modelConfigId || agents.claude.modelEnrichment ||
+      agents.claude.modelConfigId ||
+      agents.claude.modelEnrichment ||
       agents.claude.failureClassifier
-    ) throw new Error("Claude profile is not a plain ACP adapter profile");
-    const expectedAntigravityCommand = Deno.build.os === "windows"
-      ? "agy_acp_server"
-      : "agy_acp_server.par";
-    const expectedAntigravityArgs = Deno.build.os === "linux" ? ["--uid="] : [];
+    )
+      throw new Error("Claude profile is not a plain ACP adapter profile");
+    const expectedAntigravityCommand =
+      process.platform === "win32" ? "agy_acp_server" : "agy_acp_server.par";
+    const expectedAntigravityArgs =
+      process.platform === "linux" ? ["--uid="] : [];
     if (
       agents.antigravity.command !== expectedAntigravityCommand ||
       JSON.stringify(agents.antigravity.args) !==
         JSON.stringify(expectedAntigravityArgs) ||
       agents.antigravity.implementation !== "official" ||
-      agents.antigravity.env || agents.antigravity.modelConfigId ||
+      agents.antigravity.env ||
+      agents.antigravity.modelConfigId ||
       agents.antigravity.modelEnrichment ||
       agents.antigravity.failureClassifier
-    ) throw new Error("Antigravity profile has unexpected special behavior");
+    )
+      throw new Error("Antigravity profile has unexpected special behavior");
     if (
       !agents.codex.installHint?.includes("@agentclientprotocol/codex-acp") ||
       !agents.claude.installHint?.includes(
         "@agentclientprotocol/claude-agent-acp",
-      ) || !agents.claude.installHint?.includes("Node.js 22") ||
+      ) ||
+      !agents.claude.installHint?.includes("Node.js 22") ||
       !agents.antigravity.installHint?.includes(
         "Agent Client Protocol Registry",
-      ) || !agents.antigravity.installHint?.includes("absolute path")
-    ) throw new Error("Built-in profiles lack canonical install hints");
+      ) ||
+      !agents.antigravity.installHint?.includes("absolute path")
+    )
+      throw new Error("Built-in profiles lack canonical install hints");
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("Antigravity implementation selection is explicit and profile-driven", async () => {
-  const dir = await Deno.makeTempDir();
+test("Antigravity implementation selection is explicit and profile-driven", async () => {
+  const dir = await nodeFs.makeTempDir();
   const configPath = `${dir}/config.json`;
   try {
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: { antigravity: { implementation: "refined" } },
@@ -70,16 +86,18 @@ Deno.test("Antigravity implementation selection is explicit and profile-driven",
     if (
       refined.implementation !== "refined" ||
       refined.command !== "refined-antigravity-acp" ||
-      refined.args.length !== 0 || refined.acpProtocol !== "v1" ||
+      refined.args.length !== 0 ||
+      refined.acpProtocol !== "v1" ||
       JSON.stringify(refined.supportedProtocols) !== JSON.stringify(["v1"]) ||
       refined.modelEnrichment !== undefined ||
       JSON.stringify(refined.requiredExecutableEnv) !==
         JSON.stringify(["REFINED_AGY_ACP_BIN"]) ||
       refined.runtimePrerequisites?.[0]?.command !== "node" ||
       refined.runtimePrerequisites[0]?.minimumVersion !== "22.0.0"
-    ) throw new Error("Refined selection did not load its distinct v1 profile");
+    )
+      throw new Error("Refined selection did not load its distinct v1 profile");
 
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({ agents: { antigravity: { implementation: "other" } } }),
     );
@@ -95,27 +113,30 @@ Deno.test("Antigravity implementation selection is explicit and profile-driven",
       throw new Error("Invalid Antigravity implementation accepted");
     }
 
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({ agents: { antigravity: { implementation: "agy" } } }),
     );
     const agy = (await loadAgents(configPath)).antigravity;
-    const localAppData = Deno.env.get("LOCALAPPDATA");
-    const expectedAgyCommand = Deno.build.os === "windows" &&
-        Deno.build.arch === "x86_64" && localAppData
-      ? `${localAppData}\\acp-mcp\\agents\\antigravity-agy\\1.2.0\\agy-acp-windows-x64.exe`
-      : "agy-acp-windows-x64.exe";
+    const localAppData = process.env["LOCALAPPDATA"];
+    const expectedAgyCommand =
+      process.platform === "win32" && process.arch === "x64" && localAppData
+        ? `${localAppData}\\acp-mcp\\agents\\antigravity-agy\\1.2.0\\agy-acp-windows-x64.exe`
+        : "agy-acp-windows-x64.exe";
     if (
-      agy.implementation !== "agy" || agy.command !== expectedAgyCommand ||
-      agy.args.length !== 0 || agy.acpProtocol !== "v1" ||
+      agy.implementation !== "agy" ||
+      agy.command !== expectedAgyCommand ||
+      agy.args.length !== 0 ||
+      agy.acpProtocol !== "v1" ||
       JSON.stringify(agy.supportedProtocols) !== JSON.stringify(["v1"]) ||
       agy.modelConfigId !== "model" ||
       JSON.stringify(agy.requiredExecutableEnv) !==
         JSON.stringify(["AGY_BIN"]) ||
       agy.runtimePrerequisites?.length
-    ) throw new Error("agy selection did not load its pinned v1 profile");
+    )
+      throw new Error("agy selection did not load its pinned v1 profile");
 
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({ agents: { opencode: { implementation: "agy" } } }),
     );
@@ -131,27 +152,27 @@ Deno.test("Antigravity implementation selection is explicit and profile-driven",
       throw new Error("Antigravity implementation selector leaked to OpenCode");
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("agy Antigravity profile preserves overrides and validates AGY_BIN paths with spaces", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp agy profile " });
+test("agy Antigravity profile preserves overrides and validates AGY_BIN paths with spaces", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp agy profile " });
   const configPath = `${dir}/config.json`;
   const executable = `${dir}/fake agy${
-    Deno.build.os === "windows" ? ".exe" : ""
+    process.platform === "win32" ? ".exe" : ""
   }`;
   const adapter = `${dir}/fake agy adapter${
-    Deno.build.os === "windows" ? ".exe" : ""
+    process.platform === "win32" ? ".exe" : ""
   }`;
   try {
-    await Deno.copyFile(Deno.execPath(), executable);
-    await Deno.copyFile(Deno.execPath(), adapter);
-    if (Deno.build.os !== "windows") {
-      await Deno.chmod(executable, 0o755);
-      await Deno.chmod(adapter, 0o755);
+    await nodeFs.copyFile(process.execPath, executable);
+    await nodeFs.copyFile(process.execPath, adapter);
+    if (process.platform !== "win32") {
+      await nodeFs.chmod(executable, 0o755);
+      await nodeFs.chmod(adapter, 0o755);
     }
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: {
@@ -179,15 +200,18 @@ Deno.test("agy Antigravity profile preserves overrides and validates AGY_BIN pat
       );
     }
 
-    const process = await startAgent({
-      ...definition,
-      args: [
-        "eval",
-        `Deno.exit(Deno.env.get("AGY_BIN") === ${
-          JSON.stringify(executable)
-        } && Deno.env.get("ACP_MCP_PROFILE_TEST") === "preserved" ? 0 : 1)`,
-      ],
-    }, dir);
+    const process = await startAgent(
+      {
+        ...definition,
+        args: [
+          "eval",
+          `process.exit(process.env["AGY_BIN"] === ${JSON.stringify(
+            executable,
+          )} && process.env["ACP_MCP_PROFILE_TEST"] === "preserved" ? 0 : 1)`,
+        ],
+      },
+      dir,
+    );
     const status = await process.child.status;
     await process.stderrDone;
     if (status.code !== 0) {
@@ -203,23 +227,23 @@ Deno.test("agy Antigravity profile preserves overrides and validates AGY_BIN pat
     }
     if (!rejected) throw new Error("Missing AGY_BIN was not rejected");
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("refined Antigravity inherits generic profile overrides and requires an installed backend", async () => {
-  const dir = await Deno.makeTempDir();
+test("refined Antigravity inherits generic profile overrides and requires an installed backend", async () => {
+  const dir = await nodeFs.makeTempDir();
   const configPath = `${dir}/config.json`;
-  const backend = Deno.execPath();
+  const backend = process.execPath;
   try {
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: {
           antigravity: {
             implementation: "refined",
             command: backend,
-            args: ["eval", "Deno.exit(0)"],
+            args: ["eval", "process.exit(0)"],
             env: { REFINED_AGY_ACP_BIN: backend, ACP_MCP_PROFILE_TEST: "yes" },
           },
         },
@@ -230,11 +254,12 @@ Deno.test("refined Antigravity inherits generic profile overrides and requires a
       definition.implementation !== "refined" ||
       definition.command !== backend ||
       JSON.stringify(definition.args) !==
-        JSON.stringify(["eval", "Deno.exit(0)"]) ||
+        JSON.stringify(["eval", "process.exit(0)"]) ||
       definition.env?.ACP_MCP_PROFILE_TEST !== "yes" ||
       definition.requiredExecutableEnv?.[0] !== "REFINED_AGY_ACP_BIN" ||
       definition.acpProtocol !== "v1"
-    ) throw new Error("User overrides lost refined profile metadata");
+    )
+      throw new Error("User overrides lost refined profile metadata");
 
     const withoutBackend = {
       ...definition,
@@ -255,30 +280,31 @@ Deno.test("refined Antigravity inherits generic profile overrides and requires a
       throw new Error("Configured executable did not launch");
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("list_agents identifies the explicitly selected agy implementation", async () => {
-  const dir = await Deno.makeTempDir();
+test("list_agents identifies the explicitly selected agy implementation", async () => {
+  const dir = await nodeFs.makeTempDir();
   const configPath = `${dir}/config.json`;
   try {
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({ agents: { antigravity: { implementation: "agy" } } }),
     );
     const agents = await loadAgents(configPath);
-    agents.antigravity.command = Deno.execPath();
-    agents.antigravity.env = { AGY_BIN: Deno.execPath() };
+    agents.antigravity.command = process.execPath;
+    agents.antigravity.env = { AGY_BIN: process.execPath };
     const manager = new SessionManager(agents);
     const server = createMcpServer(agents, manager);
     const mcp = await connectMcp(server);
     try {
-      const listedResponse = await mcp.callTool("list_agents", {}).response as {
+      const listedResponse = (await mcp.callTool("list_agents", {})
+        .response) as {
         result?: { content?: Array<{ text?: string }> };
       };
-      const listedText = listedResponse.result?.content?.find((item) =>
-        item.text
+      const listedText = listedResponse.result?.content?.find(
+        (item) => item.text,
       )?.text;
       if (!listedText) throw new Error("list_agents returned no result");
       const listed = JSON.parse(listedText) as Array<Record<string, unknown>>;
@@ -286,19 +312,20 @@ Deno.test("list_agents identifies the explicitly selected agy implementation", a
       if (
         antigravity?.implementation !== "agy" ||
         antigravity.displayName !== "Antigravity (agy ACP)"
-      ) throw new Error("list_agents hid the selected agy implementation");
+      )
+        throw new Error("list_agents hid the selected agy implementation");
     } finally {
       await mcp.close();
       await manager.closeAll();
       await server.close();
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("Claude profile accepts generic command, args, and env overrides", async () => {
-  const dir = await Deno.makeTempDir();
+test("Claude profile accepts generic command, args, and env overrides", async () => {
+  const dir = await nodeFs.makeTempDir();
   const configPath = `${dir}/config.json`;
   const override = {
     command: `${dir}/claude-agent.cmd`,
@@ -306,7 +333,7 @@ Deno.test("Claude profile accepts generic command, args, and env overrides", asy
     env: { ACPMCP_TEST_PROVIDER_ENDPOINT: "https://provider.invalid/v1" },
   };
   try {
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: { claude: override },
@@ -323,15 +350,15 @@ Deno.test("Claude profile accepts generic command, args, and env overrides", asy
       throw new Error("Generic Claude override lost profile protocol metadata");
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("ACP protocol config defaults to v1 and rejects invalid values", async () => {
-  const dir = await Deno.makeTempDir();
+test("ACP protocol config defaults to v1 and rejects invalid values", async () => {
+  const dir = await nodeFs.makeTempDir();
   const configPath = `${dir}/config.json`;
   try {
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: { custom: { command: "custom-agent" } },
@@ -345,7 +372,7 @@ Deno.test("ACP protocol config defaults to v1 and rejects invalid values", async
     ) {
       throw new Error("Omitted custom agent protocol did not default to v1");
     }
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: {
@@ -361,15 +388,15 @@ Deno.test("ACP protocol config defaults to v1 and rejects invalid values", async
     }
     if (!rejected) throw new Error("Invalid ACP protocol was accepted");
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("trusted config may override built-in launches and select ACP v2", async () => {
-  const dir = await Deno.makeTempDir();
+test("trusted config may override built-in launches and select ACP v2", async () => {
+  const dir = await nodeFs.makeTempDir();
   const configPath = `${dir}/config.json`;
   try {
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: {
@@ -400,7 +427,7 @@ Deno.test("trusted config may override built-in launches and select ACP v2", asy
       );
     }
 
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       configPath,
       JSON.stringify({
         agents: { "bad/id": { command: "bad" } },
@@ -414,14 +441,14 @@ Deno.test("trusted config may override built-in launches and select ACP v2", asy
     }
     if (!rejected) throw new Error("Invalid custom agent ID was accepted");
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("executable discovery distinguishes present and missing commands", async () => {
-  if (!await findExecutablePath(Deno.execPath())) {
+test("executable discovery distinguishes present and missing commands", async () => {
+  if (!(await findExecutablePath(process.execPath))) {
     throw new Error(
-      "The running Deno executable was not found by absolute path",
+      "The running Node executable was not found by absolute path",
     );
   }
   const missing = await findExecutablePath(
@@ -431,36 +458,36 @@ Deno.test("executable discovery distinguishes present and missing commands", asy
     throw new Error(`Missing command resolved unexpectedly: ${missing}`);
   }
 
-  if (Deno.build.os === "windows") {
-    const dir = await Deno.makeTempDir();
+  if (process.platform === "win32") {
+    const dir = await nodeFs.makeTempDir();
     const batch = `${dir}\\profile-agent.cmd`;
     try {
-      await Deno.writeTextFile(batch, "@echo off\r\nexit /b 0\r\n");
+      await nodeFs.writeText(batch, "@echo off\r\nexit /b 0\r\n");
       const resolved = await findExecutablePath("profile-agent", dir);
       if (resolved?.toLowerCase() !== batch.toLowerCase()) {
         throw new Error(`Windows .cmd discovery failed: ${resolved}`);
       }
     } finally {
-      await Deno.remove(dir, { recursive: true });
+      await nodeFs.removePath(dir, { recursive: true });
     }
   }
 });
 
-Deno.test("list_agents reports command presence without implying authentication", async () => {
-  const dir = await Deno.makeTempDir();
-  const separator = Deno.build.os === "windows" ? "\\" : "/";
+test("list_agents reports command presence without implying authentication", async () => {
+  const dir = await nodeFs.makeTempDir();
+  const separator = process.platform === "win32" ? "\\" : "/";
   const found = `${dir}${separator}present${
-    Deno.build.os === "windows" ? ".cmd" : ".sh"
+    process.platform === "win32" ? ".cmd" : ".sh"
   }`;
   const missing = `${dir}${separator}missing${
-    Deno.build.os === "windows" ? ".exe" : ""
+    process.platform === "win32" ? ".exe" : ""
   }`;
   try {
-    if (Deno.build.os === "windows") {
-      await Deno.writeTextFile(found, "@echo off\r\nexit /b 0\r\n");
+    if (process.platform === "win32") {
+      await nodeFs.writeText(found, "@echo off\r\nexit /b 0\r\n");
     } else {
-      await Deno.writeTextFile(found, "#!/bin/sh\nexit 0\n");
-      await Deno.chmod(found, 0o755);
+      await nodeFs.writeText(found, "#!/bin/sh\nexit 0\n");
+      await nodeFs.chmod(found, 0o755);
     }
     const agents = {
       present: { command: found, args: [], displayName: "Present" },
@@ -497,40 +524,37 @@ Deno.test("list_agents reports command presence without implying authentication"
       if (
         byId.get("missing")?.commandFound !== false ||
         byId.get("missing")?.installHint !== "Install the missing ACP agent."
-      ) throw new Error("Missing executable was not clearly reported");
+      )
+        throw new Error("Missing executable was not clearly reported");
     } finally {
       await mcp.close();
       await manager.closeAll();
       await server.close();
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures", async () => {
-  const dir = await Deno.makeTempDir();
+test("Codex, Claude, and Antigravity use generic ACP discovery and failures", async () => {
+  const dir = await nodeFs.makeTempDir();
   const configPath = `${dir}/config.json`;
-  await Deno.writeTextFile(
+  await nodeFs.writeText(
     configPath,
     JSON.stringify({ agents: { antigravity: { implementation: "refined" } } }),
   );
   const agents = await loadAgents(configPath);
   const fixtureArgs = [
-    "run",
-    "--allow-env",
-    "--allow-read",
-    "--allow-write",
     "tests/fixtures/fake_acp_agent.ts",
     "--advertise-models",
   ];
   for (const id of ["codex", "claude", "antigravity"]) {
     agents[id] = {
       ...agents[id],
-      command: Deno.execPath(),
+      command: process.execPath,
       args: fixtureArgs,
       ...(id === "antigravity"
-        ? { env: { REFINED_AGY_ACP_BIN: Deno.execPath() } }
+        ? { env: { REFINED_AGY_ACP_BIN: process.execPath } }
         : {}),
     };
   }
@@ -548,7 +572,8 @@ Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures
     if (
       antigravity?.implementation !== "refined" ||
       antigravity.displayName !== "Antigravity (Refined)"
-    ) throw new Error("list_agents did not expose the selected implementation");
+    )
+      throw new Error("list_agents did not expose the selected implementation");
     for (const agentId of ["codex", "claude", "antigravity"]) {
       const discovery = parseToolResult(
         await mcp.callTool("list_models", {
@@ -564,9 +589,9 @@ Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures
           "not_supported"
       ) {
         throw new Error(
-          `${agentId} did not use generic ACP model semantics: ${
-            JSON.stringify(discovery)
-          }`,
+          `${agentId} did not use generic ACP model semantics: ${JSON.stringify(
+            discovery,
+          )}`,
         );
       }
       if (
@@ -585,7 +610,8 @@ Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures
       if (
         agentId === "antigravity" &&
         agents.antigravity.implementation !== "refined"
-      ) throw new Error("Refined profile selection was not retained");
+      )
+        throw new Error("Refined profile selection was not retained");
       const failure = parseToolResult(
         await mcp.callTool("run_task", {
           agentId,
@@ -594,9 +620,12 @@ Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures
       );
       const error = failure.error as Record<string, unknown>;
       if (
-        failure.status !== "failed" || error.kind !== "prompt_failed" ||
-        error.acpCode !== -32603 || "classification" in error
-      ) throw new Error(`${agentId} did not keep generic failure semantics`);
+        failure.status !== "failed" ||
+        error.kind !== "prompt_failed" ||
+        error.acpCode !== -32603 ||
+        "classification" in error
+      )
+        throw new Error(`${agentId} did not keep generic failure semantics`);
     }
     if (manager.sessionCount) {
       throw new Error("Compatibility fixture leaked a session");
@@ -605,6 +634,6 @@ Deno.test("Codex, Claude, and Antigravity use generic ACP discovery and failures
     await mcp.close();
     await manager.closeAll();
     await server.close();
-    await Deno.remove(dir, { recursive: true });
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });

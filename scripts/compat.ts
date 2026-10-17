@@ -1,3 +1,5 @@
+import process from "node:process";
+import { ProcessCommand } from "#proc";
 export type CompatAgent = "opencode" | "codex" | "antigravity" | "claude";
 
 const OPT_IN_ENV: Record<CompatAgent, string> = {
@@ -9,13 +11,13 @@ const OPT_IN_ENV: Record<CompatAgent, string> = {
 
 const AGENT_TESTS: Record<CompatAgent, string[]> = {
   opencode: [
-    "tests/opencode_integration_test.ts",
-    "tests/opencode_idle_timeout_test.ts",
-    "tests/opencode_model_discovery_test.ts",
+    "tests/opencode_integration.test.ts",
+    "tests/opencode_idle_timeout.test.ts",
+    "tests/opencode_model_discovery.test.ts",
   ],
-  codex: ["tests/agent_compatibility_integration_test.ts"],
-  antigravity: ["tests/agent_compatibility_integration_test.ts"],
-  claude: ["tests/agent_compatibility_integration_test.ts"],
+  codex: ["tests/agent_compatibility_integration.test.ts"],
+  antigravity: ["tests/agent_compatibility_integration.test.ts"],
+  claude: ["tests/agent_compatibility_integration.test.ts"],
 };
 
 export interface CompatInvocation {
@@ -58,7 +60,7 @@ export function parseCompatAgent(
 export function createCompatInvocation(
   agent: CompatAgent,
   protocol: "v1" | "v2" = "v1",
-  inheritedEnv: Record<string, string> = Deno.env.toObject(),
+  inheritedEnv: Record<string, string> = { ...process.env },
 ): CompatInvocation {
   const testControlEnv = Object.fromEntries(
     Object.values(OPT_IN_ENV).map((name) => [name, "0"]),
@@ -71,15 +73,7 @@ export function createCompatInvocation(
   return {
     agent,
     protocol,
-    args: [
-      "test",
-      "--allow-env",
-      "--allow-read",
-      "--allow-run",
-      "--allow-write",
-      "--allow-net=opencode.ai",
-      ...AGENT_TESTS[agent],
-    ],
+    args: ["--test", ...AGENT_TESTS[agent]],
     env,
   };
 }
@@ -87,7 +81,7 @@ export function createCompatInvocation(
 export function compatHelp(): string {
   return [
     "Run an opt-in LIVE ACP compatibility test (may use provider quota/API billing).",
-    "Usage: deno task compat <agent> [--protocol v1|v2]",
+    "Usage: npm run compat -- <agent> [--protocol v1|v2]",
     "Agents: opencode, codex, antigravity, claude",
     "Requires the selected agent and its provider credentials to be configured.",
     "See README.md for setup. No provider runs without an explicit agent ID.",
@@ -96,8 +90,8 @@ export function compatHelp(): string {
 
 type Invoke = (args: string[], env: Record<string, string>) => Promise<number>;
 
-async function invokeDenoTest(args: string[], env: Record<string, string>) {
-  const child = new Deno.Command(Deno.execPath(), {
+async function invokeNodeTest(args: string[], env: Record<string, string>) {
+  const child = new ProcessCommand(process.execPath, {
     args,
     env,
     stdout: "inherit",
@@ -108,7 +102,7 @@ async function invokeDenoTest(args: string[], env: Record<string, string>) {
 
 export async function runCompat(
   args: string[],
-  invoke: Invoke = invokeDenoTest,
+  invoke: Invoke = invokeNodeTest,
 ): Promise<number> {
   const selection = parseCompatAgent(args);
   if (selection === "help") {
@@ -127,10 +121,10 @@ export async function runCompat(
 
 if (import.meta.main) {
   try {
-    Deno.exit(await runCompat(Deno.args));
+    process.exit(await runCompat(process.argv.slice(2)));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     console.error(compatHelp());
-    Deno.exit(2);
+    process.exit(2);
   }
 }

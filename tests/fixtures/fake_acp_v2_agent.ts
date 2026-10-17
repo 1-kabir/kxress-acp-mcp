@@ -1,3 +1,5 @@
+import process from "node:process";
+import * as nodeFs from "#fs";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 let buffer = "";
@@ -6,23 +8,22 @@ let nextServerId = 10_000;
 const pending = new Map<string | number, (value: unknown) => void>();
 const cancelled = new Set<string>();
 let currentOptions: Array<Record<string, unknown>> = [];
-const launchMarker = Deno.env.get("ACPMCP_V2_FIXTURE_LAUNCH_MARKER");
+const launchMarker = process.env["ACPMCP_V2_FIXTURE_LAUNCH_MARKER"];
 if (launchMarker) {
-  await Deno.writeTextFile(launchMarker, "launch\n", { append: true });
+  await nodeFs.writeText(launchMarker, "launch\n", { append: true });
 }
 if (
-  Deno.args.includes("--expect-claude-v2-env") &&
-  Deno.env.get("CLAUDE_AGENT_ACP_EXPERIMENTAL_V2") !== "1"
+  process.argv.slice(2).includes("--expect-claude-v2-env") &&
+  process.env["CLAUDE_AGENT_ACP_EXPERIMENTAL_V2"] !== "1"
 ) {
   throw new Error("Claude v2 profile activation environment was not applied");
 }
 if (
-  Deno.args.includes("--expect-composed-launch-env") && (
-    Deno.env.get("ACPMCP_FIXTURE_PARENT_VALUE") !== "parent-runtime" ||
-    Deno.env.get("ACPMCP_FIXTURE_USER_VALUE") !== "user-config" ||
-    Deno.env.get("OPENROUTER_API_KEY") !== "FAKE_SECRET_VALUE" ||
-    Deno.env.get("CLAUDE_AGENT_ACP_EXPERIMENTAL_V2") !== "user-override"
-  )
+  process.argv.slice(2).includes("--expect-composed-launch-env") &&
+  (process.env["ACPMCP_FIXTURE_PARENT_VALUE"] !== "parent-runtime" ||
+    process.env["ACPMCP_FIXTURE_USER_VALUE"] !== "user-config" ||
+    process.env["OPENROUTER_API_KEY"] !== "FAKE_SECRET_VALUE" ||
+    process.env["CLAUDE_AGENT_ACP_EXPERIMENTAL_V2"] !== "user-override")
 ) {
   throw new Error("Expected launch environment was not composed");
 }
@@ -30,7 +31,7 @@ if (
 function write(value: unknown): Promise<void> {
   const bytes = encoder.encode(`${JSON.stringify(value)}\n`);
   outputQueue = outputQueue.then(async () => {
-    await Deno.stdout.write(bytes);
+    await process.stdout.write(bytes);
   });
   return outputQueue;
 }
@@ -47,11 +48,13 @@ function updateBatch(
   sessionId: string,
   updates: Array<Record<string, unknown>>,
 ) {
-  return write(updates.map((value) => ({
-    jsonrpc: "2.0",
-    method: "session/update",
-    params: { sessionId, update: value, _meta: { fixture: "fake-v2" } },
-  })));
+  return write(
+    updates.map((value) => ({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { sessionId, update: value, _meta: { fixture: "fake-v2" } },
+    })),
+  );
 }
 
 function requestClient(method: string, params: unknown): Promise<unknown> {
@@ -76,19 +79,19 @@ async function promptWork(sessionId: string, text: string) {
       content: { type: "text", text: " then done" },
     });
   } else if (text === "permission") {
-    const response = await requestClient("session/request_permission", {
+    const response = (await requestClient("session/request_permission", {
       sessionId,
       title: "Run a command",
       subject: {
         type: "command",
         command: "dangerous command",
-        cwd: Deno.cwd(),
+        cwd: process.cwd(),
       },
       options: [
         { optionId: "allow", name: "Allow once", kind: "allow_once" },
         { optionId: "reject", name: "Reject once", kind: "reject_once" },
       ],
-    }) as { outcome?: { outcome?: string; optionId?: string } };
+    })) as { outcome?: { outcome?: string; optionId?: string } };
     await update(sessionId, {
       sessionUpdate: "agent_message_chunk",
       messageId: "answer",
@@ -175,7 +178,7 @@ async function handle(message: Record<string, unknown>) {
   try {
     let result: unknown = {};
     if (method === "initialize") {
-      if (Deno.args.includes("--v1-only")) {
+      if (process.argv.slice(2).includes("--v1-only")) {
         result = { protocolVersion: 1, agentCapabilities: {} };
       } else {
         result = {
@@ -201,10 +204,13 @@ async function handle(message: Record<string, unknown>) {
           category: "mode",
           type: "select",
           currentValue: "plan",
-          options: [{ value: "plan", name: "Plan" }, {
-            value: "act",
-            name: "Act",
-          }],
+          options: [
+            { value: "plan", name: "Plan" },
+            {
+              value: "act",
+              name: "Act",
+            },
+          ],
         },
         {
           configId: "boolean-option",
@@ -231,7 +237,7 @@ async function handle(message: Record<string, unknown>) {
       currentOptions = currentOptions.map((option) =>
         option.configId === configId
           ? { ...option, currentValue: params.value }
-          : option
+          : option,
       );
       result = { configOptions: currentOptions };
     } else if (method === "session/prompt") {
@@ -251,8 +257,9 @@ async function handle(message: Record<string, unknown>) {
     await write({ jsonrpc: "2.0", id, result });
     if (
       method === "session/close" &&
-      Deno.args.includes("--exit-nonzero-after-close")
-    ) Deno.exit(7);
+      process.argv.slice(2).includes("--exit-nonzero-after-close")
+    )
+      process.exit(7);
   } catch (error) {
     await write({
       jsonrpc: "2.0",
@@ -262,7 +269,7 @@ async function handle(message: Record<string, unknown>) {
   }
 }
 
-for await (const chunk of Deno.stdin.readable) {
+for await (const chunk of process.stdin) {
   buffer += decoder.decode(chunk, { stream: true });
   let newline = buffer.indexOf("\n");
   while (newline >= 0) {

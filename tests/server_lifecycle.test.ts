@@ -1,6 +1,10 @@
+import { test } from "node:test";
+import process from "node:process";
+import { ProcessCommand } from "#proc";
+import * as nodeFs from "#fs";
 function absolutePath(url: URL): string {
   const path = url.pathname;
-  return Deno.build.os === "windows"
+  return process.platform === "win32"
     ? decodeURIComponent(path.replace(/^\//, ""))
     : path;
 }
@@ -34,16 +38,18 @@ async function readMessage(
 async function waitForFile(path: string) {
   for (let i = 0; i < 100; i++) {
     try {
-      if ((await Deno.stat(path)).isFile) return;
-    } catch { /* wait for the controlled fixture marker */ }
+      if ((await nodeFs.stat(path)).isFile()) return;
+    } catch {
+      /* wait for the controlled fixture marker */
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for fixture marker: ${path}`);
 }
 
 async function processExists(pid: number): Promise<boolean> {
-  if (Deno.build.os === "windows") {
-    const result = await new Deno.Command("powershell.exe", {
+  if (process.platform === "win32") {
+    const result = await new ProcessCommand("powershell.exe", {
       args: [
         "-NoProfile",
         "-NonInteractive",
@@ -56,7 +62,7 @@ async function processExists(pid: number): Promise<boolean> {
     return result.success;
   }
   try {
-    Deno.kill(pid, "SIGCONT");
+    process.kill(pid, "SIGCONT");
     return true;
   } catch {
     return false;
@@ -64,8 +70,8 @@ async function processExists(pid: number): Promise<boolean> {
 }
 
 async function killFixture(pid: number) {
-  if (Deno.build.os === "windows") {
-    await new Deno.Command("taskkill.exe", {
+  if (process.platform === "win32") {
+    await new ProcessCommand("taskkill.exe", {
       args: ["/PID", String(pid), "/T", "/F"],
       stdin: "null",
       stdout: "null",
@@ -73,38 +79,36 @@ async function killFixture(pid: number) {
     }).output();
   } else {
     try {
-      Deno.kill(pid, "SIGKILL");
-    } catch { /* already exited */ }
+      process.kill(pid, "SIGKILL");
+    } catch {
+      /* already exited */
+    }
   }
 }
 
-Deno.test("stdio EOF gracefully closes active sessions and pending permissions", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-stdio-close-" });
+test("stdio EOF gracefully closes active sessions and pending permissions", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-stdio-close-" });
   const configPath = `${dir}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }config.json`;
   const closeMarker = `${dir}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }closed.txt`;
   const permissionMarker = `${dir}${
-    Deno.build.os === "windows" ? "\\" : "/"
+    process.platform === "win32" ? "\\" : "/"
   }permission.txt`;
-  const pidFile = `${dir}${Deno.build.os === "windows" ? "\\" : "/"}agent.pid`;
+  const pidFile = `${dir}${process.platform === "win32" ? "\\" : "/"}agent.pid`;
   const fixture = absolutePath(
     new URL("./fixtures/fake_acp_agent.ts", import.meta.url),
   );
   const main = absolutePath(new URL("../src/main.ts", import.meta.url));
-  await Deno.writeTextFile(
+  await nodeFs.writeText(
     configPath,
     JSON.stringify({
       agents: {
         fake: {
-          command: Deno.execPath(),
+          command: process.execPath,
           args: [
-            "run",
-            "--allow-env",
-            "--allow-read",
-            "--allow-write",
             fixture,
             "--exit-on-close",
             `--pid-file=${pidFile}`,
@@ -115,19 +119,9 @@ Deno.test("stdio EOF gracefully closes active sessions and pending permissions",
       },
     }),
   );
-  const child = new Deno.Command(Deno.execPath(), {
-    args: [
-      "run",
-      "--allow-env",
-      "--allow-read",
-      "--allow-write",
-      "--allow-run",
-      "--allow-net=opencode.ai",
-      main,
-      "--config",
-      configPath,
-    ],
-    cwd: Deno.cwd(),
+  const child = new ProcessCommand(process.execPath, {
+    args: [main, "--config", configPath],
+    cwd: process.cwd(),
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -163,9 +157,11 @@ Deno.test("stdio EOF gracefully closes active sessions and pending permissions",
         permissionPolicy: "operator",
       },
     });
-    const sessionText = (started.result as {
-      content: Array<{ text: string }>;
-    }).content[0].text;
+    const sessionText = (
+      started.result as {
+        content: Array<{ text: string }>;
+      }
+    ).content[0].text;
     const session = JSON.parse(sessionText) as { sessionId: string };
     const prompting = await request("tools/call", {
       name: "prompt",
@@ -179,10 +175,10 @@ Deno.test("stdio EOF gracefully closes active sessions and pending permissions",
     await waitForFile(permissionMarker);
     await writer.close();
     await waitForFile(closeMarker);
-    const agentPid = Number(await Deno.readTextFile(pidFile));
+    const agentPid = Number(await nodeFs.readText(pidFile));
     let agentExitedBeforeDeadline = false;
     for (let i = 0; i < 55; i++) {
-      if (!await processExists(agentPid)) {
+      if (!(await processExists(agentPid))) {
         agentExitedBeforeDeadline = true;
         break;
       }
@@ -191,7 +187,7 @@ Deno.test("stdio EOF gracefully closes active sessions and pending permissions",
     const status = await Promise.race([
       child.status,
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("stdio server did not exit")), 8_000)
+        setTimeout(() => reject(new Error("stdio server did not exit")), 8_000),
       ),
     ]);
     if (!status.success) {
@@ -203,68 +199,59 @@ Deno.test("stdio EOF gracefully closes active sessions and pending permissions",
   } finally {
     try {
       writer.releaseLock();
-    } catch { /* already closed */ }
+    } catch {
+      /* already closed */
+    }
     try {
       reader.releaseLock();
-    } catch { /* process already exited */ }
+    } catch {
+      /* process already exited */
+    }
     const exited = await Promise.race([
-      child.status.then(() => true, () => true),
+      child.status.then(
+        () => true,
+        () => true,
+      ),
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
     ]);
     if (!exited) child.kill("SIGKILL");
     await child.status.catch(() => undefined);
     try {
-      const pid = Number(await Deno.readTextFile(pidFile));
+      const pid = Number(await nodeFs.readText(pidFile));
       if (Number.isInteger(pid) && pid > 0) {
         await killFixture(pid);
       }
-    } catch { /* Fixture did not reach initialize or already exited. */ }
-    await Deno.remove(dir, { recursive: true });
+    } catch {
+      /* Fixture did not reach initialize or already exited. */
+    }
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });
 
-Deno.test("hard server termination does not promise to kill ACP child processes", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "acp-mcp-hard-kill-" });
+test("hard server termination does not promise to kill ACP child processes", async () => {
+  const dir = await nodeFs.makeTempDir({ prefix: "acp-mcp-hard-kill-" });
   const join = (name: string) =>
-    `${dir}${Deno.build.os === "windows" ? "\\" : "/"}${name}`;
+    `${dir}${process.platform === "win32" ? "\\" : "/"}${name}`;
   const configPath = join("config.json");
   const pidFile = join("agent.pid");
   const fixture = absolutePath(
     new URL("./fixtures/fake_acp_agent.ts", import.meta.url),
   );
   const main = absolutePath(new URL("../src/main.ts", import.meta.url));
-  await Deno.writeTextFile(
+  await nodeFs.writeText(
     configPath,
     JSON.stringify({
       agents: {
         fake: {
-          command: Deno.execPath(),
-          args: [
-            "run",
-            "--allow-env",
-            "--allow-read",
-            "--allow-write",
-            fixture,
-            "--ignore-eof",
-            `--pid-file=${pidFile}`,
-          ],
+          command: process.execPath,
+          args: [fixture, "--ignore-eof", `--pid-file=${pidFile}`],
         },
       },
     }),
   );
-  const child = new Deno.Command(Deno.execPath(), {
-    args: [
-      "run",
-      "--allow-env",
-      "--allow-read",
-      "--allow-write",
-      "--allow-run",
-      "--allow-net=opencode.ai",
-      main,
-      "--config",
-      configPath,
-    ],
-    cwd: Deno.cwd(),
+  const child = new ProcessCommand(process.execPath, {
+    args: [main, "--config", configPath],
+    cwd: process.cwd(),
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -304,7 +291,7 @@ Deno.test("hard server termination does not promise to kill ACP child processes"
       throw new Error("ACP test session did not start");
     }
     await waitForFile(pidFile);
-    agentPid = Number(await Deno.readTextFile(pidFile));
+    agentPid = Number(await nodeFs.readText(pidFile));
     child.kill("SIGKILL");
     await child.status;
     const survived = await processExists(agentPid);
@@ -313,17 +300,25 @@ Deno.test("hard server termination does not promise to kill ACP child processes"
   } finally {
     try {
       writer.releaseLock();
-    } catch { /* child was terminated */ }
+    } catch {
+      /* child was terminated */
+    }
     try {
       reader.releaseLock();
-    } catch { /* child was terminated */ }
+    } catch {
+      /* child was terminated */
+    }
     const exited = await Promise.race([
-      child.status.then(() => true, () => true),
+      child.status.then(
+        () => true,
+        () => true,
+      ),
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
     ]);
     if (!exited) child.kill("SIGKILL");
     await child.status.catch(() => undefined);
-    if (agentPid && await processExists(agentPid)) await killFixture(agentPid);
-    await Deno.remove(dir, { recursive: true });
+    if (agentPid && (await processExists(agentPid)))
+      await killFixture(agentPid);
+    await nodeFs.removePath(dir, { recursive: true });
   }
 });

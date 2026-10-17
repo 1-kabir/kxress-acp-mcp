@@ -1,11 +1,13 @@
+import { test } from "node:test";
+import process from "node:process";
 import { createMcpServer } from "../src/mcp/server.ts";
 import type { AgentMap } from "../src/agents/config.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
-Deno.test({
+test({
   name: "OpenCode ACP model listing with official enrichment",
-  ignore: Deno.env.get("ACPMCP_OPENCODE_TEST") !== "1",
+  skip: process.env["ACPMCP_OPENCODE_TEST"] !== "1",
   fn: async () => {
     const agents: AgentMap = {
       opencode: {
@@ -22,18 +24,19 @@ Deno.test({
       const result = parseToolResult(
         await mcp.callTool("list_models", {
           agentId: "opencode",
-          cwd: Deno.cwd(),
+          cwd: process.cwd(),
           enrich: true,
         }).response,
       );
       if (
-        result.status !== "completed" || result.availabilitySource !== "acp"
+        result.status !== "completed" ||
+        result.availabilitySource !== "acp"
       ) {
         throw new Error(`OpenCode discovery failed: ${JSON.stringify(result)}`);
       }
       const models = result.models as Array<Record<string, unknown>>;
-      const fledge = models.find((model) =>
-        model.id === "opencode/fledge-alpha-free"
+      const fledge = models.find(
+        (model) => model.id === "opencode/fledge-alpha-free",
       );
       const metadataSummary = models
         .filter((model) =>
@@ -46,16 +49,16 @@ Deno.test({
             "opencode-go/space-bunny",
             "opencode-go/longcat-2.5-preview-free",
             "opencode-go/muse-spark-1.3-contributor",
-          ].includes(String(model.id))
+          ].includes(String(model.id)),
         )
         .map((model) => ({
           id: model.id,
           metadata: model.metadata,
         }));
       console.log(
-        `OpenCode discovery: ${models.length} ACP-advertised models; Fledge advertised=${
-          Boolean(fledge)
-        }; enrichment=${
+        `OpenCode discovery: ${models.length} ACP-advertised models; Fledge advertised=${Boolean(
+          fledge,
+        )}; enrichment=${
           (result.enrichment as Record<string, unknown>)?.status
         }`,
       );
@@ -63,44 +66,46 @@ Deno.test({
         `OpenCode routing metadata: ${JSON.stringify(metadataSummary)}`,
       );
       console.log(
-        `OpenCode catalog coverage: ${
-          JSON.stringify({
-            advertised: models.length,
-            withPricing: models.filter((model) =>
-              (model.metadata as Record<string, unknown> | undefined)?.pricing
-            ).length,
-            currentlyFreePerToken: models.filter((model) =>
+        `OpenCode catalog coverage: ${JSON.stringify({
+          advertised: models.length,
+          withPricing: models.filter(
+            (model) =>
+              (model.metadata as Record<string, unknown> | undefined)?.pricing,
+          ).length,
+          currentlyFreePerToken: models.filter(
+            (model) =>
               (model.metadata as Record<string, unknown> | undefined)?.free ===
-                true
-            ).length,
-            freeModelIds: models.filter((model) =>
-              (model.metadata as Record<string, unknown> | undefined)?.free ===
-                true
-            ).map((model) =>
-              model.id
-            ),
-            withCounterpart: models.filter((model) =>
-              (model.metadata as Record<string, unknown> | undefined)
-                ?.paidCounterpart
-            ).length,
-            withCostTier: models.filter((model) =>
-              (model.metadata as Record<string, unknown> | undefined)
-                ?.underlyingCostTier
-            ).length,
-            withPrivacy: models.filter((model) =>
-              (model.metadata as Record<string, unknown> | undefined)?.privacy
-            ).length,
-            withoutCatalogDetails: models.filter((model) =>
-              !model.metadata
+              true,
+          ).length,
+          freeModelIds: models
+            .filter(
+              (model) =>
+                (model.metadata as Record<string, unknown> | undefined)
+                  ?.free === true,
             )
-              .length,
-          })
-        }`,
+            .map((model) => model.id),
+          withCounterpart: models.filter(
+            (model) =>
+              (model.metadata as Record<string, unknown> | undefined)
+                ?.paidCounterpart,
+          ).length,
+          withCostTier: models.filter(
+            (model) =>
+              (model.metadata as Record<string, unknown> | undefined)
+                ?.underlyingCostTier,
+          ).length,
+          withPrivacy: models.filter(
+            (model) =>
+              (model.metadata as Record<string, unknown> | undefined)?.privacy,
+          ).length,
+          withoutCatalogDetails: models.filter((model) => !model.metadata)
+            .length,
+        })}`,
       );
       if (
         models.length === 0 ||
-        models.some((model) =>
-          model.available !== true || model.configId !== "model"
+        models.some(
+          (model) => model.available !== true || model.configId !== "model",
         )
       ) {
         throw new Error(
@@ -120,8 +125,8 @@ Deno.test({
           );
         }
       }
-      const longcat = models.find((model) =>
-        model.id === "opencode/longcat-2.5-preview-free"
+      const longcat = models.find(
+        (model) => model.id === "opencode/longcat-2.5-preview-free",
       );
       if (longcat) {
         const metadata = longcat.metadata as

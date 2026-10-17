@@ -26,9 +26,8 @@ export class V1Driver implements ProtocolDriver {
     readonly process: Awaited<ReturnType<typeof startAgent>>,
     callbacks: ProtocolCallbacks,
   ) {
-    this.app.onRequest(
-      "session/request_permission",
-      ({ params }) => callbacks.permission(normalizePermission(params)),
+    this.app.onRequest("session/request_permission", ({ params }) =>
+      callbacks.permission(normalizePermission(params)),
     );
     const stream = interceptSessionUpdates(
       ndJsonStream(process.child.stdin, process.child.stdout),
@@ -190,7 +189,7 @@ function normalizeUpdate(params: unknown): NormalizedAcpUpdate {
     update,
     raw: params,
     ...(update?.sessionUpdate === "agent_message_chunk" &&
-        update.content?.type === "text"
+    update.content?.type === "text"
       ? { text: { text: update.content.text ?? "", replace: false } }
       : {}),
   };

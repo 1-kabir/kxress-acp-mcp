@@ -1,3 +1,6 @@
+import { test } from "node:test";
+import process from "node:process";
+import * as nodeFs from "#fs";
 import { createMcpServer } from "../src/mcp/server.ts";
 import type { AgentMap } from "../src/agents/config.ts";
 import {
@@ -14,14 +17,8 @@ import { discoverAdvertisedModels } from "../src/models/discovery.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
 const modelFixture = {
-  command: Deno.execPath(),
-  args: [
-    "run",
-    "--allow-env",
-    "--allow-read",
-    "tests/fixtures/fake_acp_agent.ts",
-    "--advertise-models",
-  ],
+  command: process.execPath,
+  args: ["tests/fixtures/fake_acp_agent.ts", "--advertise-models"],
 };
 
 function serverFor(
@@ -32,49 +29,47 @@ function serverFor(
     ) => Promise<Awaited<ReturnType<typeof fetchOpenCodeCatalog>>>;
   } = {},
 ) {
-  const agents: AgentMap = Object.fromEntries(agentIds.map((id) => [
-    id,
-    {
-      ...(id === "models" || id === "opencode" || id === "generic"
-        ? modelFixture
-        : {
-          command: Deno.execPath(),
-          args: [
-            "run",
-            "--allow-env",
-            "--allow-read",
-            "tests/fixtures/fake_acp_agent.ts",
-            ...(id === "bad" ? ["--session-fail"] : []),
-            ...(id === "slow" ? ["--session-delay-ms=150"] : []),
-            ...(id === "async-models" ? ["--async-models"] : []),
-            ...(id === "async-effort" ? ["--async-effort"] : []),
-            ...(id === "bool" ? ["--advertise-bool"] : []),
-          ],
-        }),
-      ...(id === "models" ? { modelConfigId: "backend-choice" } : {}),
-      ...(id === "opencode"
-        ? {
-          modelConfigId: "model",
-          modelEnrichment: "opencode_catalog" as const,
-        }
-        : {}),
-      ...(id === "async-models" || id === "async-effort"
-        ? { modelConfigId: "model" }
-        : {}),
-    },
-  ]));
+  const agents: AgentMap = Object.fromEntries(
+    agentIds.map((id) => [
+      id,
+      {
+        ...(id === "models" || id === "opencode" || id === "generic"
+          ? modelFixture
+          : {
+              command: process.execPath,
+              args: [
+                "tests/fixtures/fake_acp_agent.ts",
+                ...(id === "bad" ? ["--session-fail"] : []),
+                ...(id === "slow" ? ["--session-delay-ms=150"] : []),
+                ...(id === "async-models" ? ["--async-models"] : []),
+                ...(id === "async-effort" ? ["--async-effort"] : []),
+                ...(id === "bool" ? ["--advertise-bool"] : []),
+              ],
+            }),
+        ...(id === "models" ? { modelConfigId: "backend-choice" } : {}),
+        ...(id === "opencode"
+          ? {
+              modelConfigId: "model",
+              modelEnrichment: "opencode_catalog" as const,
+            }
+          : {}),
+        ...(id === "async-models" || id === "async-effort"
+          ? { modelConfigId: "model" }
+          : {}),
+      },
+    ]),
+  );
   const manager = new SessionManager(agents);
   const server = createMcpServer(agents, manager, options);
   return { agents, manager, server };
 }
 
 const mockCatalog = () =>
-  fetchOpenCodeCatalog(
-    new AbortController().signal,
-    (input) => {
-      const url = String(input);
-      if (url === OPENCODE_ZEN_MODELS_URL) {
-        return Promise.resolve(Response.json({
+  fetchOpenCodeCatalog(new AbortController().signal, (input) => {
+    const url = String(input);
+    if (url === OPENCODE_ZEN_MODELS_URL) {
+      return Promise.resolve(
+        Response.json({
           data: [
             { id: "fledge-alpha-free", owned_by: "opencode" },
             { id: "space-bunny-free", owned_by: "opencode" },
@@ -88,11 +83,12 @@ const mockCatalog = () =>
             { id: "muse-spark-1.3-contributor-free", owned_by: "opencode" },
             { id: "nemotron-3-ultra-free", owned_by: "opencode" },
           ],
-        }));
-      }
-      if (url === OPENCODE_ZEN_DOCS_URL) {
-        return Promise.resolve(
-          new Response(`
+        }),
+      );
+    }
+    if (url === OPENCODE_ZEN_DOCS_URL) {
+      return Promise.resolve(
+        new Response(`
         <table><tr><th>Model</th><th>ID</th></tr>
         <tr><td>Fledge Alpha Free</td><td>fledge-alpha-free</td></tr>
         <tr><td>Paid Model</td><td>paid-model</td></tr>
@@ -125,20 +121,22 @@ const mockCatalog = () =>
           <li>Nemotron 3 Ultra Free: Trial prompts are logged for security and product improvement.</li>
         </ul>
       `),
-        );
-      }
-      if (url === OPENCODE_GO_MODELS_URL) {
-        return Promise.resolve(Response.json({
+      );
+    }
+    if (url === OPENCODE_GO_MODELS_URL) {
+      return Promise.resolve(
+        Response.json({
           data: [
             { id: "space-bunny", owned_by: "opencode" },
             { id: "longcat-2.5-preview-free", owned_by: "opencode" },
             { id: "muse-spark-1.3-contributor", owned_by: "opencode" },
           ],
-        }));
-      }
-      if (url === OPENCODE_GO_DOCS_URL) {
-        return Promise.resolve(
-          new Response(`
+        }),
+      );
+    }
+    if (url === OPENCODE_GO_DOCS_URL) {
+      return Promise.resolve(
+        new Response(`
           <table><tr><th>Model</th><th>Model ID</th><th>Endpoint</th></tr>
             <tr><td>Space Bunny</td><td>space-bunny</td><td>go</td></tr>
             <tr><td>LongCat 2.5 Preview Free</td><td>longcat-2.5-preview-free</td><td>go</td></tr>
@@ -155,17 +153,16 @@ const mockCatalog = () =>
             <tr><td>Muse Spark 1.3 Contributor</td><td>Yes</td><td>Not ZDR</td></tr>
           </table>
         `),
-        );
-      }
-      return Promise.resolve(new Response("not found", { status: 404 }));
-    },
-  );
+      );
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }));
+  });
 
-Deno.test("MCP advertises canonical high-level tool names without aliases", async () => {
+test("MCP advertises canonical high-level tool names without aliases", async () => {
   const { server, manager } = serverFor(["plain"]);
   const mcp = await connectMcp(server);
   try {
-    const reply = await mcp.listTools().response as {
+    const reply = (await mcp.listTools().response) as {
       result?: { tools?: Array<{ name: string }> };
     };
     const names = (reply.result?.tools ?? []).map((tool) => tool.name);
@@ -186,7 +183,7 @@ Deno.test("MCP advertises canonical high-level tool names without aliases", asyn
   }
 });
 
-Deno.test("generic model discovery uses ACP options and cleans its temporary session", async () => {
+test("generic model discovery uses ACP options and cleans its temporary session", async () => {
   const { manager, server } = serverFor(["models"]);
   const mcp = await connectMcp(server);
   try {
@@ -203,14 +200,15 @@ Deno.test("generic model discovery uses ACP options and cleans its temporary ses
       throw new Error(`Expected 3 advertised models, got ${models.length}`);
     }
     if (
-      models.some((model) =>
-        model.id === "hidden/model" || model.id === "remote-only-model"
+      models.some(
+        (model) =>
+          model.id === "hidden/model" || model.id === "remote-only-model",
       )
     ) {
       throw new Error("A non-model option or remote-only model was exposed");
     }
-    const tagged = models.find((model) =>
-      model.id === "opencode/fledge-alpha-free"
+    const tagged = models.find(
+      (model) => model.id === "opencode/fledge-alpha-free",
     );
     const mapped = models.find((model) => model.id === "local/model-z");
     if (tagged?.configId !== "engine-selector" || tagged.selected !== true) {
@@ -229,7 +227,7 @@ Deno.test("generic model discovery uses ACP options and cleans its temporary ses
   }
 });
 
-Deno.test("asynchronous ACP config updates drive model discovery and selection", async () => {
+test("asynchronous ACP config updates drive model discovery and selection", async () => {
   const { manager, server } = serverFor(["async-models"]);
   const mcp = await connectMcp(server);
   try {
@@ -247,7 +245,7 @@ Deno.test("asynchronous ACP config updates drive model discovery and selection",
     ];
     if (
       JSON.stringify(models.map((model) => model.id)) !==
-        JSON.stringify(expected)
+      JSON.stringify(expected)
     ) {
       throw new Error("Late advertised model IDs were not preserved exactly");
     }
@@ -263,16 +261,16 @@ Deno.test("asynchronous ACP config updates drive model discovery and selection",
     );
     const sessionId = started.sessionId as string;
     const session = manager.getSessionSnapshot(sessionId);
-    const selected = session.configOptions.find((option) =>
-      option.id === "model"
+    const selected = session.configOptions.find(
+      (option) => option.id === "model",
     );
     if (selected?.currentValue !== "claude-opus-5-5-high") {
       throw new Error("Late model selection was not applied to the session");
     }
     if (
-      !manager.getEvents(sessionId).events.some((event) =>
-        event.kind === "config_option_update"
-      )
+      !manager
+        .getEvents(sessionId)
+        .events.some((event) => event.kind === "config_option_update")
     ) {
       throw new Error("The asynchronous config update was not journaled");
     }
@@ -287,16 +285,10 @@ Deno.test("asynchronous ACP config updates drive model discovery and selection",
   }
 });
 
-Deno.test("late config_option_update supplies a separately configured thinking effort", async () => {
+test("late config_option_update supplies a separately configured thinking effort", async () => {
   const definition = {
-    command: Deno.execPath(),
-    args: [
-      "run",
-      "--allow-env",
-      "--allow-read",
-      "tests/fixtures/fake_acp_agent.ts",
-      "--async-effort",
-    ],
+    command: process.execPath,
+    args: ["tests/fixtures/fake_acp_agent.ts", "--async-effort"],
     modelConfigId: "model",
   };
   const agents = { effort: definition };
@@ -316,7 +308,7 @@ Deno.test("late config_option_update supplies a separately configured thinking e
       Promise.resolve({
         agents: { effort: effective },
         sources: [],
-        cwd: Deno.cwd(),
+        cwd: process.cwd(),
         explicit: false,
       }),
   });
@@ -329,16 +321,17 @@ Deno.test("late config_option_update supplies a separately configured thinking e
     );
     const id = result.sessionId as string;
     const session = manager.getSessionSnapshot(id);
-    const effort = session.configOptions.find((option) =>
-      option.id === "thought_level"
+    const effort = session.configOptions.find(
+      (option) => option.id === "thought_level",
     );
     if (
       effort?.currentValue !== "high" ||
       session.modelSelection?.thinkingEffort !== "high" ||
-      !manager.getEvents(id).events.some((event) =>
-        event.kind === "config_option_update"
-      )
-    ) throw new Error("late effort advertisement was not observed and applied");
+      !manager
+        .getEvents(id)
+        .events.some((event) => event.kind === "config_option_update")
+    )
+      throw new Error("late effort advertisement was not observed and applied");
     await mcp.callTool("close_session", { sessionId: id }).response;
   } finally {
     await mcp.close();
@@ -347,27 +340,22 @@ Deno.test("late config_option_update supplies a separately configured thinking e
   }
 });
 
-Deno.test("operation policy resolves model sizes per cwd and snapshots them in sessions", async () => {
-  const temp = await Deno.makeTempDir({ prefix: "acp-mcp project cwd-" });
+test("operation policy resolves model sizes per cwd and snapshots them in sessions", async () => {
+  const temp = await nodeFs.makeTempDir({ prefix: "acp-mcp project cwd-" });
   const cwdOne = `${temp} one`;
   const cwdTwo = `${temp} two`;
-  await Deno.mkdir(cwdOne);
-  await Deno.mkdir(cwdTwo);
-  const fixturePath =
-    new URL("./fixtures/fake_acp_agent.ts", import.meta.url).pathname;
-  const absoluteFixturePath = Deno.build.os === "windows"
-    ? decodeURIComponent(fixturePath.replace(/^\//, ""))
-    : fixturePath;
+  await nodeFs.mkdir(cwdOne);
+  await nodeFs.mkdir(cwdTwo);
+  const fixturePath = new URL("./fixtures/fake_acp_agent.ts", import.meta.url)
+    .pathname;
+  const absoluteFixturePath =
+    process.platform === "win32"
+      ? decodeURIComponent(fixturePath.replace(/^\//, ""))
+      : fixturePath;
   const agents = {
     policy: {
-      command: Deno.execPath(),
-      args: [
-        "run",
-        "--allow-env",
-        "--allow-read",
-        absoluteFixturePath,
-        "--advertise-models",
-      ],
+      command: process.execPath,
+      args: [absoluteFixturePath, "--advertise-models"],
     },
   };
   const manager = new SessionManager(agents);
@@ -385,11 +373,13 @@ Deno.test("operation policy resolves model sizes per cwd and snapshots them in s
             },
           },
         },
-        sources: [{
-          kind: "project" as const,
-          path: `${cwd ?? "cwd"}/.acp-mcp.json`,
-        }],
-        cwd: cwd ?? Deno.cwd(),
+        sources: [
+          {
+            kind: "project" as const,
+            path: `${cwd ?? "cwd"}/.acp-mcp.json`,
+          },
+        ],
+        cwd: cwd ?? process.cwd(),
         explicit: false,
       }),
   });
@@ -403,24 +393,26 @@ Deno.test("operation policy resolves model sizes per cwd and snapshots them in s
     );
     const list = listed.models as Array<Record<string, unknown>>;
     if (
-      !Array.isArray(list) || list.length !== 1 ||
+      !Array.isArray(list) ||
+      list.length !== 1 ||
       list[0].id !== "opencode/fledge-alpha-free"
     ) {
       throw new Error(
         `policy did not filter advertised models: ${JSON.stringify(listed)}`,
       );
     }
-    const deniedRequest = await mcp.callTool("start_session", {
+    const deniedRequest = (await mcp.callTool("start_session", {
       agentId: "policy",
       cwd: cwdOne,
       model: "opencode/paid-model",
-    }).response as {
+    }).response) as {
       result?: { isError?: boolean; content?: Array<{ text?: string }> };
     };
     if (
       !deniedRequest.result?.isError ||
       !deniedRequest.result.content?.[0]?.text?.includes("denied")
-    ) throw new Error("explicit model request bypassed allow policy");
+    )
+      throw new Error("explicit model request bypassed allow policy");
     const first = parseToolResult(
       await mcp.callTool("start_session", {
         agentId: "policy",
@@ -434,15 +426,17 @@ Deno.test("operation policy resolves model sizes per cwd and snapshots them in s
       firstSnapshot.modelSelection?.modelSize !== "large" ||
       firstSnapshot.models?.modelSizes?.large?.model !==
         "opencode/fledge-alpha-free"
-    ) throw new Error("effective model policy was not resolved and retained");
+    )
+      throw new Error("effective model policy was not resolved and retained");
     await mcp.callTool("prompt", {
       sessionId: firstId,
       text: "continue on the selected model",
     }).response;
     if (
       manager.getSessionSnapshot(firstId).modelSelection?.model !==
-        "opencode/fledge-alpha-free"
-    ) throw new Error("prompt continuation lost its resolved model");
+      "opencode/fledge-alpha-free"
+    )
+      throw new Error("prompt continuation lost its resolved model");
 
     mapping = "opencode/paid-model";
     const second = parseToolResult(
@@ -469,11 +463,11 @@ Deno.test("operation policy resolves model sizes per cwd and snapshots them in s
     await mcp.close();
     await manager.closeAll();
     await server.close();
-    await Deno.remove(temp, { recursive: true });
+    await nodeFs.removePath(temp, { recursive: true });
   }
 });
 
-Deno.test("unprofiled agents use ACP model categories and ignore conflicting profile fallbacks", async () => {
+test("unprofiled agents use ACP model categories and ignore conflicting profile fallbacks", async () => {
   const { server, manager } = serverFor(["generic"]);
   const mcp = await connectMcp(server);
   try {
@@ -489,17 +483,22 @@ Deno.test("unprofiled agents use ACP model categories and ignore conflicting pro
         "An unprofiled agent did not use only its ACP model category",
       );
     }
-    const conflicting = discoverAdvertisedModels([{
-      id: "configured-model-id",
-      category: "thought_level",
-      type: "select",
-      currentValue: "high",
-      options: [{ value: "high", name: "High" }],
-    }], {
-      command: "agent",
-      args: [],
-      modelConfigId: "configured-model-id",
-    });
+    const conflicting = discoverAdvertisedModels(
+      [
+        {
+          id: "configured-model-id",
+          category: "thought_level",
+          type: "select",
+          currentValue: "high",
+          options: [{ value: "high", name: "High" }],
+        },
+      ],
+      {
+        command: "agent",
+        args: [],
+        modelConfigId: "configured-model-id",
+      },
+    );
     if (conflicting.length) {
       throw new Error("A profile overrode an explicit ACP non-model category");
     }
@@ -513,7 +512,7 @@ Deno.test("unprofiled agents use ACP model categories and ignore conflicting pro
   }
 });
 
-Deno.test("no advertised model option returns an empty generic model list", async () => {
+test("no advertised model option returns an empty generic model list", async () => {
   const { manager, server } = serverFor(["plain"]);
   const mcp = await connectMcp(server);
   try {
@@ -523,7 +522,8 @@ Deno.test("no advertised model option returns an empty generic model list", asyn
       }).response,
     );
     if (
-      result.status !== "completed" || (result.models as unknown[]).length !== 0
+      result.status !== "completed" ||
+      (result.models as unknown[]).length !== 0
     ) {
       throw new Error(
         "Agent without model options should return an empty list",
@@ -539,7 +539,7 @@ Deno.test("no advertised model option returns an empty generic model list", asyn
   }
 });
 
-Deno.test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes official pricing", async () => {
+test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes official pricing", async () => {
   const { server, manager } = serverFor(["opencode"], {
     loadOpenCodeCatalog: () => mockCatalog(),
   });
@@ -560,15 +560,16 @@ Deno.test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes
         "Remote-only model was added to the available model list",
       );
     }
-    const free = models.find((model) =>
-      model.id === "opencode/fledge-alpha-free"
+    const free = models.find(
+      (model) => model.id === "opencode/fledge-alpha-free",
     );
     const freeMetadata = free?.metadata as Record<string, unknown> | undefined;
     const pricing = freeMetadata?.pricing as
       | Record<string, unknown>
       | undefined;
     if (
-      free?.available !== true || freeMetadata?.free !== true ||
+      free?.available !== true ||
+      freeMetadata?.free !== true ||
       pricing?.input !== 0
     ) {
       throw new Error("Official free-model metadata was not attached");
@@ -584,8 +585,8 @@ Deno.test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes
     if (wrongProvider?.metadata) {
       throw new Error("Metadata crossed an unrelated provider namespace");
     }
-    const unmatched = models.find((model) =>
-      model.id === "opencode/available-without-metadata"
+    const unmatched = models.find(
+      (model) => model.id === "opencode/available-without-metadata",
     );
     if (unmatched?.available !== true || unmatched.metadata) {
       throw new Error(
@@ -608,12 +609,14 @@ Deno.test("OpenCode enrichment exactly matches ACP-advertised IDs and normalizes
   }
 });
 
-Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay distinct", async () => {
+test("OpenCode pricing, counterpart, tier, privacy, and provenance stay distinct", async () => {
   const catalog = await mockCatalog();
   const fledge = catalog.models.get("opencode/fledge-alpha-free");
   if (
-    fledge?.free !== true || fledge.pricingStatus !== "limited_time" ||
-    fledge.underlyingCostTier || fledge.paidCounterpart?.id
+    fledge?.free !== true ||
+    fledge.pricingStatus !== "limited_time" ||
+    fledge.underlyingCostTier ||
+    fledge.paidCounterpart?.id
   ) {
     throw new Error(
       "Fledge's current promotional price was incorrectly treated as its underlying tier or counterpart",
@@ -627,14 +630,13 @@ Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay dis
     throw new Error("Fledge privacy metadata was not conservative/provenanced");
   }
 
-  const longcat = catalog.models.get(
-    "opencode/longcat-2.5-preview-free",
-  );
+  const longcat = catalog.models.get("opencode/longcat-2.5-preview-free");
   if (
     longcat?.privacy?.trainingUse !== "not_used_for_training" ||
     longcat.privacy.retention !== "zero" ||
     longcat.privacy.sourceUrl !== OPENCODE_ZEN_DOCS_URL
-  ) throw new Error("Documented LongCat privacy facts were not retained");
+  )
+    throw new Error("Documented LongCat privacy facts were not retained");
 
   const museSpark = catalog.models.get(
     "opencode/muse-spark-1.3-contributor-free",
@@ -643,12 +645,14 @@ Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay dis
     museSpark?.privacy?.trainingUse !== "may_be_used_for_training" ||
     museSpark.privacy.retention !== "not_zero" ||
     museSpark.privacy.sourceUrl !== OPENCODE_ZEN_DOCS_URL
-  ) throw new Error("Documented Muse Spark data use was not normalized");
+  )
+    throw new Error("Documented Muse Spark data use was not normalized");
   const nemotron = catalog.models.get("opencode/nemotron-3-ultra-free");
   if (
     nemotron?.privacy?.trainingUse !== "may_be_used_for_improvement" ||
     nemotron.privacy.retention !== "not_zero"
-  ) throw new Error("Documented Nemotron trial data use was not normalized");
+  )
+    throw new Error("Documented Nemotron trial data use was not normalized");
 
   const jevFree = catalog.models.get("opencode/jev-1.13-free");
   if (
@@ -663,7 +667,8 @@ Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay dis
     jevFree.underlyingCostTier.counterpartId !== "opencode/jev-1.13" ||
     jevFree.underlyingCostTier.confidence !== "documented_counterpart" ||
     jevFree.underlyingCostTier.sourceUrl !== OPENCODE_ZEN_DOCS_URL
-  ) throw new Error("Documented Jev counterpart/tier was not derived");
+  )
+    throw new Error("Documented Jev counterpart/tier was not derived");
 
   const directPriced = catalog.models.get("opencode/paid-model");
   if (
@@ -671,17 +676,22 @@ Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay dis
     directPriced.underlyingCostTier.basis !== "published_pricing" ||
     directPriced.underlyingCostTier.confidence !== "direct" ||
     directPriced.underlyingCostTier.sourceUrl !== OPENCODE_ZEN_DOCS_URL
-  ) throw new Error("Published-price tier or provenance was not retained");
+  )
+    throw new Error("Published-price tier or provenance was not retained");
 
   const unrelatedFree = catalog.models.get("opencode/example-free");
   if (
-    unrelatedFree?.free !== true || unrelatedFree.pricingStatus ||
-    unrelatedFree.paidCounterpart || unrelatedFree.underlyingCostTier
-  ) throw new Error("Name similarity fabricated promotional/counterpart facts");
+    unrelatedFree?.free !== true ||
+    unrelatedFree.pricingStatus ||
+    unrelatedFree.paidCounterpart ||
+    unrelatedFree.underlyingCostTier
+  )
+    throw new Error("Name similarity fabricated promotional/counterpart facts");
   if (
     catalog.models.get("opencode/remote-only-model")?.privacy ||
     catalog.models.get("opencode/remote-only-model")?.underlyingCostTier
-  ) throw new Error("Unsupported metadata was fabricated for an unknown model");
+  )
+    throw new Error("Unsupported metadata was fabricated for an unknown model");
 
   const goSpaceBunny = catalog.models.get("opencode-go/space-bunny");
   if (
@@ -692,49 +702,56 @@ Deno.test("OpenCode pricing, counterpart, tier, privacy, and provenance stay dis
     goSpaceBunny.privacy?.trainingUse !== "not_used_for_training" ||
     goSpaceBunny.privacy.retention !== "zero" ||
     goSpaceBunny.provenance?.source !== "opencode_go"
-  ) throw new Error("OpenCode Go pricing/privacy metadata was not parsed");
+  )
+    throw new Error("OpenCode Go pricing/privacy metadata was not parsed");
 
-  const goLongcat = catalog.models.get(
-    "opencode-go/longcat-2.5-preview-free",
-  );
+  const goLongcat = catalog.models.get("opencode-go/longcat-2.5-preview-free");
   if (
-    goLongcat?.free !== true || goLongcat.subscriptionRequired !== true ||
+    goLongcat?.free !== true ||
+    goLongcat.subscriptionRequired !== true ||
     goLongcat.pricingStatus !== "limited_time" ||
-    goLongcat.underlyingCostTier || goLongcat.paidCounterpart
-  ) throw new Error("Go subscription/free-price distinction was lost");
+    goLongcat.underlyingCostTier ||
+    goLongcat.paidCounterpart
+  )
+    throw new Error("Go subscription/free-price distinction was lost");
 
-  const goMuse = catalog.models.get(
-    "opencode-go/muse-spark-1.3-contributor",
-  );
+  const goMuse = catalog.models.get("opencode-go/muse-spark-1.3-contributor");
   if (
     goMuse?.privacy?.trainingUse !== "may_be_used_for_training" ||
     goMuse.privacy.retention !== "not_zero" ||
     goMuse.subscriptionRequired !== true
-  ) throw new Error("OpenCode Go model-specific training terms were lost");
+  )
+    throw new Error("OpenCode Go model-specific training terms were lost");
 
-  const enrichedGo = enrichAdvertisedModels([{
-    id: "opencode-go/space-bunny",
-    name: "opencode-go/Space Bunny",
-    configId: "model",
-    available: true,
-    selected: true,
-    availabilitySource: "acp",
-  }], catalog)[0];
+  const enrichedGo = enrichAdvertisedModels(
+    [
+      {
+        id: "opencode-go/space-bunny",
+        name: "opencode-go/Space Bunny",
+        configId: "model",
+        available: true,
+        selected: true,
+        availabilitySource: "acp",
+      },
+    ],
+    catalog,
+  )[0];
   const enrichedGoMetadata = enrichedGo.metadata as
     | Record<string, unknown>
     | undefined;
   if (
-    enrichedGo.available !== true || enrichedGoMetadata?.free !== false ||
+    enrichedGo.available !== true ||
+    enrichedGoMetadata?.free !== false ||
     enrichedGoMetadata.subscriptionRequired !== true
-  ) throw new Error("OpenCode Go metadata did not enrich the ACP model");
+  )
+    throw new Error("OpenCode Go metadata did not enrich the ACP model");
 
   const zenSpaceBunny = catalog.models.get("opencode/space-bunny-free");
-  if (
-    zenSpaceBunny?.paidCounterpart || zenSpaceBunny?.underlyingCostTier
-  ) throw new Error("Name similarity fabricated a Space Bunny counterpart");
+  if (zenSpaceBunny?.paidCounterpart || zenSpaceBunny?.underlyingCostTier)
+    throw new Error("Name similarity fabricated a Space Bunny counterpart");
 });
 
-Deno.test("underlying economic tiers use deterministic published-price bands", () => {
+test("underlying economic tiers use deterministic published-price bands", () => {
   const tier = (input: number, output: number) =>
     economicTier({
       currency: "USD",
@@ -743,13 +760,17 @@ Deno.test("underlying economic tiers use deterministic published-price bands", (
       output,
     });
   if (
-    tier(0.5, 0.99) !== "low" || tier(1, 4.99) !== "medium" ||
-    tier(5, 19.99) !== "high" || tier(20, 0) !== "premium" ||
-    tier(0, 0) !== undefined || economicTier(undefined) !== undefined
-  ) throw new Error("Economic price bands or unknown handling changed");
+    tier(0.5, 0.99) !== "low" ||
+    tier(1, 4.99) !== "medium" ||
+    tier(5, 19.99) !== "high" ||
+    tier(20, 0) !== "premium" ||
+    tier(0, 0) !== undefined ||
+    economicTier(undefined) !== undefined
+  )
+    throw new Error("Economic price bands or unknown handling changed");
 });
 
-Deno.test("metadata failure preserves ACP availability and ACP failure remains an error", async () => {
+test("metadata failure preserves ACP availability and ACP failure remains an error", async () => {
   const { server, manager } = serverFor(["opencode", "bad"], {
     loadOpenCodeCatalog: () =>
       Promise.reject(new Error("metadata unavailable")),
@@ -793,7 +814,7 @@ Deno.test("metadata failure preserves ACP availability and ACP failure remains a
   }
 });
 
-Deno.test("model discovery timeout and MCP cancellation close late sessions", async () => {
+test("model discovery timeout and MCP cancellation close late sessions", async () => {
   const { server, manager } = serverFor(["slow"]);
   const mcp = await connectMcp(server);
   try {

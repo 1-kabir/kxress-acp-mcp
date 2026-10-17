@@ -1,3 +1,6 @@
+import process from "node:process";
+import { ProcessCommand } from "#proc";
+import * as nodeFs from "#fs";
 import { type AgentDefinition, loadAgents } from "../agents/config.ts";
 import {
   type ConfigSource,
@@ -39,9 +42,10 @@ export interface DoctorOptions {
 export interface DoctorDependencies {
   resolveExecutable: (command: string) => Promise<string | undefined>;
   loadAgents: (path?: string) => Promise<Record<string, AgentDefinition>>;
-  inspectStaleWorkspaces: (
-    options: { delete: false; checkCreatorProcess: false },
-  ) => ReturnType<typeof cleanupStaleWorkspaceSnapshots>;
+  inspectStaleWorkspaces: (options: {
+    delete: false;
+    checkCreatorProcess: false;
+  }) => ReturnType<typeof cleanupStaleWorkspaceSnapshots>;
   workspaceRoot: () => Promise<string>;
   runVersionCommand: (path: string) => Promise<string | undefined>;
   resolveConfiguration?: typeof resolveConfiguration;
@@ -55,7 +59,7 @@ const defaultDependencies: DoctorDependencies = {
   workspaceRoot: getWorkspaceRoot,
   async runVersionCommand(path) {
     try {
-      const result = await new Deno.Command(path, {
+      const result = await new ProcessCommand(path, {
         args: ["--version"],
         stdin: "null",
         stdout: "piped",
@@ -92,21 +96,19 @@ async function agentChecks(
   dependencies: DoctorDependencies,
 ): Promise<DiagnosticCheck[]> {
   const checks: DiagnosticCheck[] = [];
-  for (
-    const [id, agent] of Object.entries(agents).sort(([a], [b]) =>
-      a.localeCompare(b)
-    )
-  ) {
+  for (const [id, agent] of Object.entries(agents).sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
     const protocol = agent.acpProtocol ?? "v1";
     const identity = agent.implementation
       ? `${id} (${agent.implementation} implementation)`
       : id;
     checks.push({
       id: `agent.${id}.protocol`,
-      status: agent.supportedProtocols &&
-          !agent.supportedProtocols.includes(protocol)
-        ? "warning"
-        : "ok",
+      status:
+        agent.supportedProtocols && !agent.supportedProtocols.includes(protocol)
+          ? "warning"
+          : "ok",
       summary: `${identity}: ACP ${protocol} ${
         agent.supportedProtocols && !agent.supportedProtocols.includes(protocol)
           ? "is not confirmed for this built-in profile"
@@ -118,8 +120,7 @@ async function agentChecks(
       checks.push({
         id: `agent.${id}`,
         status: "error",
-        summary:
-          `${identity} (ACP ${protocol}): command not found (${agent.command}); ${agent.args.length} configured argument(s)`,
+        summary: `${identity} (ACP ${protocol}): command not found (${agent.command}); ${agent.args.length} configured argument(s)`,
         ...(agent.installHint
           ? { detail: "See the agent installation instructions in README." }
           : {}),
@@ -129,8 +130,7 @@ async function agentChecks(
     checks.push({
       id: `agent.${id}`,
       status: "ok",
-      summary:
-        `${identity} (ACP ${protocol}): ${commandPath}; ${agent.args.length} configured argument(s)`,
+      summary: `${identity} (ACP ${protocol}): ${commandPath}; ${agent.args.length} configured argument(s)`,
     });
 
     for (const name of agent.requiredExecutableEnv ?? []) {
@@ -141,23 +141,21 @@ async function agentChecks(
       checks.push(
         resolved
           ? {
-            id: `agent.${id}.required.${name}`,
-            status: "ok",
-            summary:
-              `${identity}: required executable environment setting is configured (${name})`,
-          }
+              id: `agent.${id}.required.${name}`,
+              status: "ok",
+              summary: `${identity}: required executable environment setting is configured (${name})`,
+            }
           : {
-            id: `agent.${id}.required.${name}`,
-            status: "error",
-            summary: `${identity}: ${name} must name an existing executable`,
-          },
+              id: `agent.${id}.required.${name}`,
+              status: "error",
+              summary: `${identity}: ${name} must name an existing executable`,
+            },
       );
     }
 
-    for (
-      const [index, prerequisite] of (agent.runtimePrerequisites ?? [])
-        .entries()
-    ) {
+    for (const [index, prerequisite] of (
+      agent.runtimePrerequisites ?? []
+    ).entries()) {
       const prerequisiteId = `runtime.${id}.${index + 1}`;
       const prerequisitePath = await dependencies.resolveExecutable(
         prerequisite.command,
@@ -182,26 +180,25 @@ async function agentChecks(
         });
         continue;
       }
-      const actualVersion = await dependencies.runVersionCommand(
-        prerequisitePath,
-      );
+      const actualVersion =
+        await dependencies.runVersionCommand(prerequisitePath);
       const satisfies = actualVersion
         ? versionAtLeast(actualVersion, prerequisite.minimumVersion)
         : undefined;
       checks.push(
         satisfies === true
           ? {
-            id: prerequisiteId,
-            status: "ok",
-            summary: `${prerequisite.command} ${actualVersion}`,
-          }
+              id: prerequisiteId,
+              status: "ok",
+              summary: `${prerequisite.command} ${actualVersion}`,
+            }
           : {
-            id: prerequisiteId,
-            status: "error",
-            summary: actualVersion
-              ? `${identity} requires ${prerequisite.command} ${prerequisite.minimumVersion} or later; found ${actualVersion}`
-              : `Could not read ${prerequisite.command} version required by ${identity}`,
-          },
+              id: prerequisiteId,
+              status: "error",
+              summary: actualVersion
+                ? `${identity} requires ${prerequisite.command} ${prerequisite.minimumVersion} or later; found ${actualVersion}`
+                : `Could not read ${prerequisite.command} version required by ${identity}`,
+            },
       );
     }
   }
@@ -214,14 +211,14 @@ export async function diagnose(
 ): Promise<DoctorReport> {
   const checks: DiagnosticCheck[] = [];
   let configPath: string | null = null;
-  const effectiveCwd = options.cwd ?? Deno.cwd();
+  const effectiveCwd = options.cwd ?? process.cwd();
   let configSources: ConfigSource[] = [];
   let agents: Record<string, AgentDefinition> | undefined;
   try {
     if (options.configPath !== undefined) {
       configPath = options.configPath;
-      const info = await Deno.stat(options.configPath);
-      if (!info.isFile) throw new Error("Explicit config path is not a file");
+      const info = await nodeFs.stat(options.configPath);
+      if (!info.isFile()) throw new Error("Explicit config path is not a file");
       agents = await dependencies.loadAgents(options.configPath);
       configSources = [{ kind: "explicit", path: options.configPath }];
     } else if (dependencies.resolveConfiguration) {
@@ -243,19 +240,23 @@ export async function diagnose(
         : "no config files; built-in profiles are active",
     });
   } catch (error) {
-    const missingExplicit = options.configPath !== undefined &&
-      (error instanceof Deno.errors.NotFound ||
+    const missingExplicit =
+      options.configPath !== undefined &&
+      (nodeFs.isErrorCode(error, "ENOENT") ||
         (error instanceof Error && /does not exist/i.test(error.message)));
-    const failedPath = options.configPath ??
+    const failedPath =
+      options.configPath ??
       (error instanceof Error
         ? error.message.match(/(?:Config file )?'([^']+\.acp-mcp\.json)'/)?.[1]
         : undefined);
     configPath = failedPath ?? null;
     if (failedPath) {
-      configSources = [{
-        kind: options.configPath !== undefined ? "explicit" : "unknown",
-        path: failedPath,
-      }];
+      configSources = [
+        {
+          kind: options.configPath !== undefined ? "explicit" : "unknown",
+          path: failedPath,
+        },
+      ];
     }
     checks.push({
       id: "config",
@@ -267,18 +268,21 @@ export async function diagnose(
   }
 
   if (agents) {
-    checks.push(...await agentChecks(agents, dependencies));
+    checks.push(...(await agentChecks(agents, dependencies)));
   }
 
   try {
     const root = await dependencies.workspaceRoot();
-    let rootStatus: Deno.FileInfo | undefined;
+    let rootStatus: nodeFs.FileInfo | undefined;
     try {
-      rootStatus = await Deno.lstat(root);
+      rootStatus = await nodeFs.lstat(root);
     } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      if (!nodeFs.isErrorCode(error, "ENOENT")) throw error;
     }
-    if (rootStatus && (!rootStatus.isDirectory || rootStatus.isSymlink)) {
+    if (
+      rootStatus &&
+      (!rootStatus.isDirectory() || rootStatus.isSymbolicLink())
+    ) {
       checks.push({
         id: "workspace.root",
         status: "error",
@@ -295,15 +299,14 @@ export async function diagnose(
       delete: false,
       checkCreatorProcess: false,
     });
-    const creatorUnchecked = stale.entries.filter((entry) =>
-      entry.reason === "creator_process_status_not_checked"
+    const creatorUnchecked = stale.entries.filter(
+      (entry) => entry.reason === "creator_process_status_not_checked",
     ).length;
     if (stale.failed > 0 || stale.eligible > 0 || creatorUnchecked > 0) {
       checks.push({
         id: "workspace.stale",
         status: "warning",
-        summary:
-          `${stale.eligible} stale workspace(s) eligible; ${creatorUnchecked} age-qualified workspace(s) not checked for an active creator; ${stale.failed} inspection failure(s)`,
+        summary: `${stale.eligible} stale workspace(s) eligible; ${creatorUnchecked} age-qualified workspace(s) not checked for an active creator; ${stale.failed} inspection failure(s)`,
         detail:
           "Doctor never deletes workspaces. Use list_stale_workspaces and cleanup_stale_workspaces through MCP to inspect and explicitly remove eligible leftovers.",
       });
@@ -324,8 +327,13 @@ export async function diagnose(
 
   return {
     version: VERSION,
-    platform: Deno.build.os,
-    architecture: Deno.build.arch,
+    platform: process.platform === "win32" ? "windows" : process.platform,
+    architecture:
+      process.arch === "x64"
+        ? "x86_64"
+        : process.arch === "arm64"
+          ? "aarch64"
+          : process.arch,
     configPath,
     effectiveCwd,
     configSources,
@@ -339,8 +347,9 @@ export function formatDoctorReport(report: DoctorReport): string {
     `acp-mcp doctor ${report.version} (${report.platform}/${report.architecture})`,
     `Config: ${report.configPath ?? "unavailable"}`,
     ...(report.effectiveCwd ? [`Operation cwd: ${report.effectiveCwd}`] : []),
-    ...(report.configSources ?? []).map((source, index) =>
-      `Config source ${index + 1} (${source.kind}): ${source.path}`
+    ...(report.configSources ?? []).map(
+      (source, index) =>
+        `Config source ${index + 1} (${source.kind}): ${source.path}`,
     ),
   ];
   for (const check of report.checks) {
@@ -351,9 +360,9 @@ export function formatDoctorReport(report: DoctorReport): string {
   const count = (status: DiagnosticStatus) =>
     report.checks.filter((check) => check.status === status).length;
   lines.push(
-    `Result: ${report.status} (${count("error")} errors, ${
-      count("warning")
-    } warnings)`,
+    `Result: ${report.status} (${count("error")} errors, ${count(
+      "warning",
+    )} warnings)`,
   );
   return lines.join("\n");
 }

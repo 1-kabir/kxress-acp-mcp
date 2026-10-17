@@ -1,10 +1,12 @@
+import { test } from "node:test";
+import process from "node:process";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
-Deno.test({
+test({
   name: "OpenCode ACP smoke test (opt in)",
-  ignore: Deno.env.get("ACPMCP_OPENCODE_TEST") !== "1",
+  skip: process.env["ACPMCP_OPENCODE_TEST"] !== "1",
   fn: async () => {
     const manager = new SessionManager({
       opencode: { command: "opencode", args: ["acp"] },
@@ -45,16 +47,17 @@ Deno.test({
     const server = createMcpServer(agents, manager);
     let mcp: Awaited<ReturnType<typeof connectMcp>> | undefined;
     try {
-      const probe = await start("opencode", Deno.cwd());
+      const probe = await start("opencode", process.cwd());
       const model = probe.configOptions.find((option) => option.id === "model");
       const advertised =
         (model?.options as Array<Record<string, unknown>> | undefined)
           ?.flatMap((entry) =>
             Array.isArray(entry.options)
-              ? entry.options as Array<Record<string, unknown>>
-              : [entry]
-          ).some((entry) =>
-            entry.value === "opencode/longcat-2.5-preview-free"
+              ? (entry.options as Array<Record<string, unknown>>)
+              : [entry],
+          )
+          .some(
+            (entry) => entry.value === "opencode/longcat-2.5-preview-free",
           ) ?? false;
       await manager.close(probe.id);
       if (!advertised) {
@@ -64,16 +67,15 @@ Deno.test({
         return;
       }
       mcp = await connectMcp(server);
-      const outcomes: Array<
-        { model: string; result: Record<string, unknown> }
-      > = [];
+      const outcomes: Array<{
+        model: string;
+        result: Record<string, unknown>;
+      }> = [];
       let fledgeWire: unknown;
-      for (
-        const modelId of [
-          "opencode/fledge-alpha-free",
-          "opencode/longcat-2.5-preview-free",
-        ]
-      ) {
+      for (const modelId of [
+        "opencode/fledge-alpha-free",
+        "opencode/longcat-2.5-preview-free",
+      ]) {
         const wire = await mcp.callTool("run_task", {
           agentId: "opencode",
           config: { model: modelId },
@@ -97,9 +99,9 @@ Deno.test({
       if (longcat.status === "failed") {
         const error = longcat.error as Record<string, unknown>;
         const diagnostic = failureDiagnostic
-          ? `${failureDiagnostic.error ?? ""} ${
-            JSON.stringify(failureDiagnostic.data ?? "")
-          }`
+          ? `${failureDiagnostic.error ?? ""} ${JSON.stringify(
+              failureDiagnostic.data ?? "",
+            )}`
           : "";
         if (/\b(?:rate limit exceeded|too many requests)\b/i.test(diagnostic)) {
           const classification = error?.classification as
@@ -111,9 +113,9 @@ Deno.test({
             classification?.evidence !== "message_heuristic"
           ) {
             throw new Error(
-              `Explicit LongCat rate limit was not classified: ${
-                JSON.stringify(longcat)
-              }`,
+              `Explicit LongCat rate limit was not classified: ${JSON.stringify(
+                longcat,
+              )}`,
             );
           }
         } else if (error && "classification" in error) {

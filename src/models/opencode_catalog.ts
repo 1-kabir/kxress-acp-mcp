@@ -73,31 +73,41 @@ const limitedTimeFreeIds = new Set([
 ]);
 
 /** Exact pair explicitly described by OpenCode's Zen docs. */
-const documentedPaidCounterparts = new Map([
-  ["jev-1.13-free", "jev-1.13"],
-]);
+const documentedPaidCounterparts = new Map([["jev-1.13-free", "jev-1.13"]]);
 
 const documentedPrivacy = new Map<string, OpenCodeModelInfo["privacy"]>([
-  ["space-bunny-free", {
-    trainingUse: "not_used_for_training",
-    retention: "zero",
-    sourceUrl: OPENCODE_ZEN_DOCS_URL,
-  }],
-  ["longcat-2.5-preview-free", {
-    trainingUse: "not_used_for_training",
-    retention: "zero",
-    sourceUrl: OPENCODE_ZEN_DOCS_URL,
-  }],
-  ["jev-1.13-free", {
-    trainingUse: "not_used_for_training",
-    retention: "provider_policy",
-    sourceUrl: OPENCODE_ZEN_DOCS_URL,
-  }],
-  ["jev-1.13", {
-    trainingUse: "not_used_for_training",
-    retention: "provider_policy",
-    sourceUrl: OPENCODE_ZEN_DOCS_URL,
-  }],
+  [
+    "space-bunny-free",
+    {
+      trainingUse: "not_used_for_training",
+      retention: "zero",
+      sourceUrl: OPENCODE_ZEN_DOCS_URL,
+    },
+  ],
+  [
+    "longcat-2.5-preview-free",
+    {
+      trainingUse: "not_used_for_training",
+      retention: "zero",
+      sourceUrl: OPENCODE_ZEN_DOCS_URL,
+    },
+  ],
+  [
+    "jev-1.13-free",
+    {
+      trainingUse: "not_used_for_training",
+      retention: "provider_policy",
+      sourceUrl: OPENCODE_ZEN_DOCS_URL,
+    },
+  ],
+  [
+    "jev-1.13",
+    {
+      trainingUse: "not_used_for_training",
+      retention: "provider_policy",
+      sourceUrl: OPENCODE_ZEN_DOCS_URL,
+    },
+  ],
   ...[
     "big-pickle",
     "exo-free",
@@ -106,27 +116,35 @@ const documentedPrivacy = new Map<string, OpenCodeModelInfo["privacy"]>([
     "ling-3.1-flash-free",
     "mimo-v2.5-free",
     "mimo-v2.6-flash-free",
-  ].map((id) =>
-    [id, {
-      trainingUse: "may_be_used_for_improvement" as const,
-      sourceUrl: OPENCODE_ZEN_DOCS_URL,
-    }] as const
+  ].map(
+    (id) =>
+      [
+        id,
+        {
+          trainingUse: "may_be_used_for_improvement" as const,
+          sourceUrl: OPENCODE_ZEN_DOCS_URL,
+        },
+      ] as const,
   ),
-  ...[
-    "nemotron-3-ultra-free",
-    "nemotron-3.5-lightning-free",
-  ].map((id) =>
-    [id, {
-      trainingUse: "may_be_used_for_improvement" as const,
-      retention: "not_zero" as const,
-      sourceUrl: OPENCODE_ZEN_DOCS_URL,
-    }] as const
+  ...["nemotron-3-ultra-free", "nemotron-3.5-lightning-free"].map(
+    (id) =>
+      [
+        id,
+        {
+          trainingUse: "may_be_used_for_improvement" as const,
+          retention: "not_zero" as const,
+          sourceUrl: OPENCODE_ZEN_DOCS_URL,
+        },
+      ] as const,
   ),
-  ["muse-spark-1.3-contributor-free", {
-    trainingUse: "may_be_used_for_training",
-    retention: "not_zero",
-    sourceUrl: OPENCODE_ZEN_DOCS_URL,
-  }],
+  [
+    "muse-spark-1.3-contributor-free",
+    {
+      trainingUse: "may_be_used_for_training",
+      retention: "not_zero",
+      sourceUrl: OPENCODE_ZEN_DOCS_URL,
+    },
+  ],
 ]);
 
 /** Coarse project bands over max(input, output) USD per 1M tokens. */
@@ -143,7 +161,8 @@ export function economicTier(
 }
 
 function text(html: string): string {
-  return html.replace(/<[^>]+>/g, " ")
+  return html
+    .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;|&#160;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
@@ -157,10 +176,10 @@ function text(html: string): string {
 function tableRows(html: string): string[][][] {
   return [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)].map(
     ([, table]) =>
-      [...table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map(
-        ([, row]) =>
-          [...row.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)]
-            .map(([, cell]) => text(cell)),
+      [...table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map(([, row]) =>
+        [...row.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(
+          ([, cell]) => text(cell),
+        ),
       ),
   );
 }
@@ -179,37 +198,40 @@ function parseDocs(
 ): Map<string, OpenCodeModelInfo> {
   const tables = tableRows(html);
   const catalogRows =
-    tables.find((rows) =>
-      rows[0]?.some((cell) => /^(model\s*)?id$/i.test(cell)) &&
-      rows[0]?.some((cell) => /^model$/i.test(cell))
+    tables.find(
+      (rows) =>
+        rows[0]?.some((cell) => /^(model\s*)?id$/i.test(cell)) &&
+        rows[0]?.some((cell) => /^model$/i.test(cell)),
     ) ?? [];
   const catalogHeader = catalogRows[0]?.map((cell) => cell.toLowerCase()) ?? [];
   const modelColumn = catalogHeader.indexOf("model");
   const idColumn = catalogHeader.findIndex((cell) =>
-    /^(model\s*)?id$/.test(cell)
+    /^(model\s*)?id$/.test(cell),
   );
   const idsByName = new Map<string, string>();
   for (const row of catalogRows.slice(1)) {
-    if (
-      modelColumn < 0 || idColumn < 0 || !row[modelColumn] || !row[idColumn]
-    ) continue;
+    if (modelColumn < 0 || idColumn < 0 || !row[modelColumn] || !row[idColumn])
+      continue;
     idsByName.set(row[modelColumn].toLowerCase(), row[idColumn]);
   }
 
-  const pricingRows = tables.find((rows) => {
-    const header = rows[0]?.map((cell) => cell.toLowerCase()) ?? [];
-    return header.includes("model") && header.includes("input") &&
-      header.includes("output") && header.some((cell) =>
-        cell.includes("cached read")
+  const pricingRows =
+    tables.find((rows) => {
+      const header = rows[0]?.map((cell) => cell.toLowerCase()) ?? [];
+      return (
+        header.includes("model") &&
+        header.includes("input") &&
+        header.includes("output") &&
+        header.some((cell) => cell.includes("cached read"))
       );
-  }) ?? [];
+    }) ?? [];
   const header = pricingRows[0]?.map((cell) => cell.toLowerCase()) ?? [];
   const column = (label: string) => header.indexOf(label);
   const cacheReadColumn = header.findIndex((cell) =>
-    cell.includes("cached read")
+    cell.includes("cached read"),
   );
   const cacheWriteColumn = header.findIndex((cell) =>
-    cell.includes("cached write")
+    cell.includes("cached write"),
   );
   const result = new Map<string, OpenCodeModelInfo>();
   for (const [name, id] of idsByName) {
@@ -228,12 +250,10 @@ function parseDocs(
     const input = price(row[column("input")] ?? "");
     const output = price(row[column("output")] ?? "");
     if (input === undefined || output === undefined) continue;
-    const cacheRead = cacheReadColumn >= 0
-      ? price(row[cacheReadColumn] ?? "")
-      : undefined;
-    const cacheWrite = cacheWriteColumn >= 0
-      ? price(row[cacheWriteColumn] ?? "")
-      : undefined;
+    const cacheRead =
+      cacheReadColumn >= 0 ? price(row[cacheReadColumn] ?? "") : undefined;
+    const cacheWrite =
+      cacheWriteColumn >= 0 ? price(row[cacheWriteColumn] ?? "") : undefined;
     result.set(id, {
       ...result.get(id),
       id,
@@ -257,38 +277,42 @@ function parseDocs(
   }
 
   if (source === "opencode_go") {
-    const privacyRows = tables.find((rows) => {
-      const headers = rows[0]?.map((cell) => cell.toLowerCase()) ?? [];
-      return headers.includes("model") &&
-        headers.some((cell) => cell.includes("model training")) &&
-        headers.some((cell) => cell.includes("data retention"));
-    }) ?? [];
-    const privacyHeader = privacyRows[0]?.map((cell) => cell.toLowerCase()) ??
-      [];
+    const privacyRows =
+      tables.find((rows) => {
+        const headers = rows[0]?.map((cell) => cell.toLowerCase()) ?? [];
+        return (
+          headers.includes("model") &&
+          headers.some((cell) => cell.includes("model training")) &&
+          headers.some((cell) => cell.includes("data retention"))
+        );
+      }) ?? [];
+    const privacyHeader =
+      privacyRows[0]?.map((cell) => cell.toLowerCase()) ?? [];
     const modelIndex = privacyHeader.indexOf("model");
     const trainingIndex = privacyHeader.findIndex((cell) =>
-      cell.includes("model training")
+      cell.includes("model training"),
     );
     const retentionIndex = privacyHeader.findIndex((cell) =>
-      cell.includes("data retention")
+      cell.includes("data retention"),
     );
     for (const row of privacyRows.slice(1)) {
       const id = idsByName.get((row[modelIndex] ?? "").toLowerCase());
       if (!id) continue;
       const training = (row[trainingIndex] ?? "").toLowerCase();
       const retentionText = (row[retentionIndex] ?? "").toLowerCase();
-      const trainingUse = training === "not used"
-        ? "not_used_for_training"
-        : training === "yes"
-        ? "may_be_used_for_training"
-        : undefined;
+      const trainingUse =
+        training === "not used"
+          ? "not_used_for_training"
+          : training === "yes"
+            ? "may_be_used_for_training"
+            : undefined;
       const retention = /\b0 days\b/.test(retentionText)
         ? "zero"
         : /\b30 days\b/.test(retentionText)
-        ? "thirty_days"
-        : /not zdr/.test(retentionText)
-        ? "not_zero"
-        : undefined;
+          ? "thirty_days"
+          : /not zdr/.test(retentionText)
+            ? "not_zero"
+            : undefined;
       const model = result.get(id);
       if (model && (trainingUse || retention)) {
         model.privacy = {
@@ -329,7 +353,7 @@ export async function fetchOpenCodeCatalog(
     if (!modelsResponse.ok || !docsResponse.ok) {
       throw new Error("OpenCode metadata source unavailable");
     }
-    const api = await modelsResponse.json() as {
+    const api = (await modelsResponse.json()) as {
       data?: Array<{ id?: unknown; owned_by?: unknown }>;
     };
     if (!Array.isArray(api.data)) {
@@ -377,9 +401,10 @@ export async function fetchOpenCodeCatalog(
         value: tier,
         basis: "published_pricing",
         confidence: "direct",
-        sourceUrl: model.provenance?.source === "opencode_go"
-          ? OPENCODE_GO_DOCS_URL
-          : OPENCODE_ZEN_DOCS_URL,
+        sourceUrl:
+          model.provenance?.source === "opencode_go"
+            ? OPENCODE_GO_DOCS_URL
+            : OPENCODE_ZEN_DOCS_URL,
       };
     }
   }
@@ -394,7 +419,8 @@ export function enrichAdvertisedModels(
     if (
       !model.id.startsWith("opencode/") &&
       !model.id.startsWith("opencode-go/")
-    ) return model;
+    )
+      return model;
     const metadata = catalog.models.get(model.id);
     if (!metadata) return model;
     const modelMetadata = {

@@ -1,3 +1,6 @@
+import process from "node:process";
+import { ProcessCommand, type ProcessOutput } from "#proc";
+import * as nodeFs from "#fs";
 import { dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../src/version.ts";
@@ -35,7 +38,7 @@ const validateManifest = validateReleaseManifest;
 export function artifactName(
   version: string,
   target: string,
-  _os = Deno.build.os,
+  _os = process.platform,
 ): string {
   return releaseNames(version, target).archive;
 }
@@ -56,22 +59,22 @@ export async function ensureReleaseOutputRoot(
   // path may use an ordinary 8.3 alias; resolve() does not expand it, while
   // realPath() does. Build the guarded output paths from that canonical root
   // so only redirects below the checkout are treated as links.
-  const canonicalProjectRoot = resolve(await Deno.realPath(projectRoot));
+  const canonicalProjectRoot = resolve(await nodeFs.realpath(projectRoot));
   const expectedDist = resolve(canonicalProjectRoot, "dist");
   const expectedReleaseRoot = resolve(expectedDist, "releases");
   const ensurePlainDirectory = async (path: string): Promise<void> => {
     try {
-      await Deno.mkdir(path);
+      await nodeFs.mkdir(path);
     } catch (error) {
-      if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
+      if (!nodeFs.isErrorCode(error, "EEXIST")) throw error;
     }
-    const info = await Deno.lstat(path);
-    if (!info.isDirectory || info.isSymlink) {
+    const info = await nodeFs.lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
       throw new Error(`Release output path must be a plain directory: ${path}`);
     }
-    const real = resolve(await Deno.realPath(path));
+    const real = resolve(await nodeFs.realpath(path));
     const normalize = (value: string) =>
-      Deno.build.os === "windows" ? value.toLowerCase() : value;
+      process.platform === "win32" ? value.toLowerCase() : value;
     if (normalize(real) !== normalize(resolve(path))) {
       throw new Error(`Release output path resolves through a link: ${path}`);
     }
@@ -93,16 +96,20 @@ async function runCommand(
   args: string[],
   options: { env?: Record<string, string>; cwd?: string } = {},
 ): Promise<void> {
-  const status = await new Deno.Command(Deno.execPath(), {
-    args,
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const status = await new ProcessCommand(npmCommand, {
+    args: ["run", ...args],
     cwd: options.cwd ?? projectRoot,
     env: options.env,
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
+    shell: process.platform === "win32",
   }).spawn().status;
   if (!status.success) {
-    throw new Error(`Command failed (${status.code}): deno ${args.join(" ")}`);
+    throw new Error(
+      `Command failed (${status.code}): npm run ${args.join(" ")}`,
+    );
   }
 }
 
@@ -110,8 +117,8 @@ async function capture(
   command: string,
   args: string[],
   cwd: string,
-): Promise<Deno.CommandOutput> {
-  return await new Deno.Command(command, {
+): Promise<ProcessOutput> {
+  return await new ProcessCommand(command, {
     args,
     cwd,
     stdin: "null",
@@ -135,9 +142,9 @@ async function gitOutput(args: string[]): Promise<string> {
   const result = await capture("git", args, projectRoot);
   if (!result.success) {
     throw new Error(
-      `git ${args.join(" ")} failed: ${
-        new TextDecoder().decode(result.stderr).trim()
-      }`,
+      `git ${args.join(" ")} failed: ${new TextDecoder()
+        .decode(result.stderr)
+        .trim()}`,
     );
   }
   return new TextDecoder().decode(result.stdout).trim();
@@ -145,11 +152,7 @@ async function gitOutput(args: string[]): Promise<string> {
 
 async function requireCleanTree(): Promise<void> {
   assertCleanTreeStatus(
-    await gitOutput([
-      "status",
-      "--porcelain",
-      "--untracked-files=all",
-    ]),
+    await gitOutput(["status", "--porcelain", "--untracked-files=all"]),
   );
 }
 
@@ -164,17 +167,20 @@ async function verifyExecutable(path: string, cwd: string): Promise<void> {
 }
 
 export async function smokeExecutable(path: string): Promise<void> {
-  const cwd = await Deno.makeTempDir({ prefix: "acp-mcp-release-smoke-" });
+  const cwd = await nodeFs.makeTempDir({ prefix: "acp-mcp-release-smoke-" });
   try {
     const configPath = join(cwd, "release smoke config.json");
-    await Deno.writeTextFile(configPath, JSON.stringify({ agents: {} }));
+    await nodeFs.writeText(configPath, JSON.stringify({ agents: {} }));
     await verifyExecutable(path, cwd);
     const help = await capture(path, ["--help"], cwd);
     if (
-      !help.success || !new TextDecoder().decode(help.stdout).includes(
-        "acp-mcp doctor [--config <path>] [--json]",
-      ) || help.stderr.length
-    ) throw new Error("Native --help smoke failed");
+      !help.success ||
+      !new TextDecoder()
+        .decode(help.stdout)
+        .includes("acp-mcp doctor [--config <path>] [--json]") ||
+      help.stderr.length
+    )
+      throw new Error("Native --help smoke failed");
 
     const doctor = await capture(path, ["doctor", "--json"], cwd);
     let report: { version?: string; status?: string; checks?: unknown[] };
@@ -188,9 +194,10 @@ export async function smokeExecutable(path: string): Promise<void> {
       report.version !== VERSION ||
       !["healthy", "warnings", "errors"].includes(report.status ?? "") ||
       !Array.isArray(report.checks)
-    ) throw new Error("Native doctor --json smoke failed");
+    )
+      throw new Error("Native doctor --json smoke failed");
 
-    const child = new Deno.Command(path, {
+    const child = new ProcessCommand(path, {
       args: ["--config", configPath],
       cwd,
       stdin: "piped",
@@ -255,7 +262,7 @@ export async function smokeExecutable(path: string): Promise<void> {
           setTimeout(
             () => reject(new Error("Native MCP server did not exit")),
             10_000,
-          )
+          ),
         ),
       ]);
       if (!status.success) {
@@ -264,36 +271,39 @@ export async function smokeExecutable(path: string): Promise<void> {
     } finally {
       try {
         writer.releaseLock();
-      } catch { /* closed */ }
+      } catch {
+        /* closed */
+      }
       try {
         reader.releaseLock();
-      } catch { /* process exited */ }
+      } catch {
+        /* process exited */
+      }
       const exited = await Promise.race([
-        child.status.then(() => true, () => true),
+        child.status.then(
+          () => true,
+          () => true,
+        ),
         new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
       ]);
       if (!exited) child.kill("SIGKILL");
       await child.status.catch(() => undefined);
     }
   } finally {
-    await Deno.remove(cwd, { recursive: true });
+    await nodeFs.removePath(cwd, { recursive: true });
   }
 }
 
 async function smokeTestExecutable(path: string): Promise<void> {
-  const env = Deno.env.toObject();
+  const env = { ...process.env };
   env.ACPMCP_NATIVE_EXECUTABLE = path;
   for (const name of optInTestVariables) env[name] = "0";
-  const status = await new Deno.Command(Deno.execPath(), {
+  const status = await new ProcessCommand(process.execPath, {
     args: [
-      "test",
-      "--allow-env",
-      "--allow-read",
-      "--allow-run",
-      "--allow-write",
-      "--filter",
+      "--test",
+      "--test-name-pattern",
       "native product works",
-      "tests/native_mcp_smoke_test.ts",
+      "tests/native_mcp_smoke.test.ts",
     ],
     cwd: projectRoot,
     env,
@@ -307,20 +317,21 @@ async function smokeTestExecutable(path: string): Promise<void> {
 async function validateSource(): Promise<string> {
   await requireCleanTree();
   const commit = await gitOutput(["rev-parse", "HEAD"]);
-  await runCommand(["task", "check"]);
-  await runCommand(["task", "test"], { env: offlineTestEnvironment() });
+  await runCommand(["check"]);
+  await runCommand(["test"], { env: offlineTestEnvironment() });
   await runCommand(["lint"]);
-  await runCommand(["fmt", "--check"]);
+  await runCommand(["format:check"]);
   const diff = await capture("git", ["diff", "--check"], projectRoot);
   if (!diff.success) throw new Error("git diff --check failed");
-  await runCommand(["task", "build"]);
+  await runCommand(["build"]);
+  await runCommand(["build:native"]);
   await requireCleanTree();
   await smokeTestExecutable(buildPath);
   return commit;
 }
 
 function offlineTestEnvironment(): Record<string, string> {
-  const env = Deno.env.toObject();
+  const env = { ...process.env };
   for (const name of optInTestVariables) env[name] = "0";
   // Prevent a caller's local smoke override from launching an extra binary test
   // inside the ordinary deterministic suite.
@@ -335,17 +346,16 @@ async function sameExistingRelease(
 ): Promise<boolean> {
   try {
     const currentManifest = validateManifest(
-      JSON.parse(
-        await Deno.readTextFile(join(finalDirectory, manifestName)),
-      ),
+      JSON.parse(await nodeFs.readText(join(finalDirectory, manifestName))),
     );
-    const currentChecksum = await Deno.readTextFile(
+    const currentChecksum = await nodeFs.readText(
       join(finalDirectory, `${manifest.archive}.sha256`),
     );
     const currentHash = await sha256File(
       join(finalDirectory, manifest.archive),
     );
-    return currentManifest.product === manifest.product &&
+    return (
+      currentManifest.product === manifest.product &&
       currentManifest.version === manifest.version &&
       currentManifest.target === manifest.target &&
       currentManifest.commit === manifest.commit &&
@@ -353,7 +363,8 @@ async function sameExistingRelease(
       currentManifest.archiveSha256 === manifest.archiveSha256 &&
       currentChecksum ===
         checksumText(manifest.archiveSha256, manifest.archive) &&
-      currentHash === manifest.archiveSha256;
+      currentHash === manifest.archiveSha256
+    );
   } catch {
     return false;
   }
@@ -363,7 +374,7 @@ async function packageRelease(): Promise<void> {
   const releaseRoot = await ensureReleaseOutputRoot(projectRoot);
   const commit = await validateSource();
   const target = targetId();
-  const expectedTarget = Deno.env.get("ACPMCP_EXPECTED_RELEASE_TARGET");
+  const expectedTarget = process.env["ACPMCP_EXPECTED_RELEASE_TARGET"];
   if (expectedTarget && expectedTarget !== target) {
     throw new Error(
       `Native target '${target}' does not match expected release target '${expectedTarget}'`,
@@ -371,7 +382,7 @@ async function packageRelease(): Promise<void> {
   }
   const names = releaseNames(VERSION, target);
   const executableHash = await sha256File(buildPath);
-  const stageDirectory = await Deno.makeTempDir({
+  const stageDirectory = await nodeFs.makeTempDir({
     dir: releaseRoot,
     prefix: ".staging-",
   });
@@ -386,17 +397,17 @@ async function packageRelease(): Promise<void> {
       executableSha256: executableHash,
       root: projectRoot,
     });
-    const extracted = await Deno.makeTempDir({
+    const extracted = await nodeFs.makeTempDir({
       prefix: "acp-mcp-release-verify-",
     });
     try {
       await extractReleaseArchive(archivePath, target, extracted);
       const stagedExecutable = join(extracted, names.executable);
-      if (await sha256File(stagedExecutable) !== executableHash) {
+      if ((await sha256File(stagedExecutable)) !== executableHash) {
         throw new Error("Packaged executable hash differs from the build");
       }
       if (!windows) {
-        const mode = (await Deno.stat(stagedExecutable)).mode;
+        const mode = (await nodeFs.stat(stagedExecutable)).mode;
         if (mode === null || (mode & 0o111) === 0) {
           throw new Error("Packaged POSIX executable is not executable");
         }
@@ -416,43 +427,42 @@ async function packageRelease(): Promise<void> {
       }
       await smokeExecutable(stagedExecutable);
     } finally {
-      await Deno.remove(extracted, { recursive: true });
+      await nodeFs.removePath(extracted, { recursive: true });
     }
     const manifestName = names.manifest;
     const archiveHash = manifest.archiveSha256;
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       join(stageDirectory, names.checksum),
       checksumText(archiveHash, names.archive),
     );
-    await Deno.writeTextFile(
+    await nodeFs.writeText(
       join(stageDirectory, manifestName),
       `${JSON.stringify(manifest, null, 2)}\n`,
     );
     const manifestOnDisk = validateManifest(
-      JSON.parse(
-        await Deno.readTextFile(join(stageDirectory, manifestName)),
-      ),
+      JSON.parse(await nodeFs.readText(join(stageDirectory, manifestName))),
     );
     const checksumOnDisk = parseChecksum(
-      await Deno.readTextFile(join(stageDirectory, names.checksum)),
+      await nodeFs.readText(join(stageDirectory, names.checksum)),
       names.archive,
     );
     if (
       manifestOnDisk.archiveSha256 !== archiveHash ||
       manifestOnDisk.executableSha256 !== executableHash ||
       checksumOnDisk !== archiveHash ||
-      await sha256File(archivePath) !== archiveHash
-    ) throw new Error("Release package verification failed");
+      (await sha256File(archivePath)) !== archiveHash
+    )
+      throw new Error("Release package verification failed");
 
     try {
-      const finalInfo = await Deno.lstat(finalDirectory);
-      if (!finalInfo.isDirectory || finalInfo.isSymlink) {
+      const finalInfo = await nodeFs.lstat(finalDirectory);
+      if (!finalInfo.isDirectory() || finalInfo.isSymbolicLink()) {
         throw new Error(
           `Release output exists but is not a plain directory: ${finalDirectory}`,
         );
       }
       if (await sameExistingRelease(finalDirectory, manifest, manifestName)) {
-        await Deno.remove(stageDirectory, { recursive: true });
+        await nodeFs.removePath(stageDirectory, { recursive: true });
         console.log("Local release already exists and matches this build.");
         printReleaseSummary(finalDirectory, names.archive, manifest);
         return;
@@ -461,15 +471,17 @@ async function packageRelease(): Promise<void> {
         `Release output already exists with different contents: ${finalDirectory}. Review and remove it explicitly before retrying.`,
       );
     } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      if (!nodeFs.isErrorCode(error, "ENOENT")) throw error;
     }
-    await Deno.mkdir(releaseRoot, { recursive: true });
-    await Deno.rename(stageDirectory, finalDirectory);
+    await nodeFs.mkdir(releaseRoot, { recursive: true });
+    await nodeFs.rename(stageDirectory, finalDirectory);
     printReleaseSummary(finalDirectory, names.archive, manifest);
   } finally {
     try {
-      await Deno.remove(stageDirectory, { recursive: true });
-    } catch { /* Already renamed or removed. */ }
+      await nodeFs.removePath(stageDirectory, { recursive: true });
+    } catch {
+      /* Already renamed or removed. */
+    }
   }
 }
 
@@ -487,10 +499,10 @@ function printReleaseSummary(
 }
 
 export function defaultInstallDestination(
-  os = Deno.build.os,
-  env: Record<string, string | undefined> = Deno.env.toObject(),
+  os = process.platform,
+  env: Record<string, string | undefined> = { ...process.env },
 ): string {
-  if (os === "windows") {
+  if (os === "windows" || os === "win32") {
     const localAppData = env.LOCALAPPDATA;
     if (!localAppData) {
       throw new Error("LOCALAPPDATA is not set; pass --destination <path>");
@@ -512,11 +524,13 @@ async function readInstallManifest(
 ): Promise<ReleaseManifest> {
   const suffix = `-${targetId()}.manifest.json`;
   const matches: string[] = [];
-  for await (const entry of Deno.readDir(directory)) {
+  for await (const entry of nodeFs.readDir(directory)) {
     if (
-      entry.isFile && entry.name.startsWith("acp-mcp-") &&
+      entry.isFile() &&
+      entry.name.startsWith("acp-mcp-") &&
       entry.name.endsWith(suffix)
-    ) matches.push(entry.name);
+    )
+      matches.push(entry.name);
   }
   if (matches.length !== 1) {
     throw new Error(
@@ -524,7 +538,7 @@ async function readInstallManifest(
     );
   }
   return validateReleaseManifest(
-    JSON.parse(await Deno.readTextFile(join(directory, matches[0]))),
+    JSON.parse(await nodeFs.readText(join(directory, matches[0]))),
   );
 }
 
@@ -550,12 +564,12 @@ async function validateReleaseDirectory(
     throw new Error("Release archive name does not match its manifest");
   }
   const archivePath = join(directory, names.archive);
-  const info = await Deno.lstat(archivePath);
-  if (!info.isFile || info.isSymlink) {
+  const info = await nodeFs.lstat(archivePath);
+  if (!info.isFile() || info.isSymbolicLink()) {
     throw new Error(`Release archive is not a regular file: ${archivePath}`);
   }
   const expectedHash = parseChecksum(
-    await Deno.readTextFile(join(directory, names.checksum)),
+    await nodeFs.readText(join(directory, names.checksum)),
     names.archive,
   );
   const actualHash = await sha256File(archivePath);
@@ -564,7 +578,7 @@ async function validateReleaseDirectory(
       `Release SHA-256 verification failed for '${names.archive}'`,
     );
   }
-  const temporaryDirectory = await Deno.makeTempDir({
+  const temporaryDirectory = await nodeFs.makeTempDir({
     prefix: "acp-mcp-install-package-",
   });
   try {
@@ -572,7 +586,7 @@ async function validateReleaseDirectory(
     const artifact = join(temporaryDirectory, names.executable);
     const embedded = validatePackageManifest(
       JSON.parse(
-        await Deno.readTextFile(join(temporaryDirectory, "manifest.json")),
+        await nodeFs.readText(join(temporaryDirectory, "manifest.json")),
       ),
     );
     if (
@@ -607,7 +621,7 @@ async function validateReleaseDirectory(
       manifest,
     };
   } catch (error) {
-    await Deno.remove(temporaryDirectory, { recursive: true });
+    await nodeFs.removePath(temporaryDirectory, { recursive: true });
     throw error;
   }
 }
@@ -624,38 +638,39 @@ export async function installRelease(
   try {
     const resolvedDestination = resolve(destination);
     if (
-      (windows
+      windows
         ? resolvedDestination.toLowerCase() ===
           release.archivePath.toLowerCase()
-        : resolvedDestination === release.archivePath)
+        : resolvedDestination === release.archivePath
     ) {
       throw new Error(
         "Install destination must differ from the release archive",
       );
     }
     const parent = dirname(resolvedDestination);
-    await Deno.mkdir(parent, { recursive: true });
+    await nodeFs.mkdir(parent, { recursive: true });
     try {
-      const info = await Deno.lstat(resolvedDestination);
-      if (!info.isFile || info.isSymlink) {
+      const info = await nodeFs.lstat(resolvedDestination);
+      if (!info.isFile() || info.isSymbolicLink()) {
         throw new Error(
           `Install destination is not a regular file: ${resolvedDestination}`,
         );
       }
     } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      if (!nodeFs.isErrorCode(error, "ENOENT")) throw error;
     }
 
     const staged = join(
       parent,
-      `.${
-        executableName.replace(/\.exe$/i, "")
-      }.install-${crypto.randomUUID()}${windows ? ".exe" : ""}`,
+      `.${executableName.replace(
+        /\.exe$/i,
+        "",
+      )}.install-${crypto.randomUUID()}${windows ? ".exe" : ""}`,
     );
     try {
-      await Deno.copyFile(release.artifact, staged);
-      if (!windows) await Deno.chmod(staged, 0o755);
-      if (await sha256File(staged) !== release.hash) {
+      await nodeFs.copyFile(release.artifact, staged);
+      if (!windows) await nodeFs.chmod(staged, 0o755);
+      if ((await sha256File(staged)) !== release.hash) {
         throw new Error("Staged install copy failed SHA-256 verification");
       }
       const stagedVersion = await versionProbe(staged, parent);
@@ -663,12 +678,12 @@ export async function installRelease(
         throw new Error("Staged install copy reports an unexpected version");
       }
       try {
-        await Deno.rename(staged, resolvedDestination);
+        await nodeFs.rename(staged, resolvedDestination);
       } catch (error) {
         throw new Error(
-          `Could not replace '${resolvedDestination}'. Close programs using acp-mcp and retry. ${
-            String(error)
-          }`,
+          `Could not replace '${resolvedDestination}'. Close programs using acp-mcp and retry. ${String(
+            error,
+          )}`,
         );
       }
       const installedHash = await sha256File(resolvedDestination);
@@ -688,18 +703,20 @@ export async function installRelease(
       };
     } finally {
       try {
-        await Deno.remove(staged);
-      } catch { /* Renamed or already removed. */ }
+        await nodeFs.removePath(staged);
+      } catch {
+        /* Renamed or already removed. */
+      }
     }
   } finally {
-    await Deno.remove(release.temporaryDirectory, { recursive: true });
+    await nodeFs.removePath(release.temporaryDirectory, { recursive: true });
   }
 }
 
 export function installDirectoryOnPath(
   destination: string,
   pathValue: string,
-  os = Deno.build.os,
+  os = process.platform,
 ): boolean {
   const pathApi = os === "windows" ? win32 : posix;
   const separator = os === "windows" ? ";" : ":";
@@ -708,14 +725,17 @@ export function installDirectoryOnPath(
     return os === "windows" ? resolved.toLowerCase() : resolved;
   };
   const installDirectory = normalize(pathApi.dirname(destination));
-  return pathValue.split(separator).filter(Boolean).map(normalize)
+  return pathValue
+    .split(separator)
+    .filter(Boolean)
+    .map(normalize)
     .includes(installDirectory);
 }
 
 function warnIfInstallDirectoryNotOnPath(destination: string): void {
-  if (Deno.build.os !== "linux" && Deno.build.os !== "darwin") return;
+  if (process.platform !== "linux" && process.platform !== "darwin") return;
   const installDirectory = posix.resolve(posix.dirname(destination));
-  if (!installDirectoryOnPath(destination, Deno.env.get("PATH") ?? "")) {
+  if (!installDirectoryOnPath(destination, process.env["PATH"] ?? "")) {
     console.error(
       `Install directory '${installDirectory}' is not on PATH. Add it to your shell PATH to run acp-mcp by name.`,
     );
@@ -741,15 +761,17 @@ function parseOptions(args: string[]): Map<string, string> {
 async function main(args: string[]): Promise<void> {
   const [command = "package", ...rest] = args;
   if (command === "--help" || command === "-h") {
-    console.log([
-      "Usage:",
-      "  deno task release",
-      "  deno task install --release-dir <path> [--destination <executable-path>]",
-      "",
-      "release builds and validates the native Windows x86_64, Linux x86_64, or macOS ARM64 executable,",
-      "then packages it with project and third-party licenses, archive checksum,",
-      "and manifest. install consumes the archive/checksum/manifest directory.",
-    ].join("\n"));
+    console.log(
+      [
+        "Usage:",
+        "  npm run release",
+        "  npm run install-release -- --release-dir <path> [--destination <executable-path>]",
+        "",
+        "release builds and validates the native Windows x86_64, Linux x86_64, or macOS ARM64 executable,",
+        "then packages it with project and third-party licenses, archive checksum,",
+        "and manifest. install consumes the archive/checksum/manifest directory.",
+      ].join("\n"),
+    );
     return;
   }
   if (command === "package") {
@@ -760,7 +782,7 @@ async function main(args: string[]): Promise<void> {
   if (command === "install") {
     if (rest.length === 1 && (rest[0] === "--help" || rest[0] === "-h")) {
       console.log(
-        "Usage: deno task install --release-dir <path> [--destination <executable-path>]",
+        "Usage: npm run install-release -- --release-dir <path> [--destination <executable-path>]",
       );
       return;
     }
@@ -769,8 +791,8 @@ async function main(args: string[]): Promise<void> {
     if (!releaseDirectory) {
       throw new Error("install requires --release-dir <path>");
     }
-    const destination = options.get("--destination") ??
-      defaultInstallDestination();
+    const destination =
+      options.get("--destination") ?? defaultInstallDestination();
     const installed = await installRelease(releaseDirectory, destination);
     console.log(`Version: ${installed.version.slice("acp-mcp ".length)}`);
     console.log(`Install destination: ${installed.destination}`);
@@ -784,13 +806,13 @@ async function main(args: string[]): Promise<void> {
 
 if (import.meta.main) {
   try {
-    await main(Deno.args);
+    await main(process.argv.slice(2));
   } catch (error) {
     console.error(
       `Local release: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
-    Deno.exit(1);
+    process.exit(1);
   }
 }

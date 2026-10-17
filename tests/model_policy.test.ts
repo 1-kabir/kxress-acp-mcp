@@ -1,3 +1,4 @@
+import { test } from "node:test";
 import {
   type AgentModelPolicy,
   filterModels,
@@ -53,9 +54,9 @@ function assertProjection(
     encoded.thinkingEffort !== expected
   ) {
     throw new Error(
-      `Encoded effort ${requested} over ${
-        available.join("/")
-      } resolved to ${encoded.model?.id}/${encoded.thinkingEffort}, expected ${expected}`,
+      `Encoded effort ${requested} over ${available.join(
+        "/",
+      )} resolved to ${encoded.model?.id}/${encoded.thinkingEffort}, expected ${expected}`,
     );
   }
 
@@ -68,11 +69,13 @@ function assertProjection(
       ) as Partial<Record<ThinkingEffort, string>>,
     },
   };
-  const options = [{
-    id: "effort",
-    type: "select",
-    options: available.map((effort) => ({ value: effort, name: effort })),
-  }];
+  const options = [
+    {
+      id: "effort",
+      type: "select",
+      options: available.map((effort) => ({ value: effort, name: effort })),
+    },
+  ];
   const separate = resolveModelSelection(
     [model("separate-model", true)],
     options,
@@ -84,14 +87,14 @@ function assertProjection(
     separate.thinkingConfigValue !== expected
   ) {
     throw new Error(
-      `Separate effort ${requested} over ${
-        available.join("/")
-      } resolved to ${separate.thinkingEffort}/${separate.thinkingConfigValue}, expected ${expected}`,
+      `Separate effort ${requested} over ${available.join(
+        "/",
+      )} resolved to ${separate.thinkingEffort}/${separate.thinkingConfigValue}, expected ${expected}`,
     );
   }
 }
 
-Deno.test("model policy validates the public sizes and effort vocabulary strictly", () => {
+test("model policy validates the public sizes and effort vocabulary strictly", () => {
   const valid = validateModelPolicy(
     {
       default: { modelSize: "xlarge", thinkingEffort: "ultra" },
@@ -107,24 +110,25 @@ Deno.test("model policy validates the public sizes and effort vocabulary strictl
   if (valid.default?.modelSize !== "xlarge") {
     throw new Error("valid size rejected");
   }
-  for (
-    const value of [
-      "xl",
-      "x-large",
-      "extra_high",
-      "extra-high",
-      "maximum",
-      "u",
-      "xh",
-      "0",
-    ]
-  ) {
-    assertThrows(() =>
-      validateModelPolicy(
-        { default: { modelSize: value } },
-        "agent",
-        "fixture.json",
-      ), "unsupported value");
+  for (const value of [
+    "xl",
+    "x-large",
+    "extra_high",
+    "extra-high",
+    "maximum",
+    "u",
+    "xh",
+    "0",
+  ]) {
+    assertThrows(
+      () =>
+        validateModelPolicy(
+          { default: { modelSize: value } },
+          "agent",
+          "fixture.json",
+        ),
+      "unsupported value",
+    );
   }
   const off = validateModelPolicy(
     { default: { modelSize: "large", thinkingEffort: "off" } },
@@ -145,31 +149,54 @@ Deno.test("model policy validates the public sizes and effort vocabulary strictl
   );
 });
 
-Deno.test("exact and size defaults resolve only from the live catalog", () => {
+test("exact and size defaults resolve only from the live catalog", () => {
   const catalog = [model("small-one"), model("large-one", true)];
-  const exact = resolveModelSelection(catalog, [], {
-    default: { model: "small-one" },
-  }, {});
-  const sized = resolveModelSelection(catalog, [], {
-    default: { modelSize: "large" },
-    modelSizes: { large: { model: "large-one" } },
-  }, {});
+  const exact = resolveModelSelection(
+    catalog,
+    [],
+    {
+      default: { model: "small-one" },
+    },
+    {},
+  );
+  const sized = resolveModelSelection(
+    catalog,
+    [],
+    {
+      default: { modelSize: "large" },
+      modelSizes: { large: { model: "large-one" } },
+    },
+    {},
+  );
   if (exact.model?.id !== "small-one" || sized.model?.id !== "large-one") {
     throw new Error("default did not resolve");
   }
-  const explicitOverride = resolveModelSelection(catalog, [], {
-    default: { model: "small-one" },
-  }, { model: "large-one" });
+  const explicitOverride = resolveModelSelection(
+    catalog,
+    [],
+    {
+      default: { model: "small-one" },
+    },
+    { model: "large-one" },
+  );
   if (explicitOverride.model?.id !== "large-one") {
     throw new Error(
       "explicit exact model did not override the configured default",
     );
   }
-  assertThrows(() =>
-    resolveModelSelection(catalog, [], {}, {
-      model: "small-one",
-      modelSize: "large",
-    }), "mutually exclusive");
+  assertThrows(
+    () =>
+      resolveModelSelection(
+        catalog,
+        [],
+        {},
+        {
+          model: "small-one",
+          modelSize: "large",
+        },
+      ),
+    "mutually exclusive",
+  );
   assertThrows(
     () =>
       resolveModelSelection(
@@ -182,15 +209,20 @@ Deno.test("exact and size defaults resolve only from the live catalog", () => {
   );
   assertThrows(
     () =>
-      resolveModelSelection(catalog, [], {
-        default: { modelSize: "large" },
-        modelSizes: { large: { model: "unadvertised" } },
-      }, {}),
+      resolveModelSelection(
+        catalog,
+        [],
+        {
+          default: { modelSize: "large" },
+          modelSizes: { large: { model: "unadvertised" } },
+        },
+        {},
+      ),
     "not advertised",
   );
 });
 
-Deno.test("allow and deny patterns filter live model IDs, with deny taking precedence", () => {
+test("allow and deny patterns filter live model IDs, with deny taking precedence", () => {
   const catalog = [
     model("claude-opus-5-5-low"),
     model("claude-sonnet-5-5-high"),
@@ -205,14 +237,19 @@ Deno.test("allow and deny patterns filter live model IDs, with deny taking prece
   }
   assertThrows(
     () =>
-      resolveModelSelection(catalog, [], { deniedModels: ["claude-*"] }, {
-        model: "claude-opus-5-5-low",
-      }),
+      resolveModelSelection(
+        catalog,
+        [],
+        { deniedModels: ["claude-*"] },
+        {
+          model: "claude-opus-5-5-low",
+        },
+      ),
     "denied",
   );
 });
 
-Deno.test("effort encoded model IDs preserve exact IDs and saturate max and ultra", () => {
+test("effort encoded model IDs preserve exact IDs and saturate max and ultra", () => {
   const catalog = [
     model("claude-opus-low"),
     model("claude-opus-medium"),
@@ -251,7 +288,8 @@ Deno.test("effort encoded model IDs preserve exact IDs and saturate max and ultr
     if (
       resolved.model?.id !== `claude-opus-${expected}` ||
       resolved.thinkingEffort !== expected
-    ) throw new Error(`${requested} did not project to ${expected}`);
+    )
+      throw new Error(`${requested} did not project to ${expected}`);
   }
   const exact = resolveModelSelection(catalog, [], policy, {
     model: "claude-opus-medium",
@@ -260,27 +298,36 @@ Deno.test("effort encoded model IDs preserve exact IDs and saturate max and ultr
   if (
     exact.model?.id !== "claude-opus-medium" ||
     exact.thinkingEffort !== "medium"
-  ) throw new Error("exact model ID changed or its effort was not projected");
-  const deniedEffort = resolveModelSelection(catalog, [], {
-    ...policy,
-    deniedModels: ["claude-opus-high"],
-  }, { modelSize: "large", thinkingEffort: "high" });
+  )
+    throw new Error("exact model ID changed or its effort was not projected");
+  const deniedEffort = resolveModelSelection(
+    catalog,
+    [],
+    {
+      ...policy,
+      deniedModels: ["claude-opus-high"],
+    },
+    { modelSize: "large", thinkingEffort: "high" },
+  );
   if (
     deniedEffort.model?.id !== "claude-opus-medium" ||
     deniedEffort.thinkingEffort !== "medium"
-  ) throw new Error("denied encoded effort was not removed before projection");
+  )
+    throw new Error("denied encoded effort was not removed before projection");
 });
 
-Deno.test("separate effort config options project across live advertised choices", () => {
+test("separate effort config options project across live advertised choices", () => {
   const catalog = [model("opus", true)];
-  const options = [{
-    id: "reasoning_effort",
-    type: "select",
-    options: ["low", "medium", "high", "xhigh", "max"].map((value) => ({
-      value,
-      name: value,
-    })),
-  }];
+  const options = [
+    {
+      id: "reasoning_effort",
+      type: "select",
+      options: ["low", "medium", "high", "xhigh", "max"].map((value) => ({
+        value,
+        name: value,
+      })),
+    },
+  ];
   const policy: AgentModelPolicy = {
     default: { modelSize: "large" },
     modelSizes: { large: { model: "opus" } },
@@ -297,29 +344,30 @@ Deno.test("separate effort config options project across live advertised choices
       },
     },
   };
-  for (
-    const [requested, expected] of [
-      ["off", "low"],
-      ["low", "low"],
-      ["medium", "medium"],
-      ["high", "high"],
-      ["xhigh", "xhigh"],
-      ["max", "max"],
-      ["ultra", "max"],
-    ] as const
-  ) {
+  for (const [requested, expected] of [
+    ["off", "low"],
+    ["low", "low"],
+    ["medium", "medium"],
+    ["high", "high"],
+    ["xhigh", "xhigh"],
+    ["max", "max"],
+    ["ultra", "max"],
+  ] as const) {
     const resolved = resolveModelSelection(catalog, options, policy, {
       thinkingEffort: requested,
     });
     if (
       resolved.thinkingEffort !== expected ||
       resolved.thinkingConfigValue !== expected
-    ) throw new Error(`${requested} did not saturate to ${expected}`);
+    )
+      throw new Error(`${requested} did not saturate to ${expected}`);
   }
-  const cappedOptions = [{
-    ...options[0],
-    options: options[0].options.slice(0, 3),
-  }];
+  const cappedOptions = [
+    {
+      ...options[0],
+      options: options[0].options.slice(0, 3),
+    },
+  ];
   const capped = resolveModelSelection(catalog, cappedOptions, policy, {
     thinkingEffort: "max",
   });
@@ -332,41 +380,44 @@ Deno.test("separate effort config options project across live advertised choices
   if (
     projected.thinkingEffort !== "high" ||
     projected.thinkingConfigValue !== "high"
-  ) throw new Error("xhigh did not project down to live high choice");
+  )
+    throw new Error("xhigh did not project down to live high choice");
 });
 
-Deno.test("literal downstream ultra remains selectable when advertised", () => {
+test("literal downstream ultra remains selectable when advertised", () => {
   const catalog = [model("effort-low"), model("effort-ultra")];
-  const resolved = resolveModelSelection(catalog, [], {
-    modelSizes: {
-      large: {
-        modelsByThinkingEffort: {
-          low: "effort-low",
-          ultra: "effort-ultra",
+  const resolved = resolveModelSelection(
+    catalog,
+    [],
+    {
+      modelSizes: {
+        large: {
+          modelsByThinkingEffort: {
+            low: "effort-low",
+            ultra: "effort-ultra",
+          },
         },
       },
     },
-  }, { modelSize: "large", thinkingEffort: "ultra" });
+    { modelSize: "large", thinkingEffort: "ultra" },
+  );
   if (
-    resolved.model?.id !== "effort-ultra" || resolved.thinkingEffort !== "ultra"
+    resolved.model?.id !== "effort-ultra" ||
+    resolved.thinkingEffort !== "ultra"
   ) {
     throw new Error("literal advertised ultra was not preserved");
   }
 });
 
-Deno.test("normalized effort projects across the complete live scale in both ACP shapes", () => {
-  const matrix: Array<[
-    ThinkingEffort[],
-    Partial<Record<ThinkingEffort, ThinkingEffort>>,
-  ]> = [
+test("normalized effort projects across the complete live scale in both ACP shapes", () => {
+  const matrix: Array<
+    [ThinkingEffort[], Partial<Record<ThinkingEffort, ThinkingEffort>>]
+  > = [
     [
       [...THINKING_EFFORTS],
       Object.fromEntries(THINKING_EFFORTS.map((effort) => [effort, effort])),
     ],
-    [
-      ["low", "medium", "high", "xhigh", "max"],
-      { off: "low", ultra: "max" },
-    ],
+    [["low", "medium", "high", "xhigh", "max"], { off: "low", ultra: "max" }],
     [
       ["low", "medium", "high"],
       {
@@ -423,7 +474,7 @@ Deno.test("normalized effort projects across the complete live scale in both ACP
   }
 });
 
-Deno.test("model-size policy never falls through to another mapping", () => {
+test("model-size policy never falls through to another mapping", () => {
   const catalog = [model("large-one"), model("medium-one")];
   const policy = {
     modelSizes: {

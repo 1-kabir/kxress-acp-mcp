@@ -1,7 +1,7 @@
 import type { DiscoveredModel } from "./discovery.ts";
 
 export const MODEL_SIZES = ["small", "medium", "large", "xlarge"] as const;
-export type ModelSize = typeof MODEL_SIZES[number];
+export type ModelSize = (typeof MODEL_SIZES)[number];
 
 export const THINKING_EFFORTS = [
   "off",
@@ -12,7 +12,7 @@ export const THINKING_EFFORTS = [
   "max",
   "ultra",
 ] as const;
-export type ThinkingEffort = typeof THINKING_EFFORTS[number];
+export type ThinkingEffort = (typeof THINKING_EFFORTS)[number];
 
 export interface ModelSizeMapping {
   model?: string;
@@ -65,9 +65,7 @@ function fail(
   field: string,
   detail: string,
 ): never {
-  throw new Error(
-    `${path}: agents.${agentId}.models.${field} ${detail}`,
-  );
+  throw new Error(`${path}: agents.${agentId}.models.${field} ${detail}`);
 }
 
 function isOneOf<T extends readonly string[]>(
@@ -269,11 +267,9 @@ export function validateModelPolicy(
       fail(path, agentId, "thinkingEffort.values", "must be an object");
     }
     const values: Partial<Record<ThinkingEffort, string>> = {};
-    for (
-      const [effort, downstreamValue] of Object.entries(
-        value.thinkingEffort.values,
-      )
-    ) {
+    for (const [effort, downstreamValue] of Object.entries(
+      value.thinkingEffort.values,
+    )) {
       if (!isOneOf(THINKING_EFFORTS, effort)) {
         fail(
           path,
@@ -304,7 +300,8 @@ export function validateModelPolicy(
 }
 
 function globMatches(pattern: string, value: string): boolean {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
     .replace(/\*/g, ".*")
     .replace(/\?/g, ".");
   return new RegExp(`^${escaped}$`).test(value);
@@ -317,7 +314,8 @@ export function isModelAllowed(
   if (
     policy.allowedModels &&
     !policy.allowedModels.some((pattern) => globMatches(pattern, modelId))
-  ) return false;
+  )
+    return false;
   return !policy.deniedModels?.some((pattern) => globMatches(pattern, modelId));
 }
 
@@ -349,16 +347,19 @@ export function resolveThinkingEffort(
   available: ThinkingEffort[],
   cap?: ThinkingEffort,
 ): ThinkingEffort | undefined {
-  const supported = THINKING_EFFORTS.filter((effort) =>
-    available.includes(effort) && (!cap || compareEffort(effort, cap) <= 0)
+  const supported = THINKING_EFFORTS.filter(
+    (effort) =>
+      available.includes(effort) && (!cap || compareEffort(effort, cap) <= 0),
   );
   if (!supported.length) return undefined;
   if (supported.includes(requested)) return requested;
   if (requested === "off") return supported[0];
   const requestedIndex = THINKING_EFFORTS.indexOf(requested);
-  return supported.filter((effort) =>
-    THINKING_EFFORTS.indexOf(effort) <= requestedIndex
-  ).at(-1) ?? supported[0];
+  return (
+    supported
+      .filter((effort) => THINKING_EFFORTS.indexOf(effort) <= requestedIndex)
+      .at(-1) ?? supported[0]
+  );
 }
 
 export function policyFilteredModels(
@@ -367,16 +368,15 @@ export function policyFilteredModels(
 ): DiscoveredModel[] {
   const filtered = filterModels(models, policy);
   return filtered.map((model) => {
-    const mappedSize = Object.entries(policy.modelSizes ?? {}).find((
-      [, mapping],
-    ) =>
-      mapping?.model === model.id ||
-      Object.values(mapping?.modelsByThinkingEffort ?? {}).includes(model.id)
+    const mappedSize = Object.entries(policy.modelSizes ?? {}).find(
+      ([, mapping]) =>
+        mapping?.model === model.id ||
+        Object.values(mapping?.modelsByThinkingEffort ?? {}).includes(model.id),
     )?.[0] as ModelSize | undefined;
     const mappedEffort = mappedSize
-      ? Object.entries(
-        policy.modelSizes?.[mappedSize]?.modelsByThinkingEffort ?? {},
-      ).find(([, id]) => id === model.id)?.[0] as ThinkingEffort | undefined
+      ? (Object.entries(
+          policy.modelSizes?.[mappedSize]?.modelsByThinkingEffort ?? {},
+        ).find(([, id]) => id === model.id)?.[0] as ThinkingEffort | undefined)
       : undefined;
     return {
       ...model,
@@ -398,7 +398,7 @@ export function resolveModelSelection(
   const selector =
     request.model !== undefined || request.modelSize !== undefined
       ? request
-      : policy.default ?? {};
+      : (policy.default ?? {});
   let selectedModel: DiscoveredModel | undefined;
   let mappedEffort: ThinkingEffort | undefined;
   let modelSize: ModelSize | undefined;
@@ -412,9 +412,9 @@ export function resolveModelSelection(
     }
     for (const [size, mapping] of Object.entries(policy.modelSizes ?? {})) {
       if (mapping?.model === selector.model) modelSize = size as ModelSize;
-      const entry = Object.entries(mapping?.modelsByThinkingEffort ?? {}).find((
-        [, id],
-      ) => id === selector.model);
+      const entry = Object.entries(mapping?.modelsByThinkingEffort ?? {}).find(
+        ([, id]) => id === selector.model,
+      );
       if (entry) {
         modelSize = size as ModelSize;
         mappedEffort = entry[0] as ThinkingEffort;
@@ -437,20 +437,21 @@ export function resolveModelSelection(
       const variants = Object.entries(
         mapping.modelsByThinkingEffort ?? {},
       ) as Array<[ThinkingEffort, string]>;
-      const requestedVariantEffort = request.thinkingEffort ??
-        policy.default?.thinkingEffort;
-      const available = variants.filter(([, id]) =>
-        advertised.some((model) => model.id === id) &&
-        isModelAllowed(policy, id)
+      const requestedVariantEffort =
+        request.thinkingEffort ?? policy.default?.thinkingEffort;
+      const available = variants.filter(
+        ([, id]) =>
+          advertised.some((model) => model.id === id) &&
+          isModelAllowed(policy, id),
       );
       const currentVariant = available.find(([, id]) =>
-        advertised.some((model) => model.id === id && model.selected)
+        advertised.some((model) => model.id === id && model.selected),
       );
       const chosenEffort = requestedVariantEffort
         ? resolveThinkingEffort(
-          requestedVariantEffort,
-          available.map(([effort]) => effort),
-        )
+            requestedVariantEffort,
+            available.map(([effort]) => effort),
+          )
         : currentVariant?.[0];
       const selected = chosenEffort
         ? variants.find(([effort]) => effort === chosenEffort)
@@ -484,8 +485,8 @@ export function resolveModelSelection(
     throw new Error(`Model '${selectedModel.id}' is denied by model policy`);
   }
 
-  const requestedEffort = request.thinkingEffort ??
-    policy.default?.thinkingEffort;
+  const requestedEffort =
+    request.thinkingEffort ?? policy.default?.thinkingEffort;
   let effectiveEffort = mappedEffort;
   let thinkingConfigId: string | undefined;
   let thinkingConfigValue: string | undefined;
@@ -499,8 +500,8 @@ export function resolveModelSelection(
           `Model '${selectedModel.id}' does not have a configured thinking-effort mapping`,
         );
       }
-      const option = configOptions.find((item) =>
-        item.id === mapping.configOption
+      const option = configOptions.find(
+        (item) => item.id === mapping.configOption,
       );
       if (!option || option.type !== "select") {
         throw new Error(
@@ -508,18 +509,15 @@ export function resolveModelSelection(
         );
       }
       const liveValues = new Set(optionValues(option));
-      const available = THINKING_EFFORTS.filter((effort) =>
-        mapping.values[effort] !== undefined &&
-        liveValues.has(mapping.values[effort]!)
+      const available = THINKING_EFFORTS.filter(
+        (effort) =>
+          mapping.values[effort] !== undefined &&
+          liveValues.has(mapping.values[effort]!),
       );
       const sizeCap = modelSize
         ? policy.modelSizes?.[modelSize]?.maxThinkingEffort
         : undefined;
-      const chosen = resolveThinkingEffort(
-        requestedEffort,
-        available,
-        sizeCap,
-      );
+      const chosen = resolveThinkingEffort(requestedEffort, available, sizeCap);
       if (!chosen) {
         throw new Error(
           `Thinking effort '${requestedEffort}' is not supported by model '${selectedModel.id}'`,

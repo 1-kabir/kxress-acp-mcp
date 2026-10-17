@@ -1,3 +1,6 @@
+import process from "node:process";
+import { ProcessCommand } from "#proc";
+import * as nodeFs from "#fs";
 import { tmpdir } from "node:os";
 
 export interface WorkspaceSnapshot {
@@ -19,29 +22,32 @@ interface WorkspaceManifest {
 }
 
 function join(...parts: string[]) {
-  const separator = Deno.build.os === "windows" ? "\\" : "/";
-  return parts.map((part, index) =>
-    index === 0
-      ? part.replace(/[\\/]+$/, "")
-      : part.replace(/^[\\/]+|[\\/]+$/g, "")
-  ).filter(Boolean).join(separator);
+  const separator = process.platform === "win32" ? "\\" : "/";
+  return parts
+    .map((part, index) =>
+      index === 0
+        ? part.replace(/[\\/]+$/, "")
+        : part.replace(/^[\\/]+|[\\/]+$/g, ""),
+    )
+    .filter(Boolean)
+    .join(separator);
 }
 
 function splitPath(path: string) {
-  return path.split(Deno.build.os === "windows" ? /[\\/]/ : /\//);
+  return path.split(process.platform === "win32" ? /[\\/]/ : /\//);
 }
 
 function isWithin(parent: string, candidate: string) {
-  const separator = Deno.build.os === "windows" ? "\\" : "/";
+  const separator = process.platform === "win32" ? "\\" : "/";
   const normalize = (path: string) =>
-    Deno.build.os === "windows" ? path.toLowerCase() : path;
+    process.platform === "win32" ? path.toLowerCase() : path;
   const root = normalize(parent.replace(/[\\/]+$/, ""));
   const child = normalize(candidate);
   return child === root || child.startsWith(root + separator);
 }
 
 async function gitOutput(cwd: string, args: string[]) {
-  const result = await new Deno.Command("git", {
+  const result = await new ProcessCommand("git", {
     args: ["-C", cwd, ...args],
     stdout: "piped",
     stderr: "piped",
@@ -54,7 +60,7 @@ async function gitOutput(cwd: string, args: string[]) {
 }
 
 async function filePaths(sourceRoot: string) {
-  const result = await new Deno.Command("git", {
+  const result = await new ProcessCommand("git", {
     args: [
       "-C",
       sourceRoot,
@@ -80,10 +86,10 @@ async function hasSymlinkParent(root: string, relativePath: string) {
   for (const segment of segments.slice(0, -1)) {
     current = join(current, segment);
     try {
-      const info = await Deno.lstat(current);
-      if (info.isSymlink || !info.isDirectory) return true;
+      const info = await nodeFs.lstat(current);
+      if (info.isSymbolicLink() || !info.isDirectory()) return true;
     } catch (error) {
-      if (error instanceof Deno.errors.NotFound) return true;
+      if (nodeFs.isErrorCode(error, "ENOENT")) return true;
       throw error;
     }
   }
@@ -92,7 +98,7 @@ async function hasSymlinkParent(root: string, relativePath: string) {
 
 async function removePartialWorkspace(cwd: string, originalError: unknown) {
   try {
-    await Deno.remove(cwd, { recursive: true });
+    await nodeFs.removePath(cwd, { recursive: true });
   } catch (cleanupError) {
     throw new Error(
       `Snapshot creation failed and cleanup may have left ${cwd}: ${cleanupError}; original error: ${originalError}`,
@@ -101,28 +107,31 @@ async function removePartialWorkspace(cwd: string, originalError: unknown) {
 }
 
 export function configuredTempRoot(
-  env: Record<string, string> = Deno.env.toObject(),
+  env: Record<string, string> = { ...process.env },
 ): string {
   return env.TEMP ?? env.TMP ?? env.TMPDIR ?? tmpdir();
 }
 
 /** Returns the canonical acp-mcp workspace root under the configured temp root. */
 export async function getWorkspaceRoot() {
-  return join(await Deno.realPath(configuredTempRoot()), "acp-mcp-workspaces");
+  return join(
+    await nodeFs.realpath(configuredTempRoot()),
+    "acp-mcp-workspaces",
+  );
 }
 
 async function ensureWorkspaceRoot() {
   const root = await getWorkspaceRoot();
   try {
-    const info = await Deno.lstat(root);
-    if (!info.isDirectory || info.isSymlink) {
+    const info = await nodeFs.lstat(root);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
       throw new Error("Planning workspace root is not a plain directory");
     }
   } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-    await Deno.mkdir(root);
+    if (!nodeFs.isErrorCode(error, "ENOENT")) throw error;
+    await nodeFs.mkdir(root);
   }
-  const realRoot = await Deno.realPath(root);
+  const realRoot = await nodeFs.realpath(root);
   if (!samePath(realRoot, root)) {
     throw new Error("Planning workspace root resolves through a link");
   }
@@ -130,15 +139,15 @@ async function ensureWorkspaceRoot() {
 }
 
 function samePath(left: string, right: string) {
-  return Deno.build.os === "windows"
+  return process.platform === "win32"
     ? left.toLowerCase() === right.toLowerCase()
     : left === right;
 }
 
 async function validateWorkspaceSnapshot(cwd: string) {
   const expectedRoot = await ensureWorkspaceRoot();
-  const realCwd = await Deno.realPath(cwd);
-  const parent = await Deno.realPath(join(realCwd, ".."));
+  const realCwd = await nodeFs.realpath(cwd);
+  const parent = await nodeFs.realpath(join(realCwd, ".."));
   if (
     !samePath(parent, expectedRoot) ||
     !/^plan-[a-z0-9]+$/i.test(realCwd.split(/[\\/]/).at(-1) ?? "")
@@ -148,23 +157,25 @@ async function validateWorkspaceSnapshot(cwd: string) {
     );
   }
   const manifestPath = `${realCwd}.json`;
-  const manifestInfo = await Deno.lstat(manifestPath);
-  if (!manifestInfo.isFile || manifestInfo.isSymlink) {
+  const manifestInfo = await nodeFs.lstat(manifestPath);
+  if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink()) {
     throw new Error("Planning workspace manifest is not a regular file");
   }
   const manifest = JSON.parse(
-    await Deno.readTextFile(manifestPath),
+    await nodeFs.readText(manifestPath),
   ) as WorkspaceManifest;
   if (
     manifest.version !== 1 ||
-    typeof manifest.sourceRoot !== "string" || !manifest.sourceRoot ||
+    typeof manifest.sourceRoot !== "string" ||
+    !manifest.sourceRoot ||
     (manifest.createdAt !== undefined &&
       (!Number.isFinite(manifest.createdAt) || manifest.createdAt <= 0)) ||
     (manifest.ownerPid !== undefined &&
       (!Number.isInteger(manifest.ownerPid) || manifest.ownerPid <= 0)) ||
     (manifest.kind !== undefined &&
-      manifest.kind !== "snapshot" && manifest.kind !== "attempt") ||
-    !samePath(await Deno.realPath(manifest.cwd), realCwd)
+      manifest.kind !== "snapshot" &&
+      manifest.kind !== "attempt") ||
+    !samePath(await nodeFs.realpath(manifest.cwd), realCwd)
   ) {
     throw new Error(
       "Planning workspace manifest does not match the requested path",
@@ -176,9 +187,9 @@ async function validateWorkspaceSnapshot(cwd: string) {
 /** Validates ownership and returns the non-secret workspace manifest fields. */
 export async function inspectWorkspaceSnapshot(cwd: string) {
   const workspace = await validateWorkspaceSnapshot(cwd);
-  const manifestInfo = await Deno.lstat(workspace.manifestPath);
-  const manifestAgeTime = workspace.manifest.createdAt ??
-    manifestInfo.mtime?.getTime() ?? null;
+  const manifestInfo = await nodeFs.lstat(workspace.manifestPath);
+  const manifestAgeTime =
+    workspace.manifest.createdAt ?? manifestInfo.mtime?.getTime() ?? null;
   return {
     cwd: workspace.realCwd,
     sourceRoot: workspace.manifest.sourceRoot,
@@ -193,18 +204,16 @@ async function writeManifest(
   sourceRoot: string,
   kind: "snapshot" | "attempt",
 ) {
-  await Deno.writeTextFile(
+  await nodeFs.writeText(
     `${cwd}.json`,
-    JSON.stringify(
-      {
-        version: 1,
-        cwd,
-        sourceRoot,
-        createdAt: Date.now(),
-        ownerPid: Deno.pid,
-        kind,
-      } satisfies WorkspaceManifest,
-    ),
+    JSON.stringify({
+      version: 1,
+      cwd,
+      sourceRoot,
+      createdAt: Date.now(),
+      ownerPid: process.pid,
+      kind,
+    } satisfies WorkspaceManifest),
   );
 }
 
@@ -247,12 +256,12 @@ export async function createWorkspaceSnapshot(
   repositoryPath: string,
 ): Promise<WorkspaceSnapshot> {
   const startedAt = performance.now();
-  const requestedRoot = await Deno.realPath(repositoryPath);
+  const requestedRoot = await nodeFs.realpath(repositoryPath);
   const gitRootText = await gitOutput(requestedRoot, [
     "rev-parse",
     "--show-toplevel",
   ]);
-  const sourceRoot = await Deno.realPath(gitRootText);
+  const sourceRoot = await nodeFs.realpath(gitRootText);
   const realWorkspaceRoot = await ensureWorkspaceRoot();
   if (isWithin(sourceRoot, realWorkspaceRoot)) {
     throw new Error(
@@ -260,7 +269,7 @@ export async function createWorkspaceSnapshot(
     );
   }
 
-  const cwd = await Deno.makeTempDir({
+  const cwd = await nodeFs.makeTempDir({
     dir: realWorkspaceRoot,
     prefix: "plan-",
   });
@@ -270,29 +279,31 @@ export async function createWorkspaceSnapshot(
     for (const relativePath of await filePaths(sourceRoot)) {
       const segments = splitPath(relativePath);
       if (
-        !relativePath || relativePath.startsWith("/") ||
+        !relativePath ||
+        relativePath.startsWith("/") ||
         /^[a-zA-Z]:/.test(relativePath) ||
         segments.some((part) => part === ".." || part === ".") ||
         segments.some((part) => part.toLowerCase() === ".git") ||
-        await hasSymlinkParent(sourceRoot, relativePath)
-      ) continue;
+        (await hasSymlinkParent(sourceRoot, relativePath))
+      )
+        continue;
 
       const sourcePath = join(sourceRoot, ...segments);
       const destinationPath = join(cwd, ...segments);
-      let info: Deno.FileInfo;
+      let info: nodeFs.FileInfo;
       try {
-        info = await Deno.lstat(sourcePath);
+        info = await nodeFs.lstat(sourcePath);
       } catch (error) {
-        if (error instanceof Deno.errors.NotFound) continue;
+        if (nodeFs.isErrorCode(error, "ENOENT")) continue;
         throw error;
       }
-      if (info.isSymlink || !info.isFile) continue;
-      const separator = Deno.build.os === "windows" ? "\\" : "/";
-      await Deno.mkdir(
+      if (info.isSymbolicLink() || !info.isFile()) continue;
+      const separator = process.platform === "win32" ? "\\" : "/";
+      await nodeFs.mkdir(
         destinationPath.slice(0, destinationPath.lastIndexOf(separator)),
         { recursive: true },
       );
-      await Deno.copyFile(sourcePath, destinationPath);
+      await nodeFs.copyFile(sourcePath, destinationPath);
       fileCount++;
       sizeBytes += info.size;
     }
@@ -317,7 +328,7 @@ export async function cloneWorkspaceSnapshot(
 ): Promise<WorkspaceSnapshot> {
   const source = await validateWorkspaceSnapshot(sourceSnapshotPath);
   const startedAt = performance.now();
-  const cwd = await Deno.makeTempDir({
+  const cwd = await nodeFs.makeTempDir({
     dir: source.expectedRoot,
     prefix: "plan-",
   });
@@ -325,16 +336,16 @@ export async function cloneWorkspaceSnapshot(
   let sizeBytes = 0;
 
   const copyDirectory = async (sourceDir: string, destinationDir: string) => {
-    for await (const entry of Deno.readDir(sourceDir)) {
+    for await (const entry of nodeFs.readDir(sourceDir)) {
       const sourcePath = join(sourceDir, entry.name);
       const destinationPath = join(destinationDir, entry.name);
-      const info = await Deno.lstat(sourcePath);
-      if (info.isSymlink) continue;
-      if (info.isDirectory) {
-        await Deno.mkdir(destinationPath);
+      const info = await nodeFs.lstat(sourcePath);
+      if (info.isSymbolicLink()) continue;
+      if (info.isDirectory()) {
+        await nodeFs.mkdir(destinationPath);
         await copyDirectory(sourcePath, destinationPath);
-      } else if (info.isFile) {
-        await Deno.copyFile(sourcePath, destinationPath);
+      } else if (info.isFile()) {
+        await nodeFs.copyFile(sourcePath, destinationPath);
         fileCount++;
         sizeBytes += info.size;
       }
@@ -360,7 +371,7 @@ export async function cloneWorkspaceSnapshot(
 /** Removes only a direct child workspace created by createWorkspaceSnapshot. */
 export async function cleanupWorkspaceSnapshot(
   cwd: string,
-  remove: typeof Deno.remove = Deno.remove,
+  remove: typeof nodeFs.removePath = nodeFs.removePath,
 ) {
   const workspace = await validateWorkspaceSnapshot(cwd);
   await remove(workspace.realCwd, { recursive: true });

@@ -7,7 +7,7 @@ import { SessionManager } from "./sessions/manager.ts";
 export async function startMcpServer(configPath?: string): Promise<void> {
   const startup = await resolveConfiguration({
     explicitConfigPath: configPath,
-    cwd: Deno.cwd(),
+    cwd: process.cwd(),
     includeProject: false,
   });
   const agents = startup.agents;
@@ -16,16 +16,18 @@ export async function startMcpServer(configPath?: string): Promise<void> {
     resolveConfiguration: (cwd) =>
       resolveConfiguration({
         explicitConfigPath: configPath,
-        cwd: cwd ?? Deno.cwd(),
+        cwd: cwd ?? process.cwd(),
       }),
   });
   let closing: Promise<void> | undefined;
-  const closeSessions = () => closing ??= manager.closeAll();
+  const closeSessions = () => (closing ??= manager.closeAll());
   try {
-    Deno.addSignalListener("SIGINT", () => {
-      void closeSessions().finally(() => Deno.exit(0));
+    process.on("SIGINT", () => {
+      void closeSessions().finally(() => process.exit(0));
     });
-  } catch { /* Signal support varies by platform. */ }
+  } catch {
+    /* Signal support varies by platform. */
+  }
   process.stdin.once("end", closeSessions);
   process.stdin.once("close", closeSessions);
   await serveStdio(() => server);
