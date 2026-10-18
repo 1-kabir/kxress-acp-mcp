@@ -288,13 +288,18 @@ test("install verifies licensed archive before atomically replacing destination"
     const fixtureBinary = `${installDirectory}${
       process.platform === "win32" ? "\\" : "/"
     }fixture-native`;
+    const nodeLicensePath = `${installDirectory}${
+      process.platform === "win32" ? "\\" : "/"
+    }Node.js-LICENSE.txt`;
     await nodeFs.writeBytes(fixtureBinary, bytes);
+    await nodeFs.writeText(nodeLicensePath, "Node runtime license fixture\n");
     const manifest = await createReleaseArchive(archive, {
       binaryPath: fixtureBinary,
       version: VERSION,
       target: target as ReleaseTarget,
       commit: "a".repeat(40),
       executableSha256: hash,
+      nodeLicensePath,
     });
     await nodeFs.writeText(
       `${archive}.sha256`,

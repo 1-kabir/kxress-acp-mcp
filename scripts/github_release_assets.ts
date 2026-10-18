@@ -1,11 +1,12 @@
 import process from "node:process";
 import * as nodeFs from "#fs";
-import { basename, dirname, join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../src/version.ts";
 import {
   checksumText,
   extractReleaseArchive,
+  findNodeRuntimeLicensePath,
   loadLicenseInventory,
   releaseNames,
   renderThirdPartyNotices,
@@ -42,6 +43,7 @@ export function releaseAssetNames(
 export async function stageReleaseAssets(
   releaseDirectory: string,
   outputDirectory: string,
+  runtimeLicensePath?: string,
 ): Promise<string[]> {
   const manifestFiles: string[] = [];
   for await (const entry of nodeFs.readDir(releaseDirectory)) {
@@ -109,7 +111,10 @@ export async function stageReleaseAssets(
     if (
       (await nodeFs.readText(
         join(extracted, "licenses/Node.js-LICENSE.txt"),
-      )) !== (await nodeFs.readText(join(dirname(process.execPath), "LICENSE")))
+      )) !==
+      (await nodeFs.readText(
+        runtimeLicensePath ?? (await findNodeRuntimeLicensePath()),
+      ))
     )
       throw new Error("Release archive Node.js license text mismatch");
     for (const relative of new Set(

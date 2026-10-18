@@ -141,6 +141,7 @@ export async function packageContents(
   executablePath: string,
   manifest: PackageManifest,
   root = projectRoot,
+  runtimeLicensePath?: string,
 ): Promise<void> {
   const inventory = await loadLicenseInventory(root);
   const executableDestination = join(packageRoot, manifest.executable);
@@ -150,8 +151,10 @@ export async function packageContents(
   }
   await nodeFs.copyFile(join(root, "LICENSE"), join(packageRoot, "LICENSE"));
   await nodeFs.mkdir(join(packageRoot, "licenses"), { recursive: true });
+  const nodeLicense =
+    runtimeLicensePath ?? (await findNodeRuntimeLicensePath());
   await nodeFs.copyFile(
-    join(dirname(process.execPath), "LICENSE"),
+    nodeLicense,
     join(packageRoot, "licenses", "Node.js-LICENSE.txt"),
   );
   await nodeFs.writeText(
@@ -169,6 +172,25 @@ export async function packageContents(
   await nodeFs.writeText(
     join(packageRoot, "manifest.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+}
+
+export async function findNodeRuntimeLicensePath(): Promise<string> {
+  const candidates = [
+    join(dirname(process.execPath), "LICENSE"),
+    join(dirname(dirname(process.execPath)), "LICENSE"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      await nodeFs.stat(candidate);
+      return candidate;
+    } catch {
+      // setup-node installs Node's license beside its installation root,
+      // while some platform installers put it beside the executable.
+    }
+  }
+  throw new Error(
+    `Could not locate Node.js LICENSE beside ${process.execPath}`,
   );
 }
 
@@ -303,6 +325,7 @@ export async function createReleaseArchive(
     commit: string;
     executableSha256: string;
     root?: string;
+    nodeLicensePath?: string;
   },
 ): Promise<ReleaseManifest> {
   const names = releaseNames(input.version, input.target);
@@ -324,6 +347,7 @@ export async function createReleaseArchive(
       input.binaryPath,
       packageManifest,
       input.root,
+      input.nodeLicensePath,
     );
     const createArgs = isWindowsTarget(input.target)
       ? [
@@ -373,7 +397,7 @@ export async function createReleaseArchive(
     const inventory = await loadLicenseInventory(input.root);
     if (
       (await nodeFs.readText(join(extracted, "THIRD_PARTY_NOTICES.txt"))) !==
-        renderThirdPartyNotices(inventory) ||
+        renderThirdPartyNotices(inventory, { includeNodeRuntime: true }) ||
       (await nodeFs.readText(join(extracted, "LICENSE"))) !==
         (await nodeFs.readText(join(input.root ?? projectRoot, "LICENSE")))
     )

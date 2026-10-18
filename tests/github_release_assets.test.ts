@@ -22,14 +22,17 @@ async function fixtureBundle(root: string, target: ReleaseTarget) {
   await nodeFs.mkdir(bundle);
   const names = releaseNames(VERSION, target);
   const binary = `${root}/fixture-${target}`;
+  const nodeLicensePath = `${root}/Node.js-LICENSE.txt`;
   const bytes = new TextEncoder().encode(`native ${target} fixture`);
   await nodeFs.writeBytes(binary, bytes);
+  await nodeFs.writeText(nodeLicensePath, "Node runtime license fixture\n");
   const manifest = await createReleaseArchive(`${bundle}/${names.archive}`, {
     binaryPath: binary,
     version: VERSION,
     target,
     commit: "a".repeat(40),
     executableSha256: sha256Hex(bytes),
+    nodeLicensePath,
   });
   await nodeFs.writeText(
     `${bundle}/${names.checksum}`,
@@ -39,7 +42,7 @@ async function fixtureBundle(root: string, target: ReleaseTarget) {
     `${bundle}/${names.manifest}`,
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
-  return { bundle, names, manifest };
+  return { bundle, names, manifest, nodeLicensePath };
 }
 
 test("GitHub release tag must exactly match source version", () => {
@@ -104,7 +107,11 @@ test("GitHub assets are self-contained licensed archives for all targets", async
         JSON.stringify(inputManifest),
       );
       const output = `${root}/assets-${target}`;
-      const staged = await stageReleaseAssets(fixture.bundle, output);
+      const staged = await stageReleaseAssets(
+        fixture.bundle,
+        output,
+        fixture.nodeLicensePath,
+      );
       const names = releaseAssetNames(VERSION, target);
       if (
         staged.sort().join("\n") !==
