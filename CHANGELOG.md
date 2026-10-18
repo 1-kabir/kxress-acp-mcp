@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.2.4 (unreleased)
+## 0.2.5 (unreleased)
+
+### Changed
+
+- Migrate the runtime from Deno to Node.js following [Deno's announcement that
+  its team is joining Cloudflare](https://deno.com/blog/cloudflare).
+
+## 0.2.4 (released)
 
 ### Added
 

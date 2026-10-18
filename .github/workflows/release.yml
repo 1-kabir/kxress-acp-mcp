@@ -111,7 +111,9 @@ jobs:
           fi
           version="${RELEASE_TAG#v}"
           gh release create "$RELEASE_TAG" release-assets/* \
-            --repo "$GH_REPO" --verify-tag --generate-notes --title "acp-mcp $version"
+            --repo "$GH_REPO" --verify-tag --generate-notes \
+            --notes "This release migrates the runtime from Deno to Node.js following [Deno's announcement that its team is joining Cloudflare](https://deno.com/blog/cloudflare)." \
+            --title "acp-mcp $version"
 
   verify-public:
     name: Verify public ${{ matrix.target }} package
