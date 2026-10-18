@@ -4,7 +4,13 @@ const decoder = new TextDecoder();
 let buffer = "";
 
 async function write(value: unknown) {
-  await process.stdout.write(encoder.encode(`${JSON.stringify(value)}\n`));
+  const bytes = encoder.encode(`${JSON.stringify(value)}\n`);
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(bytes, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 async function handle(line: string) {
@@ -44,7 +50,23 @@ async function handle(line: string) {
           ...extra,
         },
       });
-      if (prompt === "delegate isolation") {
+      if (prompt === "event burst" || prompt === "oversized event") {
+        const count = prompt === "event burst" ? 1005 : 1;
+        for (let index = 1; index <= count; index++) {
+          await write(
+            raw(
+              {
+                sessionUpdate: "future_update",
+                detail:
+                  prompt === "oversized event"
+                    ? "x".repeat(4 * 1024 * 1024)
+                    : index,
+              },
+              { ordinal: index },
+            ),
+          );
+        }
+      } else if (prompt === "delegate isolation") {
         const large = "INTERNAL_THOUGHT_MARKER " + "x".repeat(12000);
         const updates = [
           {
