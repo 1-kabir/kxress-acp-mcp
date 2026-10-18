@@ -734,7 +734,7 @@ test("stale cleanup removes a symlink entry without deleting its target", async 
       const symlink = `${snapshot.cwd}/external-link`;
       await nodeFs.writeText(externalFile, "external data");
       try {
-        await nodeFs.symlink(external, symlink, { type: "dir" });
+        await nodeFs.symlink(external, symlink, "dir");
         linked = true;
       } catch (error) {
         if (

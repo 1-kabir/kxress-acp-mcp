@@ -6,10 +6,12 @@ import { VERSION } from "../src/version.ts";
 
 const executable = process.env["ACPMCP_NATIVE_EXECUTABLE"];
 
-test({
-  name: "native product works outside the checkout and serves MCP tools",
-  skip: !executable,
-  fn: async () => {
+test(
+  "native product works outside the checkout and serves MCP tools",
+  {
+    skip: !executable,
+  },
+  async () => {
     if (!executable) throw new Error("Native executable path is required");
     const cwd = await nodeFs.makeTempDir({ prefix: "acp-mcp-native-smoke-" });
     try {
@@ -195,4 +197,4 @@ test({
       await nodeFs.removePath(cwd, { recursive: true });
     }
   },
-});
+);

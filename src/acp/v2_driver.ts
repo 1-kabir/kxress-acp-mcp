@@ -22,6 +22,8 @@ type ActiveTurn = {
 };
 
 export class V2Driver implements ProtocolDriver {
+  readonly definition: AgentDefinition;
+  readonly process: Awaited<ReturnType<typeof startAgent>>;
   readonly protocol = "v2" as const;
   private readonly app = client({ name: "acp-mcp" });
   private readonly connection: ClientConnection;
@@ -29,10 +31,12 @@ export class V2Driver implements ProtocolDriver {
   private initialized?: ProtocolInitialization;
 
   constructor(
-    readonly definition: AgentDefinition,
-    readonly process: Awaited<ReturnType<typeof startAgent>>,
+    definition: AgentDefinition,
+    process: Awaited<ReturnType<typeof startAgent>>,
     callbacks: ProtocolCallbacks,
   ) {
+    this.definition = definition;
+    this.process = process;
     this.app.onRequest("session/request_permission", ({ params }) =>
       callbacks.permission(normalizePermission(params)),
     );
@@ -57,7 +61,11 @@ export class V2Driver implements ProtocolDriver {
   }
 
   async initialize(): Promise<ProtocolInitialization> {
-    let response;
+    let response: {
+      protocolVersion: number;
+      capabilities?: unknown;
+      authMethods?: unknown[];
+    };
     try {
       response = await this.connection.agent.request("initialize", {
         protocolVersion: 2,

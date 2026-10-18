@@ -115,6 +115,9 @@ export async function startAgent(definition: AgentDefinition, cwd: string) {
     }
   }
   const resolved = await resolveWindowsExecutable(definition.command);
+  if (!(await findExecutablePath(resolved))) {
+    throw new Error(`Agent command '${definition.command}' was not found`);
+  }
   const isBatch =
     process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved);
   const command = isBatch ? (process.env["COMSPEC"] ?? "cmd.exe") : resolved;

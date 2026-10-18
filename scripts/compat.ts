@@ -24,7 +24,7 @@ export interface CompatInvocation {
   agent: CompatAgent;
   protocol: "v1" | "v2";
   args: string[];
-  env: Record<string, string>;
+  env: NodeJS.ProcessEnv;
 }
 
 export function parseCompatAgent(
@@ -60,7 +60,7 @@ export function parseCompatAgent(
 export function createCompatInvocation(
   agent: CompatAgent,
   protocol: "v1" | "v2" = "v1",
-  inheritedEnv: Record<string, string> = { ...process.env },
+  inheritedEnv: NodeJS.ProcessEnv = { ...process.env },
 ): CompatInvocation {
   const testControlEnv = Object.fromEntries(
     Object.values(OPT_IN_ENV).map((name) => [name, "0"]),
@@ -88,9 +88,9 @@ export function compatHelp(): string {
   ].join("\n");
 }
 
-type Invoke = (args: string[], env: Record<string, string>) => Promise<number>;
+type Invoke = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
 
-async function invokeNodeTest(args: string[], env: Record<string, string>) {
+async function invokeNodeTest(args: string[], env: NodeJS.ProcessEnv) {
   const child = new ProcessCommand(process.execPath, {
     args,
     env,

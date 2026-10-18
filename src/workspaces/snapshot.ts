@@ -107,7 +107,7 @@ async function removePartialWorkspace(cwd: string, originalError: unknown) {
 }
 
 export function configuredTempRoot(
-  env: Record<string, string> = { ...process.env },
+  env: NodeJS.ProcessEnv = { ...process.env },
 ): string {
   return env.TEMP ?? env.TMP ?? env.TMPDIR ?? tmpdir();
 }

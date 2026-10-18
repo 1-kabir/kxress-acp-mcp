@@ -20,7 +20,10 @@ export async function startMcpServer(configPath?: string): Promise<void> {
       }),
   });
   let closing: Promise<void> | undefined;
-  const closeSessions = () => (closing ??= manager.closeAll());
+  const closeSessions = () => {
+    if (!closing) closing = manager.closeAll();
+    return closing;
+  };
   try {
     process.on("SIGINT", () => {
       void closeSessions().finally(() => process.exit(0));

@@ -16,16 +16,20 @@ import type {
 } from "./protocol.ts";
 
 export class V1Driver implements ProtocolDriver {
+  readonly definition: AgentDefinition;
+  readonly process: Awaited<ReturnType<typeof startAgent>>;
   readonly protocol = "v1" as const;
   private readonly app = client({ name: "acp-mcp" });
   private readonly connection: ClientConnection;
   private initialized?: ProtocolInitialization;
 
   constructor(
-    readonly definition: AgentDefinition,
-    readonly process: Awaited<ReturnType<typeof startAgent>>,
+    definition: AgentDefinition,
+    process: Awaited<ReturnType<typeof startAgent>>,
     callbacks: ProtocolCallbacks,
   ) {
+    this.definition = definition;
+    this.process = process;
     this.app.onRequest("session/request_permission", ({ params }) =>
       callbacks.permission(normalizePermission(params)),
     );

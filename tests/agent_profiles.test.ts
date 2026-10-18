@@ -200,11 +200,11 @@ test("agy Antigravity profile preserves overrides and validates AGY_BIN paths wi
       );
     }
 
-    const process = await startAgent(
+    const started = await startAgent(
       {
         ...definition,
         args: [
-          "eval",
+          "-e",
           `process.exit(process.env["AGY_BIN"] === ${JSON.stringify(
             executable,
           )} && process.env["ACP_MCP_PROFILE_TEST"] === "preserved" ? 0 : 1)`,
@@ -212,8 +212,8 @@ test("agy Antigravity profile preserves overrides and validates AGY_BIN paths wi
       },
       dir,
     );
-    const status = await process.child.status;
-    await process.stderrDone;
+    const status = await started.child.status;
+    await started.stderrDone;
     if (status.code !== 0) {
       throw new Error(
         "agy adapter/AGY_BIN paths containing spaces were not preserved at process launch",
@@ -243,7 +243,7 @@ test("refined Antigravity inherits generic profile overrides and requires an ins
           antigravity: {
             implementation: "refined",
             command: backend,
-            args: ["eval", "process.exit(0)"],
+            args: ["-e", "process.exit(0)"],
             env: { REFINED_AGY_ACP_BIN: backend, ACP_MCP_PROFILE_TEST: "yes" },
           },
         },
@@ -254,7 +254,7 @@ test("refined Antigravity inherits generic profile overrides and requires an ins
       definition.implementation !== "refined" ||
       definition.command !== backend ||
       JSON.stringify(definition.args) !==
-        JSON.stringify(["eval", "process.exit(0)"]) ||
+        JSON.stringify(["-e", "process.exit(0)"]) ||
       definition.env?.ACP_MCP_PROFILE_TEST !== "yes" ||
       definition.requiredExecutableEnv?.[0] !== "REFINED_AGY_ACP_BIN" ||
       definition.acpProtocol !== "v1"

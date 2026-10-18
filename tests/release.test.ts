@@ -236,7 +236,7 @@ test("release output root rejects a symlink or junction", async () => {
         throw new Error("Could not create release-root junction fixture");
       }
     } else {
-      await nodeFs.symlink(outside, releases, { type: "dir" });
+      await nodeFs.symlink(outside, releases, "dir");
     }
     let rejected = false;
     try {

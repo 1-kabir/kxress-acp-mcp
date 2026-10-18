@@ -358,20 +358,26 @@ function updateContainsText(update: unknown, expected: string): boolean {
   );
 }
 
-test({
-  name: "Codex ACP adapter integration (opt in)",
-  skip: process.env["ACPMCP_CODEX_TEST"] !== "1",
-  fn: () => runIntegration("codex"),
-});
+test(
+  "Codex ACP adapter integration (opt in)",
+  {
+    skip: process.env["ACPMCP_CODEX_TEST"] !== "1",
+  },
+  () => runIntegration("codex"),
+);
 
-test({
-  name: "Antigravity ACP server integration (opt in)",
-  skip: process.env["ACPMCP_ANTIGRAVITY_TEST"] !== "1",
-  fn: () => runIntegration("antigravity"),
-});
+test(
+  "Antigravity ACP server integration (opt in)",
+  {
+    skip: process.env["ACPMCP_ANTIGRAVITY_TEST"] !== "1",
+  },
+  () => runIntegration("antigravity"),
+);
 
-test({
-  name: "Claude Agent ACP integration (opt in)",
-  skip: process.env["ACPMCP_CLAUDE_TEST"] !== "1",
-  fn: () => runIntegration("claude"),
-});
+test(
+  "Claude Agent ACP integration (opt in)",
+  {
+    skip: process.env["ACPMCP_CLAUDE_TEST"] !== "1",
+  },
+  () => runIntegration("claude"),
+);

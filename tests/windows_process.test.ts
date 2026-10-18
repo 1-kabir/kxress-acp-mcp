@@ -34,10 +34,12 @@ test("stopAgent forcefully bounds cleanup when a child ignores stdin EOF", async
   }
 });
 
-test({
-  name: "configured batch wrapper preserves quoted static arguments",
-  skip: process.platform !== "win32",
-  fn: async () => {
+test(
+  "configured batch wrapper preserves quoted static arguments",
+  {
+    skip: process.platform !== "win32",
+  },
+  async () => {
     const root = await nodeFs.makeTempDir();
     const dir = `${root}\\ACP Test With Spaces`;
     await nodeFs.mkdir(dir);
@@ -65,12 +67,14 @@ test({
       await nodeFs.removePath(root, { recursive: true });
     }
   },
-});
+);
 
-test({
-  name: "Windows executable resolver handles absolute paths with spaces",
-  skip: process.platform !== "win32",
-  fn: async () => {
+test(
+  "Windows executable resolver handles absolute paths with spaces",
+  {
+    skip: process.platform !== "win32",
+  },
+  async () => {
     const root = await nodeFs.makeTempDir();
     const dir = `${root}\\ACP Test With Spaces`;
     await nodeFs.mkdir(dir);
@@ -87,7 +91,7 @@ test({
       await nodeFs.removePath(root, { recursive: true });
     }
   },
-});
+);
 
 test("quotes cmd arguments and keeps shell metacharacters inside the quotes", () => {
   if (quoteCmdStaticArgument("a&b|c") !== '"a&b|c"') {

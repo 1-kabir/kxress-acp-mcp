@@ -5,10 +5,12 @@ import type { AgentMap } from "../src/agents/config.ts";
 import { SessionManager } from "../src/sessions/manager.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
-test({
-  name: "OpenCode ACP model listing with official enrichment",
-  skip: process.env["ACPMCP_OPENCODE_TEST"] !== "1",
-  fn: async () => {
+test(
+  "OpenCode ACP model listing with official enrichment",
+  {
+    skip: process.env["ACPMCP_OPENCODE_TEST"] !== "1",
+  },
+  async () => {
     const agents: AgentMap = {
       opencode: {
         command: "opencode",
@@ -147,4 +149,4 @@ test({
       await server.close();
     }
   },
-});
+);

@@ -86,7 +86,7 @@ async function stage(): Promise<void> {
   await nodeFs.mkdir(destination, { recursive: true });
   for (const filename of names)
     await nodeFs.copyFile(join(source, filename), join(destination, filename));
-  console.log(`Staged ${names.map(basename).join(", ")}`);
+  console.log(`Staged ${names.map((name) => basename(name)).join(", ")}`);
 }
 
 const command = process.argv[2] ?? "create";

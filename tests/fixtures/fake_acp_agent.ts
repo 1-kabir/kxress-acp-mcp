@@ -432,6 +432,9 @@ app.onNotification("session/cancel", ({ params }) => {
   void process.stderr.write(new TextEncoder().encode("ACP_CANCEL_RECEIVED\n"));
 });
 app.connect(
-  ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)),
+  ndJsonStream(
+    Writable.toWeb(process.stdout) as WritableStream<Uint8Array>,
+    Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>,
+  ),
 );
 if (process.argv.slice(2).includes("--ignore-eof")) setInterval(() => {}, 1000);

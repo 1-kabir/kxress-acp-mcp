@@ -4,10 +4,12 @@ import { SessionManager } from "../src/sessions/manager.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
-test({
-  name: "OpenCode planning survives the idle timeout (opt in)",
-  skip: process.env["ACPMCP_OPENCODE_TEST"] !== "1",
-  fn: async () => {
+test(
+  "OpenCode planning survives the idle timeout (opt in)",
+  {
+    skip: process.env["ACPMCP_OPENCODE_TEST"] !== "1",
+  },
+  async () => {
     const agents = {
       opencode: {
         command: "opencode",
@@ -112,4 +114,4 @@ test({
       await server.close();
     }
   },
-});
+);

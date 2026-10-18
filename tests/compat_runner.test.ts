@@ -104,7 +104,7 @@ test("compat runner selects existing tests and isolates opt-in flags", () => {
 
 test("compat runner propagates test process exit code", async () => {
   let passedArgs: string[] = [];
-  let passedEnv: Record<string, string> = {};
+  let passedEnv: NodeJS.ProcessEnv = {};
   const code = await runCompat(["claude", "--protocol", "v2"], (args, env) => {
     passedArgs = args;
     passedEnv = env;

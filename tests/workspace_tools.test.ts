@@ -110,9 +110,11 @@ test("MCP workspace tools inspect, explicitly clean, and repeat safely", async (
       await nodeFs.mkdir(unknown);
       await nodeFs.writeText(join(external, "keep.txt"), "external data");
       try {
-        await nodeFs.symlink(external, join(stale.cwd, "external-symlink"), {
-          type: "dir",
-        });
+        await nodeFs.symlink(
+          external,
+          join(stale.cwd, "external-symlink"),
+          "dir",
+        );
       } catch (error) {
         if (
           !nodeFs.isErrorCode(error, [

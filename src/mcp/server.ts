@@ -1,4 +1,5 @@
 import process from "node:process";
+import * as nodeFs from "#fs";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
@@ -1028,7 +1029,7 @@ export function createMcpServer(
         }
         const policy = definition.models ?? {};
         const models = filterModels(liveModels, policy);
-        let defaultSelection;
+        let defaultSelection: ReturnType<typeof resolveModelSelection>;
         try {
           defaultSelection = resolveModelSelection(
             policy.default ? liveModels : models,
@@ -1298,9 +1299,13 @@ export function createMcpServer(
       inputSchema: {
         sessionId: z.string(),
         afterSequence: z.number().int().min(0).optional(),
-        limit: z.number().int().min(1).max(500).optional().describe(
-          "Maximum journal events scanned before thought filtering",
-        ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Maximum journal events scanned before thought filtering"),
         waitMs: z.number().int().min(0).max(30000).optional(),
         includeRaw: z.boolean().optional(),
         includeThoughts: z.boolean().optional(),

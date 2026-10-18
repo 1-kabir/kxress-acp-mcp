@@ -600,7 +600,9 @@ export class SessionManager {
       return { promise: Promise.resolve(), cancel: () => {} };
     }
     let resolve!: () => void;
-    const promise = new Promise<void>((done) => (resolve = done));
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
     const waiter = () => {
       prompt.activityWaiters.delete(waiter);
       resolve();

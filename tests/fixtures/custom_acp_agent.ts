@@ -88,5 +88,8 @@ app.onRequest("session/prompt", async ({ params, client }) => {
 app.onRequest("session/close", () => ({}));
 
 app.connect(
-  ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)),
+  ndJsonStream(
+    Writable.toWeb(process.stdout) as WritableStream<Uint8Array>,
+    Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>,
+  ),
 );

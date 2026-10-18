@@ -38,7 +38,7 @@ const validateManifest = validateReleaseManifest;
 export function artifactName(
   version: string,
   target: string,
-  _os = process.platform,
+  _os: NodeJS.Platform | "windows" = process.platform,
 ): string {
   return releaseNames(version, target).archive;
 }
@@ -94,7 +94,7 @@ function parseChecksum(text: string, filename: string): string {
 
 async function runCommand(
   args: string[],
-  options: { env?: Record<string, string>; cwd?: string } = {},
+  options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
 ): Promise<void> {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const status = await new ProcessCommand(npmCommand, {
@@ -330,7 +330,7 @@ async function validateSource(): Promise<string> {
   return commit;
 }
 
-function offlineTestEnvironment(): Record<string, string> {
+function offlineTestEnvironment(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const name of optInTestVariables) env[name] = "0";
   // Prevent a caller's local smoke override from launching an extra binary test
@@ -499,7 +499,7 @@ function printReleaseSummary(
 }
 
 export function defaultInstallDestination(
-  os = process.platform,
+  os: NodeJS.Platform | "windows" = process.platform,
   env: Record<string, string | undefined> = { ...process.env },
 ): string {
   if (os === "windows" || os === "win32") {
@@ -716,13 +716,14 @@ export async function installRelease(
 export function installDirectoryOnPath(
   destination: string,
   pathValue: string,
-  os = process.platform,
+  os: NodeJS.Platform | "windows" = process.platform,
 ): boolean {
-  const pathApi = os === "windows" ? win32 : posix;
-  const separator = os === "windows" ? ";" : ":";
+  const windowsPlatform = os === "windows" || os === "win32";
+  const pathApi = windowsPlatform ? win32 : posix;
+  const separator = windowsPlatform ? ";" : ":";
   const normalize = (path: string) => {
     const resolved = pathApi.resolve(path);
-    return os === "windows" ? resolved.toLowerCase() : resolved;
+    return windowsPlatform ? resolved.toLowerCase() : resolved;
   };
   const installDirectory = normalize(pathApi.dirname(destination));
   return pathValue

@@ -17,9 +17,8 @@ import {
   unlink,
   utimes,
   writeFile,
-  type Dirent,
-  type Stats,
 } from "node:fs/promises";
+import type { Dirent, Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";

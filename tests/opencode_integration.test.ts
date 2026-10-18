@@ -4,10 +4,12 @@ import { SessionManager } from "../src/sessions/manager.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { connectMcp, parseToolResult } from "./helpers/mcp_wire.ts";
 
-test({
-  name: "OpenCode ACP smoke test (opt in)",
-  skip: process.env["ACPMCP_OPENCODE_TEST"] !== "1",
-  fn: async () => {
+test(
+  "OpenCode ACP smoke test (opt in)",
+  {
+    skip: process.env["ACPMCP_OPENCODE_TEST"] !== "1",
+  },
+  async () => {
     const manager = new SessionManager({
       opencode: { command: "opencode", args: ["acp"] },
     });
@@ -160,4 +162,4 @@ test({
       await server.close();
     }
   },
-});
+);
