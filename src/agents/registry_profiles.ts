@@ -80,7 +80,16 @@ export function registryAgentProfiles(): AgentMap {
         displayName: "Bob",
         installHint: `Install with npm install -g ${NPM_PACKAGES.bob.pkg}, or run npx -y ${NPM_PACKAGES.bob.pkg} acp. Requires IBM watsonx Orchestrate authentication.`,
       },
-      cline: {
+      "command-code": {
+      command: process.platform === "win32" ? "cmdc" : "cmd",
+      args: ["acp"],
+      supportedProtocols: ["v1"],
+      displayName: "Command Code",
+      runtimePrerequisites: [{ command: "node", minimumVersion: "22.0.0" }],
+      installHint:
+        "Install Node.js 22 or later, then npm install -g command-code. Authenticate once with cmd login in a terminal, or set COMMAND_CODE_API_KEY for headless use. The ACP server is 'cmd acp' (native Windows alias: cmdc acp; the full name command-code works everywhere). If 'cmd acp' exits with 'the acp mod is disabled', remove 'acp' from mods.disabled in Command Code settings.",
+    },
+    cline: {
         command: NPM_PACKAGES.cline.bin,
         args: ["--acp"],
         supportedProtocols: ["v1"],
@@ -274,7 +283,7 @@ export function registryAgentProfiles(): AgentMap {
         supportedProtocols: ["v1"],
         displayName: "Mistral Vibe",
         installHint:
-          "Install the vibe-acp adapter binary from https://github.com/agentclientprotocol/registry and add its directory to PATH; configure the absolute path in the acp-mcp agent config. Requires Mistral authentication.",
+          "Install the vibe-acp adapter binary from the official Mistral Vibe releases (https://github.com/mistralai/mistral-vibe/releases) or the Agent Client Protocol registry, add its directory to PATH, and configure the absolute path in the acp-mcp agent config. Requires Mistral authentication.",
       },
       nova: {
         command: NPM_PACKAGES.nova.bin,
@@ -286,6 +295,7 @@ export function registryAgentProfiles(): AgentMap {
       "opencode-v2": {
         command: "opencode",
         args: ["acp"],
+        acpProtocol: "v2",
         supportedProtocols: ["v2"],
         displayName: "OpenCode V2",
         installHint:

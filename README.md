@@ -366,6 +366,7 @@ standalone release binary):
 | `bob`                 | `bob acp`                 | npm `@ibm/bob`                |
 | `cline`               | `cline --acp`             | npm `cline`                   |
 | `codebuddy`            | `codebuddy --acp`          | npm `@tencent-ai/codebuddy-code` |
+| `command-code`          | `cmd acp` (`cmdc acp` on native Windows) | npm `command-code` |
 | `cortex`              | `cortex acp serve`        | registry binary               |
 | `corust`              | `corust-agent-acp`         | registry binary               |
 | `crow-cli`            | `crow-cli acp`             | registry binary               |
@@ -389,7 +390,7 @@ standalone release binary):
 | `kimi`                | `kimi acp`                 | registry binary               |
 | `minimax`             | `mcode acp`                | npm `@minimax-ai/code`        |
 | `minion-code`         | `minion-code acp`          | Python `minion-code`          |
-| `mistral-vibe`        | `vibe-acp`                 | registry binary               |
+| `mistral-vibe`        | `vibe-acp`                 | binary from Mistral Vibe releases |
 | `nova`                | `nova acp`                 | npm `@compass-ai/nova`       |
 | `opencode-v2`         | `opencode acp`             | ACP v2                        |
 | `pi`                  | `pi-acp`                   | npm `pi-acp`                  |

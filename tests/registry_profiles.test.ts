@@ -31,6 +31,7 @@ const REGISTRY_PROFILES: Array<ExpectedProfile> = [
     displayName: "Autohand Code",
   },
   { id: "bob", command: "bob", args: ["acp"], displayName: "Bob" },
+  { id: "command-code", command: "cmd", args: ["acp"], displayName: "Command Code" },
   { id: "cline", command: "cline", args: ["--acp"], displayName: "Cline" },
   {
     id: "codebuddy",
@@ -218,6 +219,36 @@ test("built-in agents cover every ACP registry agent with launch-only profiles",
 
     if (agents["opencode-v2"].supportedProtocols?.includes("v1")) {
       throw new Error("OpenCode V2 profile must not claim v1 support");
+    }
+    if (agents["opencode-v2"].acpProtocol !== "v2") {
+      throw new Error("OpenCode V2 profile must default to ACP v2");
+    }
+    if (agents.opencode.acpProtocol && agents.opencode.acpProtocol !== "v1") {
+      throw new Error("OpenCode profile must default to ACP v1");
+    }
+    if (!agents.opencode.modelConfigId || !agents.opencode.modelEnrichment) {
+      throw new Error("OpenCode profile lost its model enrichment integration");
+    }
+    if (agents["mistral-vibe"].command !== "vibe-acp") {
+      throw new Error("Mistral Vibe profile launch command changed");
+    }
+    if (
+      !agents["mistral-vibe"].installHint?.includes("mistralai/mistral-vibe")
+    ) {
+      throw new Error("Mistral Vibe profile must point at official releases");
+    }
+    const expectedCommandCodeCommand =
+      process.platform === "win32" ? "cmdc" : "cmd";
+    if (agents["command-code"].command !== expectedCommandCodeCommand) {
+      throw new Error(
+        "Command Code profile must use the platform-correct alias",
+      );
+    }
+    if (
+      agents["command-code"].runtimePrerequisites?.[0]?.command !== "node" ||
+      agents["command-code"].runtimePrerequisites[0]?.minimumVersion !== "22.0.0"
+    ) {
+      throw new Error("Command Code profile must require Node.js 22+");
     }
     if (agents.opencode === agents["opencode-v2"]) {
       throw new Error("OpenCode V2 must be a distinct profile from OpenCode");

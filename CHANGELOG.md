@@ -11,6 +11,13 @@
   Nova, OpenCode V2, Poolside, Qoder CLI, Qwen Code, siGit Code, Stakpak, and
   more), mirroring each registry `agent.json` launch command so agents work by
   ID without extra configuration.
+- Add a built-in `command-code` profile for [Command
+  Code](https://commandcode.ai/docs/acp): `cmd acp` (`cmdc acp` on native
+  Windows), with the Node.js 22+ prerequisite and headless/`cmd login`
+  authentication routes in the install hint.
+- Pin the `opencode-v2` profile to ACP v2 (`acpProtocol: "v2"`) so the v2-only
+  registry agent no longer defaults to the v1 driver, and point the
+  `mistral-vibe` install hint at the official Mistral Vibe release archives.
 
 ### Changed
 
