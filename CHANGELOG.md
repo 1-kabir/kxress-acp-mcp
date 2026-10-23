@@ -2,6 +2,16 @@
 
 ## 0.2.5 (unreleased)
 
+### Added
+
+- Add built-in launch profiles for every agent published in the [Agent Client
+  Protocol registry](https://agentclientprotocol.com/get-started/registry)
+  (Amp, Auggie, Bob, Cline, Copilot, Cursor, Devin, Gemini CLI, GLM Agent,
+  goose, Grok Build, Junie, Kilo, Kimchi, Kimi CLI, MiniMax Code, Mistral Vibe,
+  Nova, OpenCode V2, Poolside, Qoder CLI, Qwen Code, siGit Code, Stakpak, and
+  more), mirroring each registry `agent.json` launch command so agents work by
+  ID without extra configuration.
+
 ### Changed
 
 - Migrate the runtime from Deno to Node.js following [Deno's announcement that
