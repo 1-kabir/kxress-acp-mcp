@@ -18,6 +18,11 @@
 - Pin the `opencode-v2` profile to ACP v2 (`acpProtocol: "v2"`) so the v2-only
   registry agent no longer defaults to the v1 driver, and point the
   `mistral-vibe` install hint at the official Mistral Vibe release archives.
+- Guarantee agent process teardown: `stopAgent` now escalates to a
+  whole-process-tree SIGKILL (POSIX process groups; `taskkill /T /F` on
+  Windows) when an agent ignores stdin EOF, live agent processes are tracked
+  and force-terminated on server exit, and SIGTERM now shuts the server down
+  like SIGINT so idle agents no longer survive host shutdown.
 
 ### Changed
 
